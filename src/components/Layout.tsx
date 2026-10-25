@@ -203,6 +203,13 @@ export default function Layout() {
     ];
     adminNav = [
       { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
+      {
+        group: true, icon: Monitor, label: 'Asset Inventory', items: [
+          { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
+          { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
+          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+        ],
+      },
     ];
   } else if (user?.role === 'partner_admin') {
     // MSP Partner Portal — white-label. Partners manage THEIR OWN end-clients;
