@@ -1,0 +1,96 @@
+/* ============================================================
+   INFRACENTRA THEME SYSTEM
+   ------------------------------------------------------------
+   "Calm Operations"  = LIGHT (default) — soft, quiet, reassuring
+   "Cyber Modern"     = DARK  (legacy)  — neon SOC look, kept on standby
+   Switched via <html data-theme="light|dark"> (ThemeContext).
+   Landing page + app surfaces consume these variables ONLY.
+   ============================================================ */
+
+:root,
+html[data-theme="light"] {
+  /* --- Calm Operations palette (client brief) --- */
+  --ic-bg: #F7F9FB;              /* page background : soft off-white      */
+  --ic-surface: #FFFFFF;         /* cards : clean white                   */
+  --ic-surface-2: #F1F5F9;       /* subtle alt surface (chips, rows)      */
+  --ic-border: #E2E8F0;          /* thin borders, no heavy shadows        */
+  --ic-heading: #0B2545;         /* deep navy : trustworthy, serious      */
+  --ic-primary: #0E7490;         /* teal-blue : calm technology           */
+  --ic-primary-hover: #0C6379;
+  --ic-primary-soft: rgba(14, 116, 144, 0.08);
+  --ic-text: #1E293B;            /* body text                             */
+  --ic-muted: #64748B;           /* muted metadata                        */
+  --ic-ok: #15803D;              /* protected / healthy  (seen most)      */
+  --ic-ok-soft: rgba(21, 128, 61, 0.10);
+  --ic-warn: #B45309;            /* needs attention                       */
+  --ic-warn-soft: rgba(180, 83, 9, 0.10);
+  --ic-bad: #B91C1C;             /* action required (rare, meaningful)    */
+  --ic-bad-soft: rgba(185, 28, 28, 0.10);
+  --ic-shadow: 0 1px 3px rgba(11, 37, 69, 0.06);
+  --ic-shadow-lg: 0 8px 24px rgba(11, 37, 69, 0.08);
+  --ic-radius: 14px;
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  /* --- Cyber Modern legacy palette (standby) --- */
+  --ic-bg: #0B1120;
+  --ic-surface: #151E31;
+  --ic-surface-2: #1B2740;
+  --ic-border: #26334D;
+  --ic-heading: #E6EDF7;
+  --ic-primary: #22D3EE;
+  --ic-primary-hover: #67E8F9;
+  --ic-primary-soft: rgba(34, 211, 238, 0.12);
+  --ic-text: #CBD5E1;
+  --ic-muted: #8FA3C4;
+  --ic-ok: #34D399;
+  --ic-ok-soft: rgba(52, 211, 153, 0.12);
+  --ic-warn: #FBBF24;
+  --ic-warn-soft: rgba(251, 191, 36, 0.12);
+  --ic-bad: #FB7185;
+  --ic-bad-soft: rgba(251, 113, 133, 0.12);
+  --ic-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  --ic-shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.45);
+  --ic-radius: 16px;
+  color-scheme: dark;
+}
+
+/* ---------- Global surfaces driven by the theme ---------- */
+html[data-theme] body {
+  background: var(--ic-bg);
+  color: var(--ic-text);
+  transition: background-color .25s ease, color .25s ease;
+}
+
+/* Theme-aware utility classes used across landing + pages */
+.ic-page        { background: var(--ic-bg); color: var(--ic-text); }
+.ic-card        { background: var(--ic-surface); border: 1px solid var(--ic-border);
+                  border-radius: var(--ic-radius); box-shadow: var(--ic-shadow); }
+.ic-card:hover  { box-shadow: var(--ic-shadow-lg); }
+.ic-heading     { color: var(--ic-heading); }
+.ic-muted       { color: var(--ic-muted); }
+.ic-link        { color: var(--ic-primary); }
+.ic-btn-primary { background: var(--ic-primary); color: #fff; border-radius: 12px;
+                  font-weight: 600; transition: background .2s ease; }
+.ic-btn-primary:hover { background: var(--ic-primary-hover); }
+.ic-btn-outline { border: 1px solid var(--ic-border); color: var(--ic-heading);
+                  background: transparent; border-radius: 12px; font-weight: 600; }
+.ic-btn-outline:hover { border-color: var(--ic-primary); color: var(--ic-primary); }
+.ic-chip-ok     { background: var(--ic-ok-soft);   color: var(--ic-ok); }
+.ic-chip-warn   { background: var(--ic-warn-soft); color: var(--ic-warn); }
+.ic-chip-bad    { background: var(--ic-bad-soft);  color: var(--ic-bad); }
+
+/* Hero gradient text adapts to theme */
+.ic-hero-title {
+  background: linear-gradient(90deg, var(--ic-primary), #2563EB);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+html[data-theme="dark"] .ic-hero-title {
+  background: linear-gradient(90deg, #22D3EE, #A78BFA);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+@media print {
+  html[data-theme="dark"] body { background: #fff; color: #000; }
+}
