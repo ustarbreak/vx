@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -444,6 +444,106 @@ class DiscoveredDevice(Base):
 # Phase 4 — Tenant Manager avancé : grants de services + règles de supervision
 # (miroir exact des shapes servies par demoMode.ts / tenantManagerApi)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# goinfra agent — probes, inventories, metrics, agent-reported discovery
+# ---------------------------------------------------------------------------
+
+class AgentProbe(Base):
+    """One enrolled goinfra agent. Enrollment is idempotent per (org, hostname):
+    the same machine re-helloing with the same tenant token gets the same row."""
+    __tablename__ = "agent_probes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    hostname = Column(String, nullable=False)
+    agent_version = Column(String, nullable=True)
+    os = Column(String, nullable=True)                   # linux|windows|...
+    ip = Column(String, nullable=True)                   # primary NIC address
+    status = Column(String, default="online")            # online|offline
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (Index("uq_agent_probe_org_host", "org_id", "hostname", unique=True),)
+
+
+class AgentInventory(Base):
+    """Full host snapshot posted by the agent each cycle (raw JSON + summary columns)."""
+    __tablename__ = "agent_inventories"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    probe_id = Column(Integer, ForeignKey("agent_probes.id"), nullable=False, index=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    collected_at = Column(DateTime(timezone=True), nullable=True)
+    payload = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentMetric(Base):
+    """Time-series point of the live metrics stream (one row per sample)."""
+    __tablename__ = "agent_metrics"
+
+    ts = Column(BigInteger, primary_key=True)                       # epoch seconds
+    probe_id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    cpu_percent = Column(Float, nullable=True)
+    mem_used_percent = Column(Float, nullable=True)
+    mem_total_bytes = Column(BigInteger, nullable=True)
+    disk_worst_percent = Column(Float, nullable=True)
+    load1 = Column(Float, nullable=True)
+    net_recv_bps = Column(Float, nullable=True)
+    net_sent_bps = Column(Float, nullable=True)
+    temp_max_celsius = Column(Float, nullable=True)
+
+
+class AgentToken(Base):
+    """Tenant API token issued from Settings → Agents. Only the SHA-256 hash of
+    the secret is stored; agents authenticate with `Bearer icag_...`."""
+    __tablename__ = "agent_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)
+    prefix = Column(String(12), nullable=False)          # first chars for display
+    created_by = Column(String, nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentDiscoveredDevice(Base):
+    """Devices reported by a probe's local network sweep (same lifecycle as
+    DiscoveredDevice: review queue -> import)."""
+    __tablename__ = "agent_discovered_devices"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    probe_id = Column(Integer, ForeignKey("agent_probes.id"), nullable=False, index=True)
+    ip = Column(String, nullable=False, index=True)
+    mac = Column(String, nullable=True)
+    hostname = Column(String, nullable=True)
+    os_guess = Column(String, nullable=True)
+    device_type = Column(String, nullable=True)
+    open_ports = Column(JSON, default=list)
+    sys_name = Column(String, nullable=True)
+    sys_desc = Column(String, nullable=True)
+    first_seen = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    imported = Column(Boolean, default=False)
+
+    __table_args__ = (Index("uq_agent_disc_org_ip", "org_id", "ip", unique=True),)
+
+
+class TenantSetting(Base):
+    """Free-form per-org settings (discovery defaults, agent policy overrides)."""
+    __tablename__ = "tenant_settings"
+
+    org_id = Column(Integer, ForeignKey("organizations.id"), primary_key=True)
+    data = Column(JSON, default=dict)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class TenantServiceGrant(Base):
     """Override d'un service au-delà du plan standard (grant/deny plateforme)."""
     __tablename__ = "tenant_service_grants"

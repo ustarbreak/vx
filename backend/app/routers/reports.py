@@ -57,7 +57,7 @@ def _tenant_id(user: User) -> str:
     return str(user.org_id or user.id)
 
 
-def _real_pages(report_key: str, tenant: str, period: str) -> list | None:
+async def _real_pages(report_key: str, tenant: str, period: str) -> list | None:
     """Build a report from REAL platform data (Demo Mode OFF path).
 
     Returns None when no real builder exists yet for this report — the caller

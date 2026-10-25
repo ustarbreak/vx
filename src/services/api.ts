@@ -759,3 +759,106 @@ export const valueApi = {
     }
   },
 };
+
+// ---------------------------------------------------------------------------
+// goinfra agents — probe fleet, enrollment tokens, inventory & metrics.
+// Mirrors backend/app/routers/agent.py:
+//   /api/agents/*    → JWT-authenticated reads (this module)
+//   /api/agent/*     → probe API (icag_ token, never called from the browser)
+//   /api/agent-tokens → token CRUD
+// Demo Mode is intentionally NOT wired here (no fake probes): in demo the
+// page shows an empty-state pointing at Demo Mode OFF + a running backend.
+// ---------------------------------------------------------------------------
+export interface AgentProbeOut {
+  id: number;
+  org_id: number;
+  hostname: string;
+  agent_version: string;
+  status: 'online' | 'offline' | string;
+  os: string;      // 'linux' | 'windows'
+  ip: string;      // primary NIC as seen by the backend
+  last_seen: string | null;
+}
+export interface AgentTokenOut {
+  id: number;
+  org_id: number;
+  name: string;
+  prefix: string;          // first chars of the secret, for identification
+  revoked: boolean;
+  last_used_at: string | null;
+  created_at: string;
+  token?: string;          // present ONLY in the create response (shown once)
+  note?: string;
+}
+export interface AgentInventoryOut {
+  inventory_id: number;
+  collected_at: string;
+  payload: {
+    hostname?: string;
+    os?: string;
+    platform?: string;
+    kernel?: string;
+    cpu?: { model?: string; cores?: number; percent?: number };
+    memory?: { total_bytes?: number; used_bytes?: number; percent?: number };
+    disks?: { mount?: string; device?: string; total_bytes?: number; used_bytes?: number; percent?: number }[];
+    services?: { name?: string; status?: string; pid?: number }[];
+    patches?: { id?: string; installed_on?: string }[];
+    ips?: string[];
+    collected_at?: string;
+  };
+}
+export interface AgentMetricPoint {
+  ts: number;              // unix seconds
+  cpu_percent: number | null;
+  mem_used_percent: number | null;
+  disk_worst_percent: number | null;
+  load1: number | null;
+  net_recv_bps: number | null;
+  net_sent_bps: number | null;
+  temp_max_celsius: number | null;
+}
+export interface AgentDiscoveredDeviceOut {
+  id: number;
+  probe_id: number;
+  ip: string;
+  mac: string | null;
+  hostname: string | null;
+  os_guess: string;
+  device_type: string;
+  sys_name: string | null;
+  snmp: boolean;
+  open_ports: number[];
+  last_seen: string | null;
+}
+
+export const agentApi = {
+  listProbes: () => api.get<AgentProbeOut[]>('/agents/probes'),
+  latestInventory: (probeId: number) =>
+    api.get<AgentInventoryOut>(`/agents/probes/${probeId}/inventory/latest`),
+  metrics: (probeId: number, hours = 24) =>
+    api.get<AgentMetricPoint[]>(`/agents/probes/${probeId}/metrics?hours=${hours}`),
+  discoveredDevices: () => api.get<AgentDiscoveredDeviceOut[]>('/agents/discovered-devices'),
+  listTokens: () => api.get<AgentTokenOut[]>('/agent-tokens'),
+  createToken: (name: string) => api.post<AgentTokenOut>('/agent-tokens', { name }),
+  revokeToken: (id: number) => api.del<void>(`/agent-tokens/${id}`),
+  /** Re-generate the install one-liners for an existing token. The secret is
+   *  NOT recoverable (only its hash is stored) — this mints a fresh token
+   *  carrying the same label, so admins can always produce working commands. */
+  regenerateToken: (name: string) =>
+    api.post<AgentTokenOut>('/agent-tokens', { name: name || 'default' }),
+};
+
+/** Build the exact copy-paste install commands for one enrollment token. */
+export function agentInstallCommands(token: string, serverUrl?: string): { linux: string; windows: string } {
+  const server = serverUrl ?? window.location.origin;
+  return {
+    linux:
+      `curl -fsSL ${server}/downloads/goinfra/install.sh | sudo sh -s -- ` +
+      `--server ${server} --token ${token}`,
+    windows:
+      `powershell -ExecutionPolicy Bypass -Command "` +
+      `Invoke-WebRequest '${server}/downloads/goinfra/install.ps1' -OutFile $env:TEMP\\install.ps1; ` +
+      `$env:GOINFRA_SERVER='${server}'; $env:GOINFRA_TOKEN='${token}'; ` +
+      `& $env:TEMP\\install.ps1"`,
+  };
+}
