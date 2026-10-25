@@ -1,0 +1,84 @@
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:18
+    container_name: infracentra-db
+    environment:
+      POSTGRES_USER: infracentra
+      POSTGRES_PASSWORD: infracentra
+      POSTGRES_DB: infracentra
+    ports:
+      - "5432:5432"
+    volumes:
+      # Postgres 18+: mount the TOP-LEVEL dir /var/lib/postgresql (NOT .../data).
+      # The cluster now lives in a versioned subdir (/var/lib/postgresql/18/docker);
+      # mounting at .../data triggers the "unused mount/volume" fatal error.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infracentra -d infracentra"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - infracentra-network
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: infracentra-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - infracentra-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: infracentra-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend:/code
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://infracentra:infracentra@db:5432/infracentra
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: change-this-to-a-secure-random-string-min-32-chars
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      # TEST PHASE: seed isolated demo tenants (16 services + ticketing).
+      DEMO_SEED_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - infracentra-network
+
+  # React Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: infracentra-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - infracentra-network
+
+volumes:
+  pgdata:
+
+networks:
+  infracentra-network:
+    driver: bridge

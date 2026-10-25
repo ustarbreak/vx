@@ -1,0 +1,127 @@
+# ============================================================================
+# Infracentra — "No-build" Docker Compose stack for Kali Linux
+# Runs the ALREADY-BUILT frontend (./dist) with plain nginx:alpine and pulls
+# official latest images for everything else. Nothing is compiled on your
+# laptop. Start it with:
+#   docker compose -f docker-compose.prebuilt.yml up -d
+# ============================================================================
+
+services:
+  # ---- Frontend (landing page + app): pre-built static files, zero build ----
+  frontend:
+    image: nginx:latest                      # official latest image, no build
+    container_name: infracentra-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"                             # open http://localhost:3000
+    volumes:
+      - ./dist:/usr/share/nginx/html:ro       # serves the existing build as-is
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Dev-mode proxy config (mounted only when you run `npm run dev`):
+      # vite proxies /api -> :8000 itself, so this container is optional in dev.
+      - ./backend/.env.example:/etc/infracentra-env-example:ro
+    depends_on:
+      - backend
+    networks:
+      - infracentra-network
+
+  # ---- FastAPI Backend: mounted directly into an official python image ------
+  # No custom Dockerfile / no pip install on your machine; uvicorn runs the
+  # source straight from the mounted folder.
+  backend:
+    image: python:3.12-slim                   # official latest 3.12 image
+    container_name: infracentra-backend
+    restart: unless-stopped
+    working_dir: /code
+    # pip cache lives in a named volume, so the (one-time) dependency download
+    # is reused across restarts — nothing is ever built on your laptop.
+    # Install deps into a NAMED volume once, then start uvicorn. The next
+    # restart skips installation entirely (site-packages already present), so
+    # the container boots in ~2s instead of crash-looping on slow downloads.
+    entrypoint: ["sh", "-c"]
+    command: >
+      mkdir -p /opt/venv-data &&
+      if [ ! -f /opt/venv-data/.ready ]; then
+        echo "[setup] installing dependencies (one time)...";
+        PIP_CACHE_DIR=/tmp/pipcache pip install --cache-dir=/tmp/pipcache -r /code/requirements.txt -q &&
+        cp -a /usr/local/lib/python3.12/site-packages/. /opt/venv-data/ &&
+        touch /opt/venv-data/.ready;
+      else
+        echo "[setup] reusing cached site-packages from venvdata volume";
+      fi &&
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./backend:/code
+      - pipcache:/tmp/pipcache
+      - venvdata:/opt/venv-data
+    ports:
+      - "8000:8000"                           # API + Swagger at :8000/docs
+    environment:
+      DATABASE_URL: postgresql+asyncpg://infracentra:infracentra@db:5432/infracentra
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: change-this-to-a-secure-random-string-min-32-chars
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      # TEST PHASE: auto-provision isolated demo tenants (all 16 services +
+      # Advanced Ticketing) on startup. Set to "false" for production.
+      DEMO_SEED_ENABLED: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - infracentra-network
+
+  # ---- PostgreSQL (latest stable) ----
+  db:
+    image: postgres:18                        # official latest major (18.x)
+    container_name: infracentra-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: infracentra
+      POSTGRES_PASSWORD: infracentra
+      POSTGRES_DB: infracentra
+    ports:
+      - "5432:5432"
+    volumes:
+      # IMPORTANT (Postgres 18+): the official images changed their data layout.
+      # Mount the TOP-LEVEL dir /var/lib/postgresql — NOT /var/lib/postgresql/data.
+      # Postgres 18 stores its cluster in a versioned subdirectory
+      # (/var/lib/postgresql/18/docker) and REFUSES to start if it finds an old
+      # "data" volume mounted at /var/lib/postgresql/data ("unused mount/volume"
+      # error -> container crash-loops -> health status stays unhealthy).
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U infracentra -d infracentra"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s                        # give initdb/first-boot enough time
+    networks:
+      - infracentra-network
+
+  # ---- Redis (latest stable) ----
+  redis:
+    image: redis:latest                       # was 7-alpine -> now latest
+    container_name: infracentra-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - infracentra-network
+
+volumes:
+  venvdata:
+  pgdata:
+  pipcache:
+
+networks:
+  infracentra-network:
+    driver: bridge
