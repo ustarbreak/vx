@@ -42,7 +42,7 @@ async def quote(req: InvoiceRequest) -> Invoice:
     return compute_invoice(req)
 
 
-@router.get("/invoice", response_model=Invoice)
+@router.get("/invoice")  # returns Invoice + per-asset extras (plan_tier, counts)
 async def my_invoice(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -55,12 +55,39 @@ async def my_invoice(
     if not org:
         from fastapi import HTTPException, status
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Organization not found")
+
+    # --- Per-asset billing model ------------------------------------------- #
+    # Billable endpoints = managed assets. We keep the stored contract count
+    # and the live asset count in sync automatically: the tenant is billed for
+    # every real device under management (agents + discovery + inventory),
+    # never below the contracted amount.
+    try:
+        from app.models import Device
+        live_assets = (await db.execute(
+            select(Device).where(Device.org_id == org.id)
+        )).scalars().all()
+        asset_count = len(live_assets)
+    except Exception:
+        asset_count = org.asset_count or 0
+    billable_endpoints = max(org.endpoint_count or 0, asset_count)
+
     req = InvoiceRequest(
         plan_tier=PlanTier(org.plan_tier or "STARTER"),
         billing_cycle=BillingCycle(org.billing_cycle or "MONTHLY"),
-        endpoint_count=org.endpoint_count or 0,
+        endpoint_count=billable_endpoints,
         seats_used=org.member_count or 0,
         siem_gb_day_used=getattr(org, "siem_gb_day_used", 0) or 0,
         country=org.country,
     )
-    return compute_invoice(req)
+    inv = compute_invoice(req)
+    # Enrich payload so portals can show tier/cycle/counts next to the invoice.
+    inv_payload = inv.model_dump()
+    inv_payload.update({
+        "plan_tier": org.plan_tier or "STARTER",
+        "billing_cycle": org.billing_cycle or "MONTHLY",
+        "billable_endpoints": billable_endpoints,
+        "live_asset_count": asset_count,
+        "unit_price_mad": unit_price(PlanTier(org.plan_tier or "STARTER"),
+                                     BillingCycle(org.billing_cycle or "MONTHLY")),
+    })
+    return inv_payload

@@ -1,5 +1,6 @@
 __pycache__/
-*.pyc
-.env
-.env.local
-.env.*.local
+*.py[cod]
+*$py.class
+node_modules/
+dist/
+backend/_bootcheck.db

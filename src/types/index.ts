@@ -1,6 +1,6 @@
 // Infracentra Type Definitions
 
-export type UserRole = 'platform_admin' | 'client_admin' | 'client_user' | 'partner_admin';
+export type UserRole = 'platform_admin' | 'client_admin' | 'client_user' | 'partner_admin' | 'sales';
 export type ClientTier = 'sme' | 'mid-market' | 'enterprise';
 export type ClientStatus = 'active' | 'suspended' | 'pending' | 'churned';
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';

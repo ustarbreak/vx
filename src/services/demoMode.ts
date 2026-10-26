@@ -94,7 +94,7 @@ const orgs: DemoOrg[] = demoTenants.map(t => ({ ...t }));
 
 // Bundle All-in-One billing per tenant, computed with the SHARED pricing engine
 // (src/config/pricing.ts) so the UI numbers always match the backend formula.
-import { computeInvoice, formatMoney } from '../config/pricing';
+import { computeInvoice, formatMoney, TIER_LIMITS as TIER_LIMITS_MAP, ANNUAL_MULTIPLIER as ANNUAL_MULT } from '../config/pricing';
 function billingForTenant(id: number) {
   const t = demoTenants.find((x) => x.id === id);
   if (!t) return {};
@@ -798,6 +798,52 @@ export const demoStore = {
           partner.end_clients.splice(idx, 1);
           return delay(undefined as any) as unknown as T;
         }
+      }
+    }
+
+    // ---- Pricing (per-asset Bundle All-in-One) ----
+    // GET /pricing/tiers   -> catalogue from the shared engine
+    // GET /pricing/invoice -> live invoice of the caller's tenant, billed on
+    //                         the real managed-device count (per-asset model).
+    if (root === 'pricing') {
+      const tierRows = (Object.entries(TIER_LIMITS_MAP) as [string, any][]).map(([t, l]) => ({
+        tier: t,
+        unit_price_mad_monthly: l.unitPriceMad,
+        unit_price_mad_annual: Math.round(l.unitPriceMad * ANNUAL_MULT),
+        seat_limit: l.seatLimit, siem_limit_gb_day: l.siemLimitGbDay,
+        extra_seat_mad: l.extraSeatMad, siem_overage_mad_per_gb: l.siemOverageMadPerGb,
+      }));
+      if (method === 'GET' && parts[1] === 'tiers') return delay(tierRows as any) as unknown as T;
+      if (method === 'GET' && parts[1] === 'invoice') {
+        const s = demoSession();
+        const m = /^org-dw-(\d+)$/.exec(String(s.orgId ?? ''));
+        const tid = m ? Number(m[1]) : 1;
+        const t = demoTenants.find(x => x.id === tid) ?? demoTenants[0];
+        const liveAssets = demoDevices.filter(d => d.orgId === tid).length;
+        const billable = Math.max(t.endpointCount, liveAssets);
+        const seatsUsed = demoTechnicians.filter(x => x.orgId === tid).length || t.seatsUsed;
+        const inv = computeInvoice({
+          planTier: t.planTier, billingCycle: t.billingCycle, endpointCount: billable,
+          seatsUsed, siemGbDayUsed: t.siemGbDayUsed, country: t.country,
+        });
+        return delay({
+          ...inv,
+          plan_tier: t.planTier, billing_cycle: t.billingCycle,
+          billable_endpoints: billable, live_asset_count: liveAssets,
+          unit_price_mad: Math.round((TIER_LIMITS_MAP as any)[t.planTier].unitPriceMad *
+            (t.billingCycle === 'ANNUAL' ? ANNUAL_MULT : 1)),
+        } as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[1] === 'quote') {
+        const inv = computeInvoice({
+          planTier: b.plan_tier ?? b.planTier ?? 'PRO',
+          billingCycle: b.billing_cycle ?? b.billingCycle ?? 'MONTHLY',
+          endpointCount: b.endpoint_count ?? b.endpointCount ?? 0,
+          seatsUsed: b.seats_used ?? b.seatsUsed ?? 0,
+          siemGbDayUsed: b.siem_gb_day_used ?? b.siemGbDayUsed ?? 0,
+          country: b.country ?? 'ma',
+        });
+        return delay(inv as any) as unknown as T;
       }
     }
 
