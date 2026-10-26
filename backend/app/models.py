@@ -18,7 +18,7 @@ class Organization(Base):
     country = Column(String)
     member_count = Column(Integer, default=0)
     asset_count = Column(Integer, default=0)
-    # --- Bundle All-in-One billing (single source of truth: app.core.pricing) ---
+    # --- Legacy v1 billing columns (v1 engine deleted; V2 = app.services.pricing_engine + core/pricing_config.json) ---
     plan_tier = Column(String(16), nullable=False, default="STARTER", index=True)  # STARTER|PRO|SOUVERAIN
     endpoint_count = Column(Integer, nullable=False, default=0)
     seat_limit = Column(Integer, nullable=False, default=3)      # 0 = unlimited
@@ -103,7 +103,8 @@ class Integration(Base):
 
 # ---------------------------------------------------------------------------
 # Pricing v2 (per-asset packs, Health Check trials, sales quotes, partners)
-# Single source of truth for prices: app/core/pricing_config.json + engine.
+# Single source of truth for prices: app/core/pricing_config.json (canonical mirror
+# of src/data/pricingConfig.ts, checked by tests/config_parity.cjs) + app/services/pricing_engine.py.
 # ---------------------------------------------------------------------------
 
 class PricingConfigVersion(Base):

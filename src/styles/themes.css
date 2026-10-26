@@ -77,6 +77,11 @@ html[data-theme] body {
 .ic-btn-outline { border: 1px solid var(--ic-border); color: var(--ic-heading);
                   background: transparent; border-radius: 12px; font-weight: 600; }
 .ic-btn-outline:hover { border-color: var(--ic-primary); color: var(--ic-primary); }
+/* form inputs (pricing / demo-request pages) */
+.ic-input { width: 100%; border: 1px solid var(--ic-border); background: transparent;
+  color: var(--ic-heading); border-radius: 0.375rem; padding: 0.375rem 0.625rem; font-size: 0.875rem; }
+.ic-input:focus { outline: none; border-color: var(--ic-primary); }
+select.ic-input option { color: #111; }
 .ic-chip-ok     { background: var(--ic-ok-soft);   color: var(--ic-ok); }
 .ic-chip-warn   { background: var(--ic-warn-soft); color: var(--ic-warn); }
 .ic-chip-bad    { background: var(--ic-bad-soft);  color: var(--ic-bad); }

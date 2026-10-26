@@ -6,6 +6,9 @@ import Layout from './components/Layout';
 
 // Public
 import LandingPage from './pages/LandingPage';
+import PricingPage from './pages/pricing/PricingPage';
+import PartnerProgramPage from './pages/partner/PartnerProgramPage';
+import DemoRequestPage from './pages/pricing/DemoRequestPage';
 import LoginPage from './pages/LoginPage';
 import ServiceDetailPage from './pages/ServiceDetailPage';
 import ComingSoonPage from './pages/ComingSoonPage';
@@ -121,6 +124,11 @@ function AppRoutes() {
     <Routes>
       {/* Public Routes - Always accessible */}
       <Route path="/" element={<LandingPage />} />
+      {/* Public V2 pricing / partner program / demo request — real routes, no
+          in-page anchors (they used to fall through to the catch-all → home). */}
+      <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/mssp" element={<PartnerProgramPage />} />
+      <Route path="/demo-request" element={<DemoRequestPage />} />
       {/* Fast access: /demo goes straight in with the simulated demo session
           (guarded — never touches the real backend). */}
       <Route path="/demo" element={<DemoAutoEnter />} />

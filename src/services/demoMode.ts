@@ -92,22 +92,42 @@ const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOStr
 interface DemoOrg { id: number; name: string; tier: string; ticketing: boolean }
 const orgs: DemoOrg[] = demoTenants.map(t => ({ ...t }));
 
-// Bundle All-in-One billing per tenant, computed with the SHARED pricing engine
-// (src/config/pricing.ts) so the UI numbers always match the backend formula.
-import { computeInvoice, formatMoney, TIER_LIMITS as TIER_LIMITS_MAP, ANNUAL_MULTIPLIER as ANNUAL_MULT } from '../config/pricing';
+// Bundle All-in-One billing per tenant, computed with the SHARED pricing engine V2
+// (src/services/pricingEngine.ts + src/data/pricingConfig.ts) so the UI numbers
+// always match the backend formula. v1 (src/config/pricing.ts) is DELETED.
+import { quote } from './pricingEngine';
+import { PRICING_CONFIG_V2, fmtMad, type PackId } from '../data/pricingConfig';
+
+/** Legacy tier name -> V2 pack id. */
+const PACK_FROM_LEGACY: Record<string, PackId> = { STARTER: 'starter', PRO: 'pro', SOUVERAIN: 'souverain' };
+
+/** Demo tenants expose a physical endpoint count; map it to V2 asset classes so
+ *  ~80% of the estate is heavy (workstations/servers) and ~20% light (mailboxes). */
+function demoAssetsFromEndpoints(n: number) {
+  const heavy = Math.round(n * 0.8);
+  return [{ class: 'workstation', qty: heavy }, { class: 'mailbox', qty: n - heavy }];
+}
+
 function billingForTenant(id: number) {
   const t = demoTenants.find((x) => x.id === id);
   if (!t) return {};
-  const inv = computeInvoice({
-    planTier: t.planTier, billingCycle: t.billingCycle, endpointCount: t.endpointCount,
-    seatsUsed: t.seatsUsed, siemGbDayUsed: t.siemGbDayUsed, country: t.country,
+  const pack: PackId = PACK_FROM_LEGACY[t.planTier] ?? 'starter';
+  // Contract length mirrors the legacy billing cycle (ANNUAL => 12-month commitment).
+  const q = quote({
+    mode: 'pack', pack, assets: demoAssetsFromEndpoints(t.endpointCount),
+    siemGbDay: t.siemGbDayUsed, retentionDays: PRICING_CONFIG_V2.packs[pack].retentionDays,
+    contractMonths: t.billingCycle === 'ANNUAL' ? 12 : 0,
   });
+  const monthlyHT = q.totals.monthly_excl_vat_mad;
   return {
     plan_tier: t.planTier, billing_cycle: t.billingCycle,
     endpoint_count: t.endpointCount, seat_limit: t.seatLimit, seats_used: t.seatsUsed,
     siem_limit_gb: t.siemLimitGbDay, siem_gb_day_used: t.siemGbDayUsed,
-    currency: inv.currency, monthly_invoice_mad: inv.totalMad,
-    monthly_invoice_display: `${formatMoney(inv.totalDisplay, inv.currency)} /mois HT`,
+    currency: PRICING_CONFIG_V2.currency,
+    pricing_engine_version: PRICING_CONFIG_V2.version,
+    billable_units: q.totals.units,
+    monthly_invoice_mad: monthlyHT,
+    monthly_invoice_display: `${fmtMad(monthlyHT)} /mois HT`,
   };
 }
 
@@ -801,19 +821,14 @@ export const demoStore = {
       }
     }
 
-    // ---- Pricing (per-asset Bundle All-in-One) ----
-    // GET /pricing/tiers   -> catalogue from the shared engine
-    // GET /pricing/invoice -> live invoice of the caller's tenant, billed on
-    //                         the real managed-device count (per-asset model).
+    // ---- Pricing V2 (per-asset packs) — mirrors routers/pricing_v2.py ----
+    // GET  /pricing/config   -> bundled V2 config (public)
+    // GET  /pricing/invoice  -> live invoice of the caller's tenant via pricingEngine.quote()
+    // POST /pricing/quote    -> pack or custom quote from the request body
     if (root === 'pricing') {
-      const tierRows = (Object.entries(TIER_LIMITS_MAP) as [string, any][]).map(([t, l]) => ({
-        tier: t,
-        unit_price_mad_monthly: l.unitPriceMad,
-        unit_price_mad_annual: Math.round(l.unitPriceMad * ANNUAL_MULT),
-        seat_limit: l.seatLimit, siem_limit_gb_day: l.siemLimitGbDay,
-        extra_seat_mad: l.extraSeatMad, siem_overage_mad_per_gb: l.siemOverageMadPerGb,
-      }));
-      if (method === 'GET' && parts[1] === 'tiers') return delay(tierRows as any) as unknown as T;
+      if (method === 'GET' && parts[1] === 'config') {
+        return delay(PRICING_CONFIG_V2 as any) as unknown as T;
+      }
       if (method === 'GET' && parts[1] === 'invoice') {
         const s = demoSession();
         const m = /^org-dw-(\d+)$/.exec(String(s.orgId ?? ''));
@@ -821,29 +836,51 @@ export const demoStore = {
         const t = demoTenants.find(x => x.id === tid) ?? demoTenants[0];
         const liveAssets = demoDevices.filter(d => d.orgId === tid).length;
         const billable = Math.max(t.endpointCount, liveAssets);
-        const seatsUsed = demoTechnicians.filter(x => x.orgId === tid).length || t.seatsUsed;
-        const inv = computeInvoice({
-          planTier: t.planTier, billingCycle: t.billingCycle, endpointCount: billable,
-          seatsUsed, siemGbDayUsed: t.siemGbDayUsed, country: t.country,
+        const pack: PackId = PACK_FROM_LEGACY[t.planTier] ?? 'starter';
+        const q = quote({
+          mode: 'pack', pack, assets: demoAssetsFromEndpoints(billable),
+          siemGbDay: t.siemGbDayUsed, retentionDays: PRICING_CONFIG_V2.packs[pack].retentionDays,
+          contractMonths: t.billingCycle === 'ANNUAL' ? 12 : 0,
         });
         return delay({
-          ...inv,
+          ...q,
           plan_tier: t.planTier, billing_cycle: t.billingCycle,
           billable_endpoints: billable, live_asset_count: liveAssets,
-          unit_price_mad: Math.round((TIER_LIMITS_MAP as any)[t.planTier].unitPriceMad *
-            (t.billingCycle === 'ANNUAL' ? ANNUAL_MULT : 1)),
+          unit_price_mad: q.totals.price_per_unit_mad,
+        } as any) as unknown as T;
+      }
+      // POST /pricing/leads -> simulated sales/demo lead capture (mirrors
+      // pricing_v2.py create_lead: honeypot swallowed, consent required).
+      if (method === 'POST' && parts[1] === 'leads') {
+        if (b.website) return delay({ ok: true } as any) as unknown as T;   // bot trap
+        if (!b.consent) return Promise.reject(new Error('Le consentement (loi 09-08 / CNDP) est requis.')) as unknown as T;
+        pushPlatformAudit('pricing.lead.created', `lead démo from ${String(b.email ?? '?')} (${String(b.kind ?? 'sales')})`);
+        return delay({
+          ok: true, id: Math.floor(Math.random() * 9000) + 1000,
+          message: 'Un conseiller commercial vous enverra un calculateur personnel ou réalisera le calcul avec vous.',
         } as any) as unknown as T;
       }
       if (method === 'POST' && parts[1] === 'quote') {
-        const inv = computeInvoice({
-          planTier: b.plan_tier ?? b.planTier ?? 'PRO',
-          billingCycle: b.billing_cycle ?? b.billingCycle ?? 'MONTHLY',
-          endpointCount: b.endpoint_count ?? b.endpointCount ?? 0,
-          seatsUsed: b.seats_used ?? b.seatsUsed ?? 0,
-          siemGbDayUsed: b.siem_gb_day_used ?? b.siemGbDayUsed ?? 0,
-          country: b.country ?? 'ma',
-        });
-        return delay(inv as any) as unknown as T;
+        // Accept BOTH the V2 QuoteInputs shape and the legacy v1 body shape.
+        const legacyPack: PackId | undefined = b.pack ?? PACK_FROM_LEGACY[String(b.plan_tier ?? b.planTier ?? '')];
+        const legacyUnits = Array.isArray(b.assets) ? undefined
+          : [{ class: 'workstation', qty: Math.round((b.endpoint_count ?? b.endpointCount ?? 0) * 0.8) },
+             { class: 'mailbox', qty: Math.round((b.endpoint_count ?? b.endpointCount ?? 0) * 0.2) }];
+        const inputs: any = {
+          mode: b.mode ?? (legacyPack ? 'pack' : 'custom'),
+          pack: legacyPack,
+          assets: b.assets ?? legacyUnits,
+          siemGbDay: b.siemGbDay ?? b.siem_gb_day_used ?? b.siemGbDayUsed ?? 0,
+          retentionDays: b.retentionDays ?? PRICING_CONFIG_V2.packs[legacyPack ?? 'pro'].retentionDays,
+          backupVolumeGb: b.backupVolumeGb ?? b.backup_volume_gb,
+          contractMonths: b.contractMonths ?? ((b.billing_cycle ?? b.billingCycle) === 'ANNUAL' ? 12 : 0),
+          support247: b.support247,
+          customServices: b.customServices ?? b.custom_services,
+          freePicks: b.freePicks ?? b.free_picks,
+          partnerTier: b.partnerTier ?? b.partner_tier,
+          dealRegisteredAt: b.dealRegisteredAt ?? b.deal_registered_at,
+        };
+        return delay(quote(inputs) as any) as unknown as T;
       }
     }
 

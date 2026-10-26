@@ -26,14 +26,67 @@ def r2(x: Decimal) -> Decimal:
     return x.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
+# Embedded fallback copy — MUST stay identical to app/core/pricing_config.json
+# (canonical mirror of src/data/pricingConfig.ts, enforced by tests/config_parity.cjs
+# and tests/test_pricing_golden.py::test_embedded_fallback_matches_json).
+_EMBEDDED_CONFIG_JSON = """{
+  "version": "2026.10-2", "currency": "MAD", "vat": 0.20,
+  "assetClasses": {"server":1,"virtual_machine":1,"workstation":1,"laptop":1,"firewall":1,
+                   "switch":0.5,"router":0.5,"access_point":0.5,"mailbox":0.5,"iot_printer":0.5,"other_network":0.5},
+  "packs": {
+    "starter":  {"price":269,"minUnits":10,"maxUnits":49,"tier":1,"siemQuota":{"perUnit":0,"min":0},"retentionDays":30,"backupQuotaGbPerUnit":25,"support":"8x5","onboarding":4000},
+    "pro":      {"price":469,"minUnits":50,"maxUnits":null,"tier":2,"siemQuota":{"perUnit":0.2,"min":10},"retentionDays":30,"backupQuotaGbPerUnit":50,"support":"8x5 (24/7 optional)","onboarding":12000},
+    "souverain":{"price":649,"minUnits":100,"maxUnits":null,"tier":3,"siemQuota":{"perUnit":0.5,"min":50},"retentionDays":180,"backupQuotaGbPerUnit":100,"support":"24/7 included","onboarding":35000}
+  },
+  "custom": {"platformBase":99,"floor":269,"minUnits":10,"backupQuotaGbPerUnit":25,"onboardingBase":4000,"onboardingPerPaidService":400,"unlockThresholds":[369,479,589]},
+  "services": [
+    {"id":"endpoint","tier":1,"price":76},{"id":"vuln","tier":1,"price":43},{"id":"patch","tier":1,"price":33},
+    {"id":"backup","tier":1,"price":49},{"id":"compliance","tier":1,"price":43},
+    {"id":"email","tier":2,"price":33},{"id":"incident","tier":2,"price":60},{"id":"network","tier":2,"price":38},
+    {"id":"soar","tier":3,"price":54},{"id":"cloud","tier":3,"price":49},{"id":"firewall_mgmt","tier":3,"price":49},
+    {"id":"vpn","tier":3,"price":33},{"id":"sdwan","tier":3,"price":49}
+  ],
+  "freePool": [
+    {"id":"dns","tier":2,"listPrice":15},{"id":"analytics","tier":2,"listPrice":25},
+    {"id":"threat_intel","tier":2,"listPrice":25},{"id":"ticketing","tier":2,"listPrice":30,"topTierOnly":true}
+  ],
+  "backup": {"overageBlockGb":100,"overagePerBlock":45},
+  "siem": {"minGbPerDay":10,"graduatedRatesPerGbDay":[[10,350],[50,300],[200,250],[null,200]],
+           "retentionMultiplier":{"30":1.0,"90":1.25,"180":1.5,"365":1.9}},
+  "support247PerUnit": 50,
+  "volumeDiscount": [[1000,0.20],[500,0.15],[300,0.10],[200,0.05],[0,0]],
+  "contractDiscount": {"0":0,"12":0.08,"24":0.12,"36":0.15},
+  "onboardingWaivedAtMonths": 36,
+  "promotions": {"starterIntro": {"enabled": false, "price": 229, "months": 6}},
+  "healthCheck": {"days":30,"maxUnits":50,"graceReadOnlyDays":30,"oneActivePerEmailDomainDays":90},
+  "upsell": {"starterNearCapUnits":45,"backupQuotaWarnPct":0.8,"siemOverageConsecutiveDays":3,"trialCtaDay":20},
+  "partner": {
+    "tiers": [{"id":"registered","minManagedUnits":0,"discount":0.20},{"id":"silver","minManagedUnits":100,"discount":0.25},
+              {"id":"gold","minManagedUnits":500,"discount":0.30},{"id":"platinum","minManagedUnits":1500,"discount":0.35}],
+    "dealRegistrationBonus": {"points":0.05,"months":12},
+    "storageLineDiscountOffset": 0.10, "storageLineMinDiscount": 0.10,
+    "soc247Discount": 0.15, "totalDiscountCap": 0.40,
+    "volumeDiscountApplies": false, "onboardingWaived": true, "downgradeGraceDays": 90
+  }
+}"""
+
+
 def load_config(path: Optional[str] = None) -> Dict[str, Any]:
-    """Load the versioned pricing config JSON (single source of truth)."""
+    """Load the versioned pricing config JSON (single source of truth).
+
+    Robustness: if the JSON file is missing or unreadable, fall back to the
+    embedded copy above so the engine never crashes at import time. The parity
+    test guarantees both copies are identical.
+    """
     if path is None:
         import os
         here = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(here, "..", "core", "pricing_config.json")
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return json.loads(_EMBEDDED_CONFIG_JSON)
 
 
 PRICING_CONFIG = load_config()
