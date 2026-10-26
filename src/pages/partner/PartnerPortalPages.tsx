@@ -326,7 +326,7 @@ function BundleTiersSection({ country }: { country: string }) {
   return (
     <div>
       <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--ic-muted)] mb-3">
-        <ShieldCheck className="w-4 h-4" /> Bundle All-in-One — Pay what you enable
+        <ShieldCheck className="w-4 h-4" /> Bundle All-in-One — facturation par asset supervisé
       </h3>
       <div className="grid md:grid-cols-3 gap-4">
         {BUNDLE_TIERS.map((t) => {
@@ -336,9 +336,9 @@ function BundleTiersSection({ country }: { country: string }) {
               <div className="text-sm font-bold text-[var(--ic-heading)]">BUNDLE {t}</div>
               <div className="mt-2 text-2xl font-extrabold" style={{ color: t === 'SOUVERAIN' ? '#a78bfa' : '#22d3ee' }}>
                 {formatMoney(unitPrice(t, 'MONTHLY'), cur)}
-                <span className="text-xs font-normal text-[var(--ic-muted)]"> /endpoint/mois HT</span>
+                <span className="text-xs font-normal text-[var(--ic-muted)]"> /asset supervisé/mois HT</span>
               </div>
-              <div className="text-[11px] text-emerald-400 mt-1">Annuel −12 % → {formatMoney(unitPrice(t, 'ANNUAL'), cur)}/endpoint/mois</div>
+              <div className="text-[11px] text-emerald-400 mt-1">Annuel −12 % → {formatMoney(unitPrice(t, 'ANNUAL'), cur)}/asset/mois</div>
               <ul className="text-sm text-[var(--ic-muted)] mt-3 space-y-1">
                 <li>{l.seatLimit === 0 ? 'Sièges techniciens illimités' : `${l.seatLimit} sièges tech inclus`}</li>
                 <li>SIEM : {l.siemLimitGbDay} Go/jour inclus</li>

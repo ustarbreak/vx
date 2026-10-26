@@ -7,7 +7,8 @@ import {
   BarChart3, Cloud, Activity, AlertTriangle, TrendingUp,
   Layers, Radio, HardDrive, Mail
 } from 'lucide-react';
-import ServiceVisuals from '../components/ServiceVisuals';
+import ServiceVisuals, { ServiceSlider } from '../components/ServiceVisuals';
+import { getServiceContent } from '../data/serviceContent';
 
 // Service-specific themes
 const serviceThemes: Record<string, {
@@ -112,6 +113,9 @@ export default function ServiceDetailPage() {
 
   const ServiceIcon = theme.icon;
 
+  // Rich per-service content (how it works with collectors, data story, FAQs, extra galleries)
+  const rich = getServiceContent(service.id);
+
   return (
     <div className="min-h-screen ic-page text-[var(--ic-heading)]" style={{ backgroundImage: theme.bgPattern }}>
       {/* Navigation */}
@@ -195,12 +199,46 @@ export default function ServiceDetailPage() {
         </div>
       </section>
 
-      {/* Service Visuals - Images and Attack Scenarios */}
+      {/* Service Visuals - Slider, custom attack scenario (protection services only), data story */}
       <section className="py-16 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <ServiceVisuals serviceId={service.id} />
         </div>
       </section>
+
+      {/* How It Works on the Infracentra Platform — collector-based pipeline */}
+      {rich && (
+        <section className="py-24 px-4 sm:px-6 lg:px-8 bg-[var(--ic-surface)] border-y border-[var(--ic-border)]">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-16">
+              <h2 className={`text-4xl font-bold mb-4 bg-gradient-to-r ${theme.gradient} bg-clip-text text-transparent`}>
+                How {service.name} works inside the platform
+              </h2>
+              <p className="text-lg text-[var(--ic-muted)] max-w-3xl mx-auto">
+                Every step is powered by the same collector fabric — the goinfra probe, SNMP polling, syslog and device APIs —
+                so what you see here is exactly how your data moves.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {rich.howItWorks.map((step, i) => (
+                <div key={i} className="relative bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-2xl p-6 hover:border-[var(--ic-primary)]/50 transition-all group">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-3xl">{step.icon}</span>
+                    <span className={`text-xs font-black w-9 h-9 rounded-full bg-gradient-to-br ${theme.gradient} flex items-center justify-center text-white`}>{i + 1}</span>
+                  </div>
+                  <h3 className="text-lg font-bold text-[var(--ic-heading)] mb-2">{step.title}</h3>
+                  <p className="text-sm text-[var(--ic-muted)] leading-relaxed mb-4">{step.description}</p>
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-mono px-2.5 py-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 text-cyan-300">
+                    <Radio className="w-3 h-3" /> via {step.collector}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
 
       {/* Features Section - Different layouts */}
       {theme.layout === 'showcase' && (
@@ -350,6 +388,38 @@ export default function ServiceDetailPage() {
           </div>
         </div>
       </section>
+
+      {/* FAQ — per service */}
+      {rich && (
+        <section className="py-24 px-4 sm:px-6 lg:px-8">
+          <div className="max-w-3xl mx-auto">
+            <h2 className={`text-4xl font-bold mb-10 text-center bg-gradient-to-r ${theme.gradient} bg-clip-text text-transparent`}>
+              Questions teams ask before deploying {service.name}
+            </h2>
+            <div className="space-y-3">
+              {rich.faqs.map((faq, i) => (
+                <details key={i} className="group bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl open:border-[var(--ic-primary)]/50 transition-colors">
+                  <summary className="flex items-center justify-between gap-4 cursor-pointer list-none px-5 py-4 text-[var(--ic-heading)] font-semibold">
+                    {faq.q}
+                    <span className="text-[var(--ic-muted)] group-open:rotate-45 transition-transform text-xl leading-none">+</span>
+                  </summary>
+                  <p className="px-5 pb-4 text-sm text-[var(--ic-muted)] leading-relaxed">{faq.a}</p>
+                </details>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Second slider — real-world context imagery */}
+      {rich && rich.gallery.length >= 3 && (
+        <section className="py-16 px-4 sm:px-6 lg:px-8 bg-[var(--ic-surface)] border-y border-[var(--ic-border)]">
+          <div className="max-w-5xl mx-auto">
+            <h2 className="text-3xl font-bold text-[var(--ic-heading)] text-center mb-8">Inside real deployments</h2>
+            <ServiceSlider images={[...rich.gallery].reverse()} />
+          </div>
+        </section>
+      )}
 
       {/* CTA Section */}
       <section className="py-24 px-4 sm:px-6 lg:px-8">

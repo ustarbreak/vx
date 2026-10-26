@@ -27,6 +27,8 @@ import { demoRulesSeed, type DemoRule } from '../data/demoWorld';
 const monitoringRules: DemoRule[] = JSON.parse(JSON.stringify(demoRulesSeed));
 /** Service grants overriding the plan entitlements, keyed by tenant id. */
 const grantsStore: Record<string, Record<string, { enabled: boolean; override_plan: boolean; granted_by: string; updated_at: string }>> = {};
+// goinfra enrollment tokens (demo): secret shown once, kept in memory per org.
+const agentTokensStore: Record<string, any[]> = {};
 /** Platform-level audit trail for admin actions (grants, rules, partners). */
 const platformAudit: { id: number; action: string; detail: string; actor: string; created_at: string }[] = [];
 let pAuditSeq = 1;
@@ -92,7 +94,7 @@ const orgs: DemoOrg[] = demoTenants.map(t => ({ ...t }));
 
 // Bundle All-in-One billing per tenant, computed with the SHARED pricing engine
 // (src/config/pricing.ts) so the UI numbers always match the backend formula.
-import { computeInvoice, formatMoney } from '../config/pricing';
+import { computeInvoice, formatMoney, TIER_LIMITS as TIER_LIMITS_MAP, ANNUAL_MULTIPLIER as ANNUAL_MULT } from '../config/pricing';
 function billingForTenant(id: number) {
   const t = demoTenants.find((x) => x.id === id);
   if (!t) return {};
@@ -799,6 +801,52 @@ export const demoStore = {
       }
     }
 
+    // ---- Pricing (per-asset Bundle All-in-One) ----
+    // GET /pricing/tiers   -> catalogue from the shared engine
+    // GET /pricing/invoice -> live invoice of the caller's tenant, billed on
+    //                         the real managed-device count (per-asset model).
+    if (root === 'pricing') {
+      const tierRows = (Object.entries(TIER_LIMITS_MAP) as [string, any][]).map(([t, l]) => ({
+        tier: t,
+        unit_price_mad_monthly: l.unitPriceMad,
+        unit_price_mad_annual: Math.round(l.unitPriceMad * ANNUAL_MULT),
+        seat_limit: l.seatLimit, siem_limit_gb_day: l.siemLimitGbDay,
+        extra_seat_mad: l.extraSeatMad, siem_overage_mad_per_gb: l.siemOverageMadPerGb,
+      }));
+      if (method === 'GET' && parts[1] === 'tiers') return delay(tierRows as any) as unknown as T;
+      if (method === 'GET' && parts[1] === 'invoice') {
+        const s = demoSession();
+        const m = /^org-dw-(\d+)$/.exec(String(s.orgId ?? ''));
+        const tid = m ? Number(m[1]) : 1;
+        const t = demoTenants.find(x => x.id === tid) ?? demoTenants[0];
+        const liveAssets = demoDevices.filter(d => d.orgId === tid).length;
+        const billable = Math.max(t.endpointCount, liveAssets);
+        const seatsUsed = demoTechnicians.filter(x => x.orgId === tid).length || t.seatsUsed;
+        const inv = computeInvoice({
+          planTier: t.planTier, billingCycle: t.billingCycle, endpointCount: billable,
+          seatsUsed, siemGbDayUsed: t.siemGbDayUsed, country: t.country,
+        });
+        return delay({
+          ...inv,
+          plan_tier: t.planTier, billing_cycle: t.billingCycle,
+          billable_endpoints: billable, live_asset_count: liveAssets,
+          unit_price_mad: Math.round((TIER_LIMITS_MAP as any)[t.planTier].unitPriceMad *
+            (t.billingCycle === 'ANNUAL' ? ANNUAL_MULT : 1)),
+        } as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[1] === 'quote') {
+        const inv = computeInvoice({
+          planTier: b.plan_tier ?? b.planTier ?? 'PRO',
+          billingCycle: b.billing_cycle ?? b.billingCycle ?? 'MONTHLY',
+          endpointCount: b.endpoint_count ?? b.endpointCount ?? 0,
+          seatsUsed: b.seats_used ?? b.seatsUsed ?? 0,
+          siemGbDayUsed: b.siem_gb_day_used ?? b.siemGbDayUsed ?? 0,
+          country: b.country ?? 'ma',
+        });
+        return delay(inv as any) as unknown as T;
+      }
+    }
+
     // ---- Organizations (platform admin) ----
     if (root === 'organizations') {
       if (method === 'GET' && parts.length === 1) {
@@ -917,6 +965,92 @@ export const demoStore = {
 
     if (root === 'admin' && parts[1] === 'audit-platform' && method === 'GET') {
       return delay(platformAudit as any) as unknown as T;
+    }
+
+    // ---- goinfra Collection Agents (fleet / tokens / discovered devices) ----
+    if (root === 'agents' || root === 'agent-tokens') {
+      const myOrg = callerOrgId();
+      const orgDevices = demoDevices.filter(d => myOrg === null || d.orgId === myOrg);
+
+      // Simulated probe fleet: a subset of the tenant's devices run an agent.
+      const probes = orgDevices.slice(0, Math.max(2, Math.ceil(orgDevices.length / 3))).map((d, i) => ({
+        id: i + 1, org_id: d.orgId, hostname: d.hostname, agent_version: '1.0.0',
+        status: d.status === 'offline' && i % 2 === 1 ? 'offline' : 'online',
+        os: d.os?.toLowerCase().includes('win') ? 'windows' : 'linux',
+        ip: d.ip, last_seen: iso(d.status === 'offline' ? 45 + i * 10 : 1),
+      }));
+
+      if (root === 'agents' && parts[1] === 'probes' && parts.length === 2 && method === 'GET') {
+        return delay(probes as any) as unknown as T;
+      }
+      if (root === 'agents' && parts[1] === 'probes' && parts[3] === 'inventory' && method === 'GET') {
+        const p = probes.find(x => x.id === Number(parts[2])) ?? probes[0];
+        return delay({
+          inventory_id: 1, collected_at: p.last_seen,
+          payload: {
+            hostname: p.hostname, os: p.os, platform: p.os === 'windows' ? 'Windows Server' : 'Ubuntu 22.04.4 LTS',
+            kernel: p.os === 'windows' ? '10.0.20348' : '5.15.0-113-generic', cpu: { model: 'Xeon E-2288G', cores: 8, percent: 23 },
+            memory: { total_bytes: 34359738368, used_bytes: 12884901888, percent: 37 },
+            disks: [{ mount: p.os === 'windows' ? 'C:' : '/', device: 'sda1', total_bytes: 512110190592, used_bytes: 214748364800, percent: 42 }],
+            services: [
+              { name: p.os === 'windows' ? 'Spooler' : 'sshd', status: 'running', pid: 1042 },
+              { name: p.os === 'windows' ? 'wuauserv' : 'cron', status: 'running', pid: 611 },
+              { name: 'docker', status: 'stopped', pid: 0 },
+            ],
+            patches: [{ id: p.os === 'windows' ? 'KB5037765' : 'linux-image-5.15.0-113', installed_on: iso(60 * 24 * 9) }],
+            ips: [p.ip], collected_at: p.last_seen,
+          },
+        } as any) as unknown as T;
+      }
+      if (root === 'agents' && parts[1] === 'probes' && parts[3] === 'metrics' && method === 'GET') {
+        // 24h of points every 15 min with plausible sine-ish load curves.
+        const pts: any[] = [];
+        const nowS = Math.floor(Date.now() / 1000);
+        for (let k = 96; k >= 0; k--) {
+          const wobble = Math.sin(k / 6) * 12;
+          pts.push({
+            ts: nowS - k * 900, cpu_percent: +(18 + wobble + (k % 7)).toFixed(1),
+            mem_used_percent: +(41 + wobble / 3).toFixed(1), disk_worst_percent: 42,
+            load1: +(0.6 + wobble / 25).toFixed(2), net_recv_bps: 4_200_000 + wobble * 90_000,
+            net_sent_bps: 1_900_000 + wobble * 40_000, temp_max_celsius: null,
+          });
+        }
+        return delay(pts as any) as unknown as T;
+      }
+      if (root === 'agents' && parts[1] === 'discovered-devices' && method === 'GET') {
+        const out = orgDevices.filter(d => ['firewall', 'switch', 'router', 'server'].includes(d.type)).slice(0, 12)
+          .map((d, i) => ({
+            id: i + 1, probe_id: (i % Math.max(1, probes.length)) + 1, ip: d.ip, mac: `aa:bb:cc:${String(d.orgId).padStart(2, '0')}:${String(i).padStart(2, '0')}:ee`,
+            hostname: d.hostname, os_guess: d.os ?? 'unknown', device_type: d.type,
+            sys_name: d.hostname.split('.')[0], snmp: ['firewall', 'switch', 'router'].includes(d.type),
+            open_ports: [22, 443], last_seen: iso(i + 2),
+          }));
+        return delay(out as any) as unknown as T;
+      }
+
+      // Token CRUD (in-memory store per session)
+      if (root === 'agent-tokens') {
+        const store = (agentTokensStore[String(myOrg)] ??= []);
+        if (method === 'GET') return delay([...store] as any) as unknown as T;
+        if (method === 'POST') {
+          const secret = 'icag_' + Array.from({ length: 32 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
+          const row = {
+            id: store.length ? Math.max(...store.map(t => t.id)) + 1 : 1, org_id: myOrg,
+            name: b?.name || 'default', prefix: secret.slice(0, 12), revoked: false,
+            last_used_at: null, created_at: new Date().toISOString(), token: secret,
+          };
+          store.unshift(row);
+          pushPlatformAudit?.('agent.token.created', `Token agent « ${row.name} » généré`);
+          return delay(row as any) as unknown as T;
+        }
+        if (method === 'DELETE') {
+          const tid = Number(parts[1]);
+          const idx = store.findIndex(t => t.id === tid);
+          if (idx < 0) throw httpErr(404, 'Token not found');
+          store[idx].revoked = true;
+          return delay(undefined as any) as unknown as T;
+        }
+      }
     }
 
     throw httpErr(404, `Demo mode: no simulated handler for ${method} /api${path}`);

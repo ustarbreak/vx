@@ -14,7 +14,8 @@ import {
   HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp,
-  BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette
+  BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
+  MonitorSmartphone
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
 
@@ -103,6 +104,7 @@ const COMMAND_INDEX: { label: string; aliases: string; to: string }[] = [
   { label: 'Asset Inventory — Auto Discovery', aliases: 'discovery scan snmp network cidr fingerprint', to: '/client-admin/monitored-devices' },
   { label: 'Asset Inventory — Scan History', aliases: 'scans history previous runs results', to: '/client-admin/scan-history' },
   { label: 'Asset Inventory — Monitored Devices', aliases: 'cmdb monitored assets clients projects preview', to: '/client-admin/asset-inventory' },
+  { label: 'Collection Agents', aliases: 'agent probe goinfra install token enrollment remote collector fleet', to: '/client-admin/agents' },
   { label: 'Service Desk', aliases: 'tickets ticketing advanced tickets', to: '/client-admin/advanced-tickets' },
   { label: 'Playbooks', aliases: 'soar automation custom playbooks runbooks scripts', to: '/client-admin/playbooks' },
   { label: 'Project Portfolio', aliases: 'projects project manager delivery', to: '/projects' },
@@ -201,6 +203,13 @@ export default function Layout() {
     ];
     adminNav = [
       { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
+      {
+        group: true, icon: Monitor, label: 'Asset Inventory', items: [
+          { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
+          { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
+          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+        ],
+      },
     ];
   } else if (user?.role === 'partner_admin') {
     // MSP Partner Portal — white-label. Partners manage THEIR OWN end-clients;
@@ -216,6 +225,7 @@ export default function Layout() {
           { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
           { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
           { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
+          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
         ],
       },
       { to: '/reports', icon: FileBarChart2, label: 'Client Reports' },
@@ -267,6 +277,7 @@ export default function Layout() {
           { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
           { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
           { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
+          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
         ],
       },
       { to: '/client-admin/technicians', icon: UserCog, label: 'Team & Roles' },

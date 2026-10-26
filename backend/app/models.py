@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -29,6 +29,10 @@ class Organization(Base):
     parent_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     risk_score = Column(Integer, default=0)
     compliance_score = Column(Integer, default=0)
+    # --- Pricing v2: free Security Health Check trial -----------------------
+    trial = Column(Boolean, default=False)
+    trial_expires_at = Column(DateTime(timezone=True), nullable=True)
+    grace_until = Column(DateTime(timezone=True), nullable=True)  # read-only window
     contract_start = Column(DateTime)
     contract_end = Column(DateTime)
     monthly_revenue = Column(Integer, default=0)
@@ -95,6 +99,140 @@ class Integration(Base):
     notes = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Pricing v2 (per-asset packs, Health Check trials, sales quotes, partners)
+# Single source of truth for prices: app/core/pricing_config.json + engine.
+# ---------------------------------------------------------------------------
+
+class PricingConfigVersion(Base):
+    __tablename__ = "pricing_config_versions"
+
+    id = Column(Integer, primary_key=True)
+    version = Column(String(16), unique=True, index=True, nullable=False)
+    payload = Column(Text, nullable=False)  # full JSON config, immutable per version
+    is_active = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PricingLead(Base):
+    __tablename__ = "pricing_leads"
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(200), nullable=False)
+    name = Column(String(120), nullable=False)
+    email = Column(String(200), nullable=False, index=True)
+    phone = Column(String(40))
+    country = Column(String(60))
+    lang = Column(String(8), default="fr")
+    asset_counts = Column(Text)             # JSON {class: qty} (optional)
+    interests = Column(Text)                # JSON [service ids]
+    message = Column(Text)
+    contact_prefs = Column(Text)            # JSON ["whatsapp","phone","email"]
+    consent = Column(Boolean, default=False)  # CNDP / loi 09-08
+    status = Column(String(16), default="new", index=True)  # new|contacted|qualified|won|lost
+    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)  # set on conversion
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuoteLink(Base):
+    __tablename__ = "quote_links"
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)  # SHA-256 only
+    lead_id = Column(Integer, ForeignKey("pricing_leads.id"), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    prefill = Column(Text)                   # JSON quote inputs
+    lock_email = Column(String(200), nullable=True)  # optional client-email lock
+    max_extra_discount = Column(String(8), default="0.05")  # role cap recorded at creation
+    view_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuoteRecord(Base):
+    __tablename__ = "quotes"
+
+    id = Column(Integer, primary_key=True)
+    number = Column(String(24), unique=True, index=True, nullable=False)  # IC-Q-2026-0001
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    lead_id = Column(Integer, ForeignKey("pricing_leads.id"), nullable=True)
+    partner_id = Column(Integer, nullable=True)          # org/partner row when partner-made
+    mode = Column(String(8), nullable=False)             # pack | custom
+    inputs = Column(Text, nullable=False)                # JSON quote inputs (server-recomputed)
+    result = Column(Text, nullable=False)                # JSON engine output snapshot
+    extra_discount = Column(String(16), default="0")     # sales override % (capped by role)
+    discount_reason = Column(String(300))
+    config_version = Column(String(16), nullable=False)
+    pdf_hash = Column(String(64))                        # last export hash
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class HealthCheck(Base):
+    __tablename__ = "health_checks"
+
+    id = Column(Integer, primary_key=True)
+    company = Column(String(200), nullable=False)
+    name = Column(String(120), nullable=False)
+    email = Column(String(200), nullable=False, index=True)
+    phone = Column(String(40))
+    country = Column(String(60))
+    consent = Column(Boolean, default=False)
+    email_domain = Column(String(200), index=True)       # one active trial / domain / 90d
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    enrollment_key_hash = Column(String(64))             # collector one-time key (hash only)
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=False)      # +30 days
+    grace_until = Column(DateTime(timezone=True))                     # +30 read-only
+    purged_at = Column(DateTime(timezone=True))
+    status = Column(String(16), default="active", index=True)  # active|read_only|purged|converted
+    score = Column(Integer)                                # posture score 0..100
+    report_pdf_hash = Column(String(64))
+    created_by_partner_id = Column(Integer, nullable=True)  # partner-run => deal auto-created
+    units_at_conversion = Column(String(16))
+    recommended_pack = Column(String(16))
+
+
+class PartnerDealRegistration(Base):
+    __tablename__ = "partner_deal_registrations"
+
+    id = Column(Integer, primary_key=True)
+    partner_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    prospect_company = Column(String(200), nullable=False)
+    prospect_email = Column(String(200))
+    expected_units = Column(String(16))                    # billable units estimate
+    pack = Column(String(16))                              # starter|pro|souverain|custom
+    status = Column(String(16), default="registered", index=True)  # registered|conflict|approved|rejected|expired|won
+    conflict_note = Column(String(300))
+    approved_at = Column(DateTime(timezone=True))          # start of the 12-month bonus window
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class PlanEntitlementV2(Base):
+    """v2 entitlements: plan -> service ids (category names only, white-label)."""
+    __tablename__ = "plan_entitlements_v2"
+
+    id = Column(Integer, primary_key=True)
+    plan = Column(String(16), nullable=False, index=True)   # starter|pro|souverain|custom|trial
+    service_id = Column(String(32), nullable=False)
+    included = Column(Boolean, default=True)
+    min_units = Column(Integer, default=0)
+    __table_args__ = (UniqueConstraint("plan", "service_id", name="uq_plan_service_v2"),)
+
+
+class UpsellEvent(Base):
+    __tablename__ = "upsell_events"
+
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    trigger = Column(String(32), nullable=False)   # near_cap|backup_quota|siem_overage|trial_cta|estimator
+    message = Column(Text, nullable=False)
+    action = Column(String(16), default="shown")   # shown|dismissed|clicked|requested
+    dismissed_at = Column(DateTime(timezone=True))  # reappears after 30 days
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class AuditLog(Base):
@@ -444,6 +582,106 @@ class DiscoveredDevice(Base):
 # Phase 4 — Tenant Manager avancé : grants de services + règles de supervision
 # (miroir exact des shapes servies par demoMode.ts / tenantManagerApi)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# goinfra agent — probes, inventories, metrics, agent-reported discovery
+# ---------------------------------------------------------------------------
+
+class AgentProbe(Base):
+    """One enrolled goinfra agent. Enrollment is idempotent per (org, hostname):
+    the same machine re-helloing with the same tenant token gets the same row."""
+    __tablename__ = "agent_probes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    hostname = Column(String, nullable=False)
+    agent_version = Column(String, nullable=True)
+    os = Column(String, nullable=True)                   # linux|windows|...
+    ip = Column(String, nullable=True)                   # primary NIC address
+    status = Column(String, default="online")            # online|offline
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (Index("uq_agent_probe_org_host", "org_id", "hostname", unique=True),)
+
+
+class AgentInventory(Base):
+    """Full host snapshot posted by the agent each cycle (raw JSON + summary columns)."""
+    __tablename__ = "agent_inventories"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    probe_id = Column(Integer, ForeignKey("agent_probes.id"), nullable=False, index=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    collected_at = Column(DateTime(timezone=True), nullable=True)
+    payload = Column(JSON, default=dict)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentMetric(Base):
+    """Time-series point of the live metrics stream (one row per sample)."""
+    __tablename__ = "agent_metrics"
+
+    ts = Column(BigInteger, primary_key=True)                       # epoch seconds
+    probe_id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=False, index=True)
+    cpu_percent = Column(Float, nullable=True)
+    mem_used_percent = Column(Float, nullable=True)
+    mem_total_bytes = Column(BigInteger, nullable=True)
+    disk_worst_percent = Column(Float, nullable=True)
+    load1 = Column(Float, nullable=True)
+    net_recv_bps = Column(Float, nullable=True)
+    net_sent_bps = Column(Float, nullable=True)
+    temp_max_celsius = Column(Float, nullable=True)
+
+
+class AgentToken(Base):
+    """Tenant API token issued from Settings → Agents. Only the SHA-256 hash of
+    the secret is stored; agents authenticate with `Bearer icag_...`."""
+    __tablename__ = "agent_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)
+    prefix = Column(String(12), nullable=False)          # first chars for display
+    created_by = Column(String, nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentDiscoveredDevice(Base):
+    """Devices reported by a probe's local network sweep (same lifecycle as
+    DiscoveredDevice: review queue -> import)."""
+    __tablename__ = "agent_discovered_devices"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    probe_id = Column(Integer, ForeignKey("agent_probes.id"), nullable=False, index=True)
+    ip = Column(String, nullable=False, index=True)
+    mac = Column(String, nullable=True)
+    hostname = Column(String, nullable=True)
+    os_guess = Column(String, nullable=True)
+    device_type = Column(String, nullable=True)
+    open_ports = Column(JSON, default=list)
+    sys_name = Column(String, nullable=True)
+    sys_desc = Column(String, nullable=True)
+    first_seen = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    imported = Column(Boolean, default=False)
+
+    __table_args__ = (Index("uq_agent_disc_org_ip", "org_id", "ip", unique=True),)
+
+
+class TenantSetting(Base):
+    """Free-form per-org settings (discovery defaults, agent policy overrides)."""
+    __tablename__ = "tenant_settings"
+
+    org_id = Column(Integer, ForeignKey("organizations.id"), primary_key=True)
+    data = Column(JSON, default=dict)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class TenantServiceGrant(Base):
     """Override d'un service au-delà du plan standard (grant/deny plateforme)."""
     __tablename__ = "tenant_service_grants"

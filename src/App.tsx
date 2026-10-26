@@ -70,6 +70,7 @@ import CustomPlaybooksLibrary from './pages/client-admin/CustomPlaybooksLibrary'
 import AutomationScriptsPage from './pages/client-admin/AutomationScriptsPage';
 import AutomationRunbooksPage from './pages/client-admin/AutomationRunbooksPage';
 import ComplianceReports from './pages/client-admin/ComplianceReports';
+import AgentsPage from './pages/client-admin/AgentsPage';
 import ReportsPage from './pages/ReportsPage';
 
 import SettingsPage from './pages/SettingsPage';
@@ -170,6 +171,7 @@ function AppRoutes() {
         <Route path="client-admin/monitored-devices" element={<MonitoredDevicesPage />} />
         <Route path="client-admin/scan-history" element={<ScanHistoryPage />} />
         <Route path="client-admin/asset-inventory" element={<MonitoredAssetsPage />} />
+        <Route path="client-admin/agents" element={<AgentsPage />} />
         <Route path="client-admin/technicians" element={<TechniciansManagementPage />} />
         <Route path="client-admin/entitlements" element={<ClientEntitlementsPage />} />
         <Route path="client-admin/infrastructure" element={<ClientAdminDashboard />} />

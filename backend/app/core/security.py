@@ -1,6 +1,6 @@
 import base64
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as tz
 from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -91,6 +91,33 @@ async def get_current_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
     return current_user
+
+
+async def get_agent_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db)
+):
+    """Authenticate a goinfra agent by its tenant API token (Bearer icag_...).
+
+    Returns the AgentToken row (org_id scopes everything the agent can touch).
+    Only the SHA-256 hash of the secret is stored server-side.
+    """
+    from app.models import AgentToken
+    invalid = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid agent token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    token = credentials.credentials
+    if not token.startswith("icag_"):
+        raise invalid
+    thash = hashlib.sha256(token.encode()).hexdigest()
+    row = (await db.execute(select(AgentToken).where(AgentToken.token_hash == thash))).scalars().first()
+    if row is None or row.revoked_at is not None:
+        raise invalid
+    row.last_used_at = datetime.now(tz.utc)
+    await db.commit()
+    return row
 
 
 def require_role(required_role: str):

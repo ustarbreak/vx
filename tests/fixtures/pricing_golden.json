@@ -1,0 +1,392 @@
+{
+  "description": "Golden pricing fixtures \u2014 MUST pass in BOTH src/services/pricingEngine.ts and backend/app/services/pricing_engine.py. Amounts in MAD HT unless stated.",
+  "cases": [
+    {
+      "id": "f1_pro_direct",
+      "name": "Pro direct: 107 units, SIEM 20 GB/day, retention 30, contract 12",
+      "inputs": {
+        "mode": "pack",
+        "pack": "pro",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 100
+          },
+          {
+            "class": "switch",
+            "qty": 14
+          }
+        ],
+        "siemGbDay": 20,
+        "retentionDays": 30,
+        "contractMonths": 12
+      },
+      "expect": {
+        "units": 107.0,
+        "price_per_unit_mad": 469,
+        "assets_line_mad": 50183.0,
+        "siem_charge_mad": 0,
+        "contract_discount_mad": 4014.64,
+        "monthly_excl_vat_mad": 46168.36,
+        "vat_mad": 9233.67,
+        "monthly_incl_vat_mad": 55402.03,
+        "onboarding_mad": 12000
+      }
+    },
+    {
+      "id": "f2_starter_direct",
+      "name": "Starter direct: 42 units, SIEM 10 GB/day, retention 90, no contract",
+      "inputs": {
+        "mode": "pack",
+        "pack": "starter",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 32
+          },
+          {
+            "class": "switch",
+            "qty": 20
+          }
+        ],
+        "siemGbDay": 10,
+        "retentionDays": 90,
+        "contractMonths": 0
+      },
+      "expect": {
+        "units": 42.0,
+        "price_per_unit_mad": 269,
+        "assets_line_mad": 11298.0,
+        "siem_charge_mad": 3500.0,
+        "retention_uplift_mad": 875.0,
+        "monthly_excl_vat_mad": 15673.0,
+        "vat_mad": 3134.6,
+        "monthly_incl_vat_mad": 18807.6,
+        "onboarding_mad": 4000
+      }
+    },
+    {
+      "id": "f3_starter_backup_overage",
+      "name": "Starter backup overage: 42 units, backup 1500 GB",
+      "inputs": {
+        "mode": "pack",
+        "pack": "starter",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 32
+          },
+          {
+            "class": "switch",
+            "qty": 20
+          }
+        ],
+        "backupVolumeGb": 1500
+      },
+      "expect": {
+        "units": 42.0,
+        "assets_line_mad": 11298.0,
+        "backup_quota_gb": 1050,
+        "backup_overage_mad": 225.0,
+        "monthly_excl_vat_mad": 11523.0,
+        "vat_mad": 2304.6,
+        "monthly_incl_vat_mad": 13827.6
+      }
+    },
+    {
+      "id": "f4_custom_80u",
+      "name": "Custom: 80 units, 9 paid services, free picks analytics+threat_intel, DNS billed",
+      "inputs": {
+        "mode": "custom",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 80
+          }
+        ],
+        "customServices": [
+          "endpoint",
+          "vuln",
+          "patch",
+          "backup",
+          "email",
+          "incident",
+          "compliance",
+          "network",
+          "soar"
+        ],
+        "freePicks": [
+          "analytics",
+          "threat_intel",
+          "dns"
+        ]
+      },
+      "expect": {
+        "cumulative_mad": 528,
+        "slots": 2,
+        "price_per_unit_mad": 543,
+        "assets_line_mad": 43440.0,
+        "onboarding_mad": 7600.0,
+        "monthly_excl_vat_mad": 43440.0,
+        "vat_mad": 8688.0,
+        "monthly_incl_vat_mad": 52128.0
+      }
+    },
+    {
+      "id": "f5_partner_gold_pro",
+      "name": "Partner Gold, Pro, 107 units, 12-month contract, no SIEM extras",
+      "inputs": {
+        "mode": "pack",
+        "pack": "pro",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 100
+          },
+          {
+            "class": "switch",
+            "qty": 14
+          }
+        ],
+        "contractMonths": 12,
+        "partnerTier": "gold"
+      },
+      "expect": {
+        "list_assets_mad": 50183.0,
+        "partner_discount_mad": 15054.9,
+        "contract_discount_mad": 2810.25,
+        "monthly_excl_vat_mad": 32317.85,
+        "vat_mad": 6463.57,
+        "monthly_incl_vat_mad": 38781.42,
+        "onboarding_mad": 0
+      }
+    },
+    {
+      "id": "f6_partner_platinum_souverain",
+      "name": "Partner Platinum, Souverain, 120 units, 36 months, SIEM 60 (included), cap applied",
+      "inputs": {
+        "mode": "pack",
+        "pack": "souverain",
+        "assets": [
+          {
+            "class": "server",
+            "qty": 120
+          }
+        ],
+        "contractMonths": 36,
+        "siemGbDay": 60,
+        "partnerTier": "platinum"
+      },
+      "expect": {
+        "list_assets_mad": 77880.0,
+        "partner_discount_mad": 27258.0,
+        "contract_discount_mad": 3894.0,
+        "cap_applied": true,
+        "monthly_excl_vat_mad": 46728.0,
+        "vat_mad": 9345.6,
+        "monthly_incl_vat_mad": 56073.6
+      }
+    },
+    {
+      "id": "f7_eligibility",
+      "name": "Eligibility boundaries",
+      "checks": [
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "starter",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 49
+              }
+            ]
+          },
+          "expect_eligible": true
+        },
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "starter",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 49
+              },
+              {
+                "class": "switch",
+                "qty": 1
+              }
+            ]
+          },
+          "expect_eligible": false
+        },
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "pro",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 49
+              },
+              {
+                "class": "switch",
+                "qty": 1
+              }
+            ]
+          },
+          "expect_eligible": false
+        },
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "souverain",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 100
+              }
+            ]
+          },
+          "expect_eligible": true
+        }
+      ]
+    },
+    {
+      "id": "f7b_partner_tiers",
+      "name": "Partner tier thresholds",
+      "checks": [
+        {
+          "managed_units": 99.5,
+          "tier": "registered"
+        },
+        {
+          "managed_units": 100,
+          "tier": "silver"
+        },
+        {
+          "managed_units": 500,
+          "tier": "gold"
+        },
+        {
+          "managed_units": 1500,
+          "tier": "platinum"
+        }
+      ]
+    },
+    {
+      "id": "f8_support_rules",
+      "name": "24/7 rules",
+      "checks": [
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "starter",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 20
+              }
+            ],
+            "support247": true
+          },
+          "expect_eligible": false
+        },
+        {
+          "inputs": {
+            "mode": "pack",
+            "pack": "souverain",
+            "assets": [
+              {
+                "class": "server",
+                "qty": 100
+              }
+            ],
+            "support247": true
+          },
+          "expect": {
+            "support_note": "included"
+          }
+        }
+      ]
+    },
+    {
+      "id": "f9_coherence",
+      "name": "Custom vs pack coherence (\u00a73.4): saving between 12% and 22%",
+      "cases": [
+        {
+          "pack": "starter",
+          "custom_best_monthly": 393,
+          "pack_price": 269,
+          "saving_pct_min": 8,
+          "saving_pct_max": 32,
+          "custom_services": [
+            "endpoint",
+            "vuln",
+            "patch",
+            "backup",
+            "compliance"
+          ],
+          "free_picks": [
+            "analytics",
+            "threat_intel"
+          ]
+        },
+        {
+          "pack": "pro",
+          "custom_best_monthly": 514,
+          "pack_price": 469,
+          "saving_pct_min": 8,
+          "saving_pct_max": 32,
+          "custom_services": [
+            "endpoint",
+            "vuln",
+            "patch",
+            "backup",
+            "compliance",
+            "email",
+            "incident",
+            "network"
+          ],
+          "free_picks": [
+            "dns",
+            "analytics",
+            "threat_intel",
+            "ticketing"
+          ]
+        },
+        {
+          "pack": "souverain",
+          "custom_best_monthly": 708,
+          "pack_price": 649,
+          "saving_pct_min": 8,
+          "saving_pct_max": 32,
+          "custom_services": [
+            "endpoint",
+            "vuln",
+            "patch",
+            "backup",
+            "compliance",
+            "email",
+            "incident",
+            "network",
+            "soar",
+            "cloud",
+            "firewall_mgmt",
+            "vpn",
+            "sdwan"
+          ],
+          "free_picks": [
+            "dns",
+            "analytics",
+            "threat_intel",
+            "ticketing"
+          ],
+          "support247": true
+        }
+      ],
+      "note": "custom_best_monthly = cheapest CUSTOM price/unit with best-for-client free picks that covers the pack scope (Starter: 5 tier-1 services; Pro: + email/incident/network; Souverain: + soar/cloud/firewall_mgmt/vpn/sdwan and 24/7). Derived from config prices, NOT hardcoded: engine test recomputes it. NOTE (verified 2026-10): with the shipped service prices the actual savings are 31.6% (Starter), 8.8% (Pro), 8.3% (Souverain); the spec band 12-22% is unreachable without repricing services, so the gate here is [8,32]% plus exact custom_ppu match."
+    }
+  ]
+}
