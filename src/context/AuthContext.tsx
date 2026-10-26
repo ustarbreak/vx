@@ -319,6 +319,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           id: activeUser.orgId, name: t.name, tier: t.tier as any,
           memberCount: demoTechnicians.filter(x => x.orgId === t.id).length,
           assetCount: demoDevices.filter(x => x.orgId === t.id).length,
+          // Pricing V2 billing facts from Demo World (pack + contract length;
+          // planTier/billingCycle kept as legacy display aliases).
+          endpointCount: t.endpointCount,
+          pack: t.pack, planTier: t.planTier, billingCycle: t.billingCycle,
+          contractMonths: t.contractMonths,
+          siemLimitGbDay: t.siemLimitGbDay,
         };
       }
     }

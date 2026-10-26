@@ -2,19 +2,39 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { navigationData } from '../../data/navigationData';
-import { ChevronDown, Menu, X, Zap } from 'lucide-react';
+import SmartLink from './SmartLink';
+import { ChevronDown, Menu, X, Zap, LogIn } from 'lucide-react';
+
+// Landing CTA helper: sign in with the simulated demo session for a portal
+// key. In real-backend mode (Demo Mode OFF) loginAsDemo authenticates against
+// the backend; if that fails we fall back to the login page pre-focused on
+// that portal instead of dumping the visitor into the admin dashboard.
+function usePortalLogin() {
+  const { loginAsDemo } = useAuth();
+  const navigate = useNavigate();
+  return async (demoKey: string, redirectTo: string) => {
+    const u = await loginAsDemo(demoKey);
+    if (u) navigate(redirectTo);
+    else navigate('/login', { state: { intent: demoKey } });
+  };
+}
+
+const PORTAL_OPTIONS = [
+  { key: 'partner-admin', label: 'Partner portal', desc: 'MSP white-label — clients, licensing, marge', to: '/partner/dashboard' },
+  { key: 'client-admin-enterprise', label: 'Client portal', desc: 'Votre environnement supervisé et vos factures', to: '/client-admin/dashboard' },
+  { key: 'platform-admin', label: 'Platform portal', desc: 'Équipe Infracentra — tenants, audit, ventes', to: '/admin/dashboard' },
+] as const;
 
 export default function Navigation() {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [portalsOpen, setPortalsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const navigate = useNavigate();
-  const { loginAsDemo } = useAuth();
+  const loginPortal = usePortalLogin();
 
   const handleDemoLogin = async (key: string) => {
-    await loginAsDemo(key);
-    if (key === 'platform-admin') navigate('/admin/dashboard');
-    else if (key.includes('client-admin')) navigate('/client-admin/dashboard');
-    else navigate('/dashboard');
+    // Legacy call sites keep their previous behaviour (full-access client admin).
+    await loginPortal(key === 'platform-admin' ? 'platform-admin' : key,
+      key === 'platform-admin' ? '/admin/dashboard' : '/client-admin/dashboard');
   };
 
   return (
@@ -39,13 +59,15 @@ export default function Navigation() {
                 onMouseLeave={() => setActiveDropdown(null)}
               >
                 {item.href ? (
-                  <Link
-                    to={item.href}
+                  // SmartLink: under HashRouter a raw <a href="/pricing"> leaves
+                  // the SPA and reloads the home page (the reported bug). This
+                  // routes through react-router instead.
+                  <SmartLink
+                    href={item.href}
                     className="px-4 py-2 text-sm font-medium rounded-lg transition-colors ic-heading hover:bg-[var(--ic-surface-2)]"
-                    style={{ color: undefined }}
                   >
                     {item.label}
-                  </Link>
+                  </SmartLink>
                 ) : (
                   <button className="px-4 py-2 text-sm font-medium rounded-lg transition-colors ic-heading hover:bg-[var(--ic-surface-2)] flex items-center gap-1">
                     {item.label}
@@ -62,14 +84,13 @@ export default function Navigation() {
                         <ul className="space-y-1">
                           {section.items.map((sub: any, i: number) => (
                             <li key={i}>
-                              <a
+                              <SmartLink
                                 href={sub.href || '#'}
-                                onClick={(e) => { if (!sub.href || sub.href === '#') e.preventDefault(); }}
                                 className="block px-3 py-2 rounded-lg hover:bg-[var(--ic-surface-2)] transition-colors"
                               >
                                 <span className="block text-sm font-medium ic-heading">{sub.label}</span>
                                 {sub.description && <span className="block text-xs ic-muted">{sub.description}</span>}
-                              </a>
+                              </SmartLink>
                             </li>
                           ))}
                         </ul>
@@ -83,12 +104,40 @@ export default function Navigation() {
 
           {/* CTA buttons */}
           <div className="hidden lg:flex items-center gap-3">
-            <button onClick={() => handleDemoLogin('platform-admin')} className="ic-btn-outline px-4 py-2 text-sm">
-              Partner Login
-            </button>
-            <button onClick={() => handleDemoLogin('platform-admin')} className="ic-btn-primary px-4 py-2 text-sm">
+            {/* Portals dropdown — replaces the old "Partner Login" button:
+                choose which portal you are signing in to. */}
+            <div className="relative" onMouseLeave={() => setPortalsOpen(null)}>
+              <button
+                onClick={() => setPortalsOpen(!portalsOpen)}
+                aria-haspopup="menu"
+                aria-expanded={!!portalsOpen}
+                className="ic-btn-outline px-4 py-2 text-sm inline-flex items-center gap-1"
+              >
+                <LogIn className="w-4 h-4" /> Portails de connexion <ChevronDown className="w-4 h-4" />
+              </button>
+              {portalsOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-2 w-72 ic-card p-2 space-y-1 animate-fade-in z-50"
+                  style={{ boxShadow: 'var(--ic-shadow-lg)' }}
+                >
+                  {PORTAL_OPTIONS.map((p) => (
+                    <button
+                      key={p.key}
+                      role="menuitem"
+                      onClick={() => { setPortalsOpen(false); loginPortal(p.key, p.to); }}
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-[var(--ic-surface-2)] transition-colors"
+                    >
+                      <span className="block text-sm font-semibold ic-heading">{p.label}</span>
+                      <span className="block text-xs ic-muted">{p.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <SmartLink href="/demo-request" className="ic-btn-primary px-4 py-2 text-sm inline-block">
               Request Demo
-            </button>
+            </SmartLink>
           </div>
 
           {/* Mobile menu button */}
@@ -105,9 +154,9 @@ export default function Navigation() {
             {navigationData.map((item, idx) => (
               <div key={idx}>
                 {item.href ? (
-                  <Link to={item.href} className="block px-3 py-2 rounded-lg text-sm font-medium ic-heading" onClick={() => setMobileMenuOpen(false)}>
+                  <SmartLink href={item.href} className="block px-3 py-2 rounded-lg text-sm font-medium ic-heading" onClick={() => setMobileMenuOpen(false)}>
                     {item.label}
-                  </Link>
+                  </SmartLink>
                 ) : (
                   <>
                     <button className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium ic-heading" onClick={() => setActiveDropdown(activeDropdown === item.label ? null : item.label)}>
@@ -116,9 +165,9 @@ export default function Navigation() {
                     {activeDropdown === item.label && item.dropdown && (
                       <div className="ml-4 mt-1 space-y-1">
                         {item.dropdown.flatMap((s: any) => s.items).map((sub: any, i: number) => (
-                          <a key={i} href={sub.href || '#'} onClick={(e) => { if (!sub.href || sub.href === '#') e.preventDefault(); setMobileMenuOpen(false); }} className="block px-3 py-1.5 rounded text-sm ic-muted">
+                          <SmartLink key={i} href={sub.href || '#'} className="block px-3 py-1.5 rounded text-sm ic-muted" onClick={() => setMobileMenuOpen(false)}>
                             {sub.label}
-                          </a>
+                          </SmartLink>
                         ))}
                       </div>
                     )}

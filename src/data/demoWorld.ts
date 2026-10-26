@@ -18,17 +18,24 @@ const LS_KEY = 'ic_demo_world_installed';
 
 // ---- Tenants ---------------------------------------------------------------
 // Moroccan clients (real-world references used for the demo only):
-// org 1 = Damanecash      : Pro plan   -> 9 services + Advanced Ticketing
-// org 2 = Valoris System  : Enterprise -> all 16 services + Advanced Ticketing
-// org 3 = Vivalis Salaf   : SME plan   -> 5 services, NO ticketing
-import type { PlanTier, BillingCycle } from '../config/pricing';
+// org 1 = Damanecash      : Pro pack   -> 12 services + Advanced Ticketing
+// org 2 = Valoris System  : Souverain  -> all 17 services + Advanced Ticketing
+// org 3 = Vivalis Salaf   : Starter    -> 5 services, NO ticketing
+import type { PackId } from './pricingConfig';
+
+/** Legacy v1 tier names kept as display aliases on tenant records; V2 ids are lowercase packs. */
+export type PlanTierAlias = 'STARTER' | 'PRO' | 'SOUVERAIN';
+export type BillingCycleAlias = 'MONTHLY' | 'ANNUAL';
 
 /** HQ | SUBSIDIARY | AGENCY — multi-site hierarchy (org_type on the real model). */
 export type DemoOrgType = 'HQ' | 'SUBSIDIARY' | 'AGENCY';
 export interface DemoTenant {
   id: number; name: string; tier: string; ticketing: boolean;
-  // Bundle All-in-One billing (mirror of backend/app/core/pricing.py)
-  planTier: PlanTier; billingCycle: BillingCycle;
+  // Pricing V2 billing (mirror of backend/app/services/pricing_engine.py).
+  // `pack` is the V2 PackId; planTier/billingCycle remain legacy display aliases
+  // (ANNUAL maps to a 12-month contract in the V2 engine).
+  pack: PackId; planTier: PlanTierAlias; billingCycle: BillingCycleAlias;
+  contractMonths: 0 | 12 | 24 | 36;
   endpointCount: number; seatLimit: number; seatsUsed: number;
   siemLimitGbDay: number; siemGbDayUsed: number; country: string;
   // Multi-site structure (Phase 4): headquarter / subsidiary / agency
@@ -36,25 +43,26 @@ export interface DemoTenant {
 }
 export const demoTenants: DemoTenant[] = [
   { id: 1, name: 'Damanecash', tier: 'pro', ticketing: true,
-    planTier: 'PRO', billingCycle: 'MONTHLY',
+    pack: 'pro', planTier: 'PRO', billingCycle: 'MONTHLY', contractMonths: 0,
     endpointCount: 45, seatLimit: 20, seatsUsed: 12,
     siemLimitGbDay: 50, siemGbDayUsed: 31, country: 'ma',
     orgType: 'HQ', parentOrgId: null, location: 'Casablanca (HQ)' },
   { id: 2, name: 'Valoris System', tier: 'enterprise', ticketing: true,
-    planTier: 'PRO', billingCycle: 'ANNUAL',           // BUNDLE PRO annual -> 396 MAD/endpoint
+    pack: 'souverain', planTier: 'SOUVERAIN', billingCycle: 'ANNUAL', contractMonths: 12,
     endpointCount: 100, seatLimit: 20, seatsUsed: 15,
     siemLimitGbDay: 50, siemGbDayUsed: 42, country: 'ma',
     orgType: 'HQ', parentOrgId: null, location: 'Rabat (DC)' },
   { id: 3, name: 'Vivalis Salaf', tier: 'sme', ticketing: false,
-    planTier: 'STARTER', billingCycle: 'MONTHLY',
+    pack: 'starter', planTier: 'STARTER', billingCycle: 'MONTHLY', contractMonths: 0,
     endpointCount: 18, seatLimit: 3, seatsUsed: 2,
     siemLimitGbDay: 10, siemGbDayUsed: 4, country: 'ma',
     orgType: 'SUBSIDIARY', parentOrgId: 1, location: 'Marrakech' },
 ];
-// Atlas Cyber Services (partner MSP, y.elamrani@atlas-cyber.ma) — BUNDLE SOUVERAIN
+// Atlas Cyber Services (partner MSP, y.elamrani@atlas-cyber.ma) — SOUVERAIN wholesale
 export const demoPartnerBilling = {
-  partnerEmail: 'y.elamrani@atlas-cyber.ma', planTier: 'SOUVERAIN' as PlanTier,
-  billingCycle: 'ANNUAL' as BillingCycle, endpointCount: 320, seatLimit: 0, seatsUsed: 41,
+  partnerEmail: 'y.elamrani@atlas-cyber.ma', pack: 'souverain' as PackId,
+  planTier: 'SOUVERAIN' as PlanTierAlias, billingCycle: 'ANNUAL' as BillingCycleAlias,
+  contractMonths: 12 as const, endpointCount: 320, seatLimit: 0, seatsUsed: 41,
   siemLimitGbDay: 150, siemGbDayUsed: 96, country: 'ma',
 };
 

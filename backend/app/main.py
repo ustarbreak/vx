@@ -12,7 +12,6 @@ from app.database import init_db, AsyncSessionLocal
 from app.routers import auth, organizations, users, entitlements, integrations, audit
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
 from app.routers import value as value_router
-from app.routers import pricing
 from app.routers import pricing_v2
 from app.routers import reports as reports_router
 # Phase 4 — Tenant Manager avancé + Partner Program management
@@ -91,7 +90,7 @@ app.include_router(projects.router, prefix="/api")
 app.include_router(value_router.router, prefix="/api")
 app.include_router(reports_router.router, prefix="/api")
 app.include_router(reports_router.meta_router, prefix="/api")
-app.include_router(pricing.router, prefix="/api")
+# Pricing v1 (Bundle All-in-One) DELETED — the single engine is pricing_v2 (§3 of the brief).
 # Pricing v2 — public config/leads/health-checks + sales calculator + partner + upsell
 app.include_router(pricing_v2.v1_router, prefix="/api")
 app.include_router(pricing_v2.router, prefix="/api")
