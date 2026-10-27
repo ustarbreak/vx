@@ -5,6 +5,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
 } from 'recharts';
+import { demoDevices, demoHash } from '../../data/demoWorld';
 
 interface Device {
   id: string;
@@ -33,24 +34,23 @@ export default function DeviceStatistics() {
     // Simulate API call to fetch devices
     const fetchDevices = async () => {
       try {
-        // In production: const response = await fetch('/api/devices');
+        // In production: GET /api/devices — same rows, derived by the backend
+        // collector from discovered_devices (identical hash algorithm).
         await new Promise(resolve => setTimeout(resolve, 500));
-        
+
         // Single source of truth: the coherent demo world (same 24 devices,
         // same hostnames/IPs/status as Network page, Alerts, Tickets, PSA).
-        const { demoDevices } = await import('../../data/demoWorld');
-        const hash = (str: string, mod: number) => { let h = 0; for (const c of str) h = (h * 31 + c.charCodeAt(0)) % mod; return h; };
         const mockDevices: Device[] = demoDevices.map((d, i) => ({
           id: String(i + 1), hostname: d.hostname, ip: d.ip, type: (d.type === 'storage' ? 'server' : d.type) as Device['type'],
           os: d.os, status: d.status === 'degraded' ? 'warning' : d.status,
-          cpu: d.status === 'offline' ? 0 : 15 + hash(d.hostname, 60),
-          memory: d.status === 'offline' ? 0 : 25 + hash(d.hostname + 'm', 55),
-          disk: d.status === 'offline' ? 0 : 20 + hash(d.hostname + 'd', 60),
-          uptime: d.status === 'offline' ? '0d 0h' : `${2 + hash(d.hostname, 90)}d ${hash(d.hostname + 'h', 23)}h`,
+          cpu: d.status === 'offline' ? 0 : 15 + demoHash(d.hostname, 60),
+          memory: d.status === 'offline' ? 0 : 25 + demoHash(d.hostname + 'm', 55),
+          disk: d.status === 'offline' ? 0 : 20 + demoHash(d.hostname + 'd', 60),
+          uptime: d.status === 'offline' ? '0d 0h' : `${2 + demoHash(d.hostname, 90)}d ${demoHash(d.hostname + 'h', 23)}h`,
           location: d.location, lastSeen: d.lastSeenMin === 0 ? 'just now' : `${d.lastSeenMin} min ago`,
           alerts: d.alerts,
         }));
-        
+
         setDevices(mockDevices);
         setLoading(false);
       } catch (error) {
@@ -61,12 +61,14 @@ export default function DeviceStatistics() {
 
     fetchDevices();
 
-    // Simulate real-time updates
+    // Real-time updates — deterministic hash-based jitter (no Math.random):
+    // every viewer sees the same numbers at the same wall-clock slot.
     const interval = setInterval(() => {
+      const slot = Math.floor(Date.now() / 3000);
       setDevices(prev => prev.map(device => ({
         ...device,
-        cpu: device.status === 'offline' ? 0 : Math.max(0, Math.min(100, device.cpu + Math.floor(Math.random() * 10 - 5))),
-        memory: device.status === 'offline' ? 0 : Math.max(0, Math.min(100, device.memory + Math.floor(Math.random() * 8 - 4))),
+        cpu: device.status === 'offline' ? 0 : Math.max(0, Math.min(100, device.cpu + demoHash(`${device.hostname}|cpu|${slot}`, 11) - 5)),
+        memory: device.status === 'offline' ? 0 : Math.max(0, Math.min(100, device.memory + demoHash(`${device.hostname}|mem|${slot}`, 9) - 4)),
       })));
     }, 3000);
 

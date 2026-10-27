@@ -580,6 +580,30 @@ export const settingsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Pack Customizer API — mirrors backend routers/pricing_v2.py
+//   GET   /pricing/config          → live versioned config (packDetails when set)
+//   GET   /pricing/packs           → effective pack composition + diff vs default
+//   PUT   /pricing/packs/{id}      → platform admin edits one pack (steps wizard)
+//   POST  /pricing/packs/reset     → restore the bundled DEFAULT_PACK_DETAILS
+// Served locally in Demo Mode by demoMode.ts (same shapes).
+// ---------------------------------------------------------------------------
+import type { PricingConfigV2, PackCustomizerDef } from '../data/pricingConfig';
+
+export interface PackEffectiveInfo {
+  id: string;
+  configured: boolean;          // false => still the shipped default
+  services: string[]; free_picks: string[];
+  added: string[]; removed: string[];   // diff vs DEFAULT_PACK_DETAILS
+}
+
+export const pricingPacksApi = {
+  config: () => api.get<PricingConfigV2>('/pricing/config'),
+  packs: () => api.get<{ version: string; packs: Record<string, PackCustomizerDef>; effective: Record<string, PackEffectiveInfo> }>('/pricing/packs'),
+  savePack: (id: string, def: PackCustomizerDef) => api.put<any>(`/pricing/packs/${id}`, def),
+  resetPacks: () => api.post<any>('/pricing/packs/reset'),
+};
+
+// ---------------------------------------------------------------------------
 // Demo mode — pushes realistic sample ALERTS through the REAL ingest pipeline
 // (/api/alerts). The backend then does everything for real: correlation,
 // rule matching, notification dispatch and automatic ticket creation. No mock

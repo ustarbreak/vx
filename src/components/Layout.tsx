@@ -13,7 +13,7 @@ import {
   Bell, Search, Menu, Zap, Users, Building2, Network,
   HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
-  Scan, Wrench, Database, Monitor, TrendingUp,
+  Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
   MonitorSmartphone
 } from 'lucide-react';
@@ -203,6 +203,7 @@ export default function Layout() {
     ];
     adminNav = [
       { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
+      { to: '/admin/packs', icon: Package, label: 'Pack Customizer' },
       {
         group: true, icon: Monitor, label: 'Asset Inventory', items: [
           { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },

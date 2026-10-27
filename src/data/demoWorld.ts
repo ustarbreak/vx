@@ -213,6 +213,184 @@ export function computeDemoStats(): DemoWorldStats {
   };
 }
 
+// ---------------------------------------------------------------------------
+// CANONICAL SLICES — every remaining dashboard number in the app is derived
+// from these records (or served by the backend tables seeded with the exact
+// same values). Deterministic only: `demoHash` replaces every Math.random()
+// so demo mode and real mode render identical figures.
+// ---------------------------------------------------------------------------
+
+/** Deterministic string hash (same algorithm used by DeviceStatistics). */
+export function demoHash(str: string, mod: number): number {
+  let h = 0;
+  for (const c of str) h = (h * 31 + c.charCodeAt(0)) % mod;
+  return h;
+}
+
+/** Stable base metric for a device — identical in demo & real mode. */
+export const demoDeviceMetrics = (hostname: string, salt = '') => ({
+  cpu: demoHash(hostname + 'cpu' + salt, 61),          // 0..60
+  memory: 25 + demoHash(hostname + 'mem' + salt, 56), // 25..80
+  disk: 20 + demoHash(hostname + 'dsk' + salt, 61),   // 20..80
+});
+
+// ---- Email security alerts (EmailSecurityPage) ------------------------------
+// Mail gateways are REAL devices of the demo world (firewalls terminate SMTP).
+export interface DemoEmailAlert {
+  id: string; type: 'phishing' | 'malware' | 'spam' | 'spoofing';
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  sender: string; recipient: string; subject: string;
+  timestamp: string; status: 'blocked' | 'quarantined' | 'delivered' | 'investigating';
+  device: string; ticketCreated: boolean; orgId: number;
+}
+export const demoEmailAlerts: DemoEmailAlert[] = [
+  { id: 'EMAIL-0001', type: 'phishing', severity: 'critical', sender: 'compte@damanecash-verification.ma', recipient: 'finance@damanecash.ma', subject: 'Urgent : vérification du compte requise', timestamp: '2026-10-26T09:30:00Z', status: 'blocked', device: 'fw-edge-01', ticketCreated: true, orgId: 1 },
+  { id: 'EMAIL-0002', type: 'malware', severity: 'high', sender: 'facture@valoris-invoicing.net', recipient: 'compta@valorissystem.ma', subject: 'Votre facture #VS-88412 (pièce jointe)', timestamp: '2026-10-26T08:45:00Z', status: 'quarantined', device: 'VLS-FW-EDGE', ticketCreated: false, orgId: 2 },
+  { id: 'EMAIL-0003', type: 'spoofing', severity: 'medium', sender: 'dsi@damanecash.ma (display-name forgé)', recipient: 'n.benali@damanecash.ma', subject: 'Virement urgent avant clôture', timestamp: '2026-10-26T07:20:00Z', status: 'investigating', device: 'fw-edge-01', ticketCreated: true, orgId: 1 },
+  { id: 'EMAIL-0004', type: 'spam', severity: 'low', sender: 'promo@newsletters-ma.com', recipient: 'all@vivalissalaf.ma', subject: 'Offre spéciale juste pour vous !', timestamp: '2026-10-26T06:10:00Z', status: 'blocked', device: 'VVS-FW-01', ticketCreated: false, orgId: 3 },
+];
+
+// ---- Endpoint protection alerts (EndpointProtectionPage) --------------------
+// Every device/IP below exists in demoDevices above.
+export interface DemoEndpointAlert {
+  id: string; type: 'malware' | 'ransomware' | 'exploit' | 'suspicious' | 'fileless';
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  device: string; deviceIp: string; threat: string;
+  action: 'blocked' | 'quarantined' | 'detected' | 'cleaned';
+  timestamp: string; ticketCreated: boolean; details: string; orgId: number;
+}
+export const demoEndpointAlerts: DemoEndpointAlert[] = [
+  { id: 'EDR-0001', type: 'ransomware', severity: 'critical', device: 'nas-backup-01', deviceIp: '10.0.9.10', threat: 'LockBit 4.0 (vssadmin + renames)', action: 'blocked', timestamp: '2026-10-26T09:45:00Z', ticketCreated: true, details: 'Shadow-copy deletion blocked, files restored from snapshot. Linked to ALR-0001 / TCK-01001.', orgId: 1 },
+  { id: 'EDR-0002', type: 'malware', severity: 'high', device: 'web-prod-02', deviceIp: '10.0.6.12', threat: 'Trojan.GenericKD', action: 'quarantined', timestamp: '2026-10-26T08:30:00Z', ticketCreated: false, details: 'Quarantined in /tmp upload handler. Full scan clean.', orgId: 1 },
+  { id: 'EDR-0003', type: 'fileless', severity: 'critical', device: 'FIN-WS-042', deviceIp: '10.0.20.42', threat: 'PowerShell Empire', action: 'blocked', timestamp: '2026-10-26T07:15:00Z', ticketCreated: true, details: 'Fileless attack in memory blocked; correlates with 4.7 GB off-hours egress (ALR-0006 / TCK-01008).', orgId: 1 },
+  { id: 'EDR-0004', type: 'exploit', severity: 'high', device: 'db-primary-01', deviceIp: '10.0.8.5', threat: 'CVE-2026-31337 (OpenSSL RCE)', action: 'detected', timestamp: '2026-10-26T06:05:00Z', ticketCreated: true, details: 'Exploit attempt against unpatched OpenSSL. Ticket TCK-01002 open for emergency patch.', orgId: 1 },
+  { id: 'EDR-0005', type: 'suspicious', severity: 'medium', device: 'DEV-SRV-007', deviceIp: '10.1.4.7', threat: '@utils/auth-helper@2.4.1 (supply-chain)', action: 'quarantined', timestamp: '2026-10-26T05:50:00Z', ticketCreated: true, details: 'Compromised npm beaconing to malicious registry mirror. ALR-0010 / TCK-01010.', orgId: 2 },
+  { id: 'EDR-0006', type: 'malware', severity: 'low', device: 'MKT-WS-018', deviceIp: '10.0.24.18', threat: 'Adware.GenVariant', action: 'cleaned', timestamp: '2026-10-25T22:10:00Z', ticketCreated: false, details: 'Browser extension removed, system rebooted clean.', orgId: 1 },
+];
+
+// ---- Network interfaces (NetworkStatisticsPage) -----------------------------
+// Derived deterministically from demoDevices (hash of hostname) — never random.
+export interface DemoNetInterface {
+  id: string; deviceUid: string; hostname: string; ip: string; type: string;
+  status: 'online' | 'offline' | 'warning'; ifName: string; speedMbps: number;
+  inboundMbps: number; outboundMbps: number; packetsIn: number; packetsOut: number;
+  errors: number; location: string; orgId: number;
+}
+export const demoNetInterfaces: DemoNetInterface[] = demoDevices
+  .filter(d => ['firewall', 'switch', 'router', 'ap', 'server'].includes(d.type))
+  .map((d, i) => {
+    const bw = d.status === 'offline' ? 0 : Math.max(5, Math.round(d.throughputMbps * (0.35 + demoHash(d.hostname, 30) / 100)));
+    return {
+      id: `NI-${String(i + 1).padStart(3, '0')}`, deviceUid: d.id, hostname: d.hostname, ip: d.ip,
+      type: d.type === 'ap' ? 'access-point' : d.type, status: d.status === 'degraded' ? 'warning' as const : d.status,
+      ifName: d.type === 'firewall' || d.type === 'router' ? 'eth0' : d.type === 'switch' ? 'port-channel1' : 'ens1f0',
+      speedMbps: d.throughputMbps, inboundMbps: bw,
+      outboundMbps: d.status === 'offline' ? 0 : Math.max(3, Math.round(bw * (0.4 + demoHash(d.hostname + 'o', 40) / 100))),
+      packetsIn: d.status === 'offline' ? 0 : 40_000 + demoHash(d.hostname + 'pi', 220_000),
+      packetsOut: d.status === 'offline' ? 0 : 30_000 + demoHash(d.hostname + 'po', 180_000),
+      errors: d.status === 'online' ? demoHash(d.hostname + 'e', 3) : d.status === 'degraded' ? 8 + demoHash(d.hostname + 'e', 12) : 0,
+      location: d.location, orgId: d.orgId,
+    };
+  });
+
+// ---- API keys (PlatformClientsPage) — keyed by demo tenant ids 1/2/3 -------
+export interface DemoApiKey {
+  id: string; orgId: number; key: string; label: string;
+  createdAt: string; lastUsed: string; status: 'active' | 'revoked';
+}
+export const demoApiKeys: DemoApiKey[] = [
+  { id: 'AK-0001', orgId: 1, key: 'ic_live_dmnc_8f2a4c6e1b9d3f5a7c0e2b4d', label: 'SIEM webhook (Damanecash)', createdAt: '2026-06-15', lastUsed: '2026-10-26T09:00:00Z', status: 'active' },
+  { id: 'AK-0002', orgId: 1, key: 'ic_test_dmnc_1a2b3c4d5e6f7a8b9c0d1e2f', label: 'Intégration portail client', createdAt: '2026-07-02', lastUsed: '2026-10-25T18:00:00Z', status: 'active' },
+  { id: 'AK-0003', orgId: 2, key: 'ic_live_vsys_3c5c7c9c1c3e5c7c9c1e3c5c', label: 'Pipeline CI/CD sécurisé', createdAt: '2026-09-20', lastUsed: '2026-10-26T07:40:00Z', status: 'active' },
+  { id: 'AK-0004', orgId: 3, key: 'ic_live_vslf_7e9d1f3a5c7e9d1f3a5c7e9d', label: 'Agent backup nas-archive-02', createdAt: '2026-11-01', lastUsed: '2026-10-26T06:30:00Z', status: 'active' },
+  { id: 'AK-0005', orgId: 3, key: 'ic_test_vslf_0b2c4d6e8f0a1b2c3d4e5f6a', label: 'Test migration (révoqué)', createdAt: '2026-08-11', lastUsed: '2026-09-30T12:00:00Z', status: 'revoked' },
+];
+
+// ---- Licenses (PlatformClientsPage) — one per demo tenant ------------------
+export interface DemoLicense {
+  id: string; orgId: number; type: string; pack: PackId; seats: number; endpoints: number;
+  expiresAt: string; status: 'active' | 'expiring' | 'expired';
+}
+export const demoLicenses: DemoLicense[] = demoTenants.map(t => ({
+  id: `LIC-2026-${String(t.id).padStart(3, '0')}`, orgId: t.id,
+  type: `${t.planTier} — ${t.billingCycle === 'ANNUAL' ? 'Annuel' : 'Mensuel'}`,
+  pack: t.pack, seats: t.seatLimit, endpoints: t.endpointCount,
+  expiresAt: t.billingCycle === 'ANNUAL' ? '2027-06-30' : '2026-12-31',
+  status: (t.id === 3 ? 'expiring' : 'active') as DemoLicense['status'],
+}));
+
+// ---- Platform audit seed (PlatformAuditPage / admin.audit-platform) --------
+export interface DemoPlatformAuditSeed { id: number; action: string; detail: string; actor: string; created_at: string }
+export const demoPlatformAudit: DemoPlatformAuditSeed[] = [
+  { id: 1, action: 'organization.created', detail: 'Tenant « Vivalis Salaf » rattaché à Damanecash (SUBSIDIARY, plan STARTER)', actor: 'ops@infracentra.io', created_at: '2026-10-11T08:10:00Z' },
+  { id: 2, action: 'rule.updated', detail: 'RUL-003 activé : backup failed nas-archive-02 → ticket P3', actor: 'it@vivalissalaf.ma', created_at: '2026-10-11T08:22:00Z' },
+  { id: 3, action: 'alert.storm_suppressed', detail: 'fw-edge-01 : 23 tentatives SSH corrélées en 1 alerte ALR-0002', actor: 'system', created_at: '2026-10-26T08:15:00Z' },
+  { id: 4, action: 'ticket.escalated', detail: 'TCK-01001 escaladée P1 (précurseur ransomware nas-backup-01)', actor: 'y.elamrani@damanecash.ma', created_at: '2026-10-26T09:05:00Z' },
+  { id: 5, action: 'playbook.executed', detail: '« Block attacking IP » exécuté sur 45.132.87.10 (edge blocklist 24h)', actor: 'system', created_at: '2026-10-26T08:20:00Z' },
+  { id: 6, action: 'license.viewed', detail: 'Consultation licence LIC-2026-002 (Valoris System, SOUVERAIN annuel)', actor: 'k.chraibi@valorissystem.ma', created_at: '2026-10-25T16:40:00Z' },
+];
+
+// ---- Health statuses (PerformanceStatisticsPage) ----------------------------
+export interface DemoHealthStatus {
+  component: string; status: 'healthy' | 'warning' | 'critical';
+  value: number; threshold: number; message: string; orgId: number;
+}
+const HEALTH_BASE: Record<number, [number, number]> = { 1: [52, 78], 2: [47, 69], 3: [38, 55] }; // [cpu, mem] baselines
+export const demoHealthStatuses: DemoHealthStatus[] = demoTenants.flatMap(t => {
+  const [cpu, mem] = HEALTH_BASE[t.id] ?? [45, 60];
+  const devs = demoDevices.filter(d => d.orgId === t.id);
+  const degraded = devs.filter(d => d.status !== 'online').length;
+  const offline = devs.filter(d => d.status === 'offline').length;
+  const dbHost = devs.find(d => d.type === 'server' && d.hostname.startsWith('db')) ?? devs.find(d => d.type === 'server');
+  const fw = devs.find(d => d.type === 'firewall');
+  const rows: DemoHealthStatus[] = [
+    { component: 'CPU Usage', status: cpu > 75 ? 'warning' : 'healthy', value: cpu, threshold: 80, message: cpu > 75 ? 'High CPU usage detected' : 'Normal operation', orgId: t.id },
+    { component: 'Memory Usage', status: mem > 75 ? 'warning' : 'healthy', value: mem, threshold: 75, message: mem > 75 ? 'High memory usage detected' : 'Normal operation', orgId: t.id },
+    { component: 'Disk I/O', status: 'healthy', value: 45, threshold: 80, message: 'Normal disk activity', orgId: t.id },
+    { component: 'Network Latency', status: fw && fw.status !== 'online' ? 'warning' : 'healthy', value: fw && fw.status !== 'online' ? 58 : 12, threshold: 50, message: fw && fw.status !== 'online' ? 'Edge gateway degraded' : 'Low latency', orgId: t.id },
+    { component: 'Database Connections', status: dbHost && dbHost.alerts > 0 ? 'critical' : 'healthy', value: dbHost && dbHost.alerts > 0 ? 95 : 61, threshold: 90, message: dbHost && dbHost.alerts > 0 ? 'Connection pool nearly exhausted' : 'Within acceptable range', orgId: t.id },
+    { component: 'API Response Time', status: 'healthy', value: 245, threshold: 500, message: 'Within acceptable range', orgId: t.id },
+  ];
+  if (offline > 0) rows.push({ component: 'Monitored Devices', status: 'warning', value: offline, threshold: 0, message: `${offline} device(s) unreachable — ${devs.filter(d => d.status === 'offline').map(d => d.hostname).join(', ')}`, orgId: t.id });
+  else if (degraded > 0) rows.push({ component: 'Monitored Devices', status: 'warning', value: degraded, threshold: 0, message: `${degraded} device(s) degraded`, orgId: t.id });
+  else rows.push({ component: 'Monitored Devices', status: 'healthy', value: 0, threshold: 0, message: 'All monitored devices online', orgId: t.id });
+  return rows;
+});
+
+// ---- Vulnerabilities (feeds vuln pages, tickets, patches) -------------------
+export interface DemoVulnerability {
+  id: string; cve: string; cvss: number; severity: 'critical' | 'high' | 'medium' | 'low';
+  hostname: string; deviceUid: string; orgId: number; port: number | null;
+  status: 'open' | 'patched' | 'mitigated' | 'accepted'; discoveredDaysAgo: number;
+  description: string; patchAvailable: boolean; ticketUid?: string;
+}
+export const demoVulnerabilities: DemoVulnerability[] = [
+  { id: 'VLN-0001', cve: 'CVE-2026-31337', cvss: 9.8, severity: 'critical', hostname: 'db-primary-01', deviceUid: 'db-primary-01', orgId: 1, port: 5432, status: 'open', discoveredDaysAgo: 5, description: 'Unauthenticated OpenSSL RCE on the production database listener.', patchAvailable: true, ticketUid: 'TCK-01002' },
+  { id: 'VLN-0002', cve: 'CVE-2026-29001', cvss: 7.5, severity: 'high', hostname: 'app-node-03', deviceUid: 'app-node-03', orgId: 1, port: 8080, status: 'open', discoveredDaysAgo: 12, description: 'HTTP/2 stream reset flood (DoS) on embedded Jetty.', patchAvailable: true },
+  { id: 'VLN-0003', cve: 'CVE-2025-44011', cvss: 6.5, severity: 'medium', hostname: 'web-prod-02', deviceUid: 'web-prod-02', orgId: 1, port: 443, status: 'mitigated', discoveredDaysAgo: 40, description: 'TLS downgrade via legacy cipher suites; mitigated by config hardening.', patchAvailable: false },
+  { id: 'VLN-0004', cve: 'CVE-2026-30512', cvss: 8.1, severity: 'high', hostname: 'DEV-SRV-007', deviceUid: 'DEV-SRV-007', orgId: 2, port: null, status: 'open', discoveredDaysAgo: 2, description: 'Supply-chain backdoor @utils/auth-helper@2.4.1 in CI image.', patchAvailable: true, ticketUid: 'TCK-01010' },
+  { id: 'VLN-0005', cve: 'CVE-2026-17730', cvss: 5.3, severity: 'medium', hostname: 'BRU-RT-01', deviceUid: 'BRU-RT-01', orgId: 2, port: 22, status: 'open', discoveredDaysAgo: 21, description: 'Information disclosure via VyOS management API.', patchAvailable: true },
+  { id: 'VLN-0006', cve: 'CVE-2024-6387', cvss: 8.1, severity: 'high', hostname: 'nas-archive-02', deviceUid: 'nas-archive-02', orgId: 3, port: 22, status: 'patched', discoveredDaysAgo: 90, description: 'OpenSSH regreSSHion race condition — patched during October window.', patchAvailable: true },
+  { id: 'VLN-0007', cve: 'CVE-2026-22222', cvss: 3.7, severity: 'low', hostname: 'VVS-SRV-01', deviceUid: 'VVS-SRV-01', orgId: 3, port: 445, status: 'accepted', discoveredDaysAgo: 120, description: 'SMB signing disabled on isolated storage VLAN — risk accepted.', patchAvailable: false },
+];
+
+// ---- Compliance controls (ComplianceReports / health scores) ----------------
+export interface DemoComplianceControl {
+  id: string; framework: string; control: string; status: 'pass' | 'fail' | 'partial';
+  evidence: string; hostname: string | null; orgId: number;
+}
+const CC = (framework: string, control: string, orgIds: number[], host: string | null, statuses: Record<number, 'pass' | 'fail' | 'partial'>, evidence: string): DemoComplianceControl[] =>
+  orgIds.map((orgId, i) => ({ id: `CMP-${framework}-${orgId}-${control.split(' ')[0]}`, framework, control, status: statuses[orgId] ?? 'partial', evidence, hostname: host, orgId }));
+const ALL_ORGS = [1, 2, 3];
+export const demoComplianceControls: DemoComplianceControl[] = [
+  ...CC('ISO27001', 'A.12.4 Log monitoring', ALL_ORGS, 'fw-edge-01', { 1: 'pass', 2: 'pass', 3: 'partial' }, 'SIEM ingestion verified on edge gateways (ALR pipeline active).'),
+  ...CC('ISO27001', 'A.18.1 Backup resilience', ALL_ORGS, 'nas-backup-01', { 1: 'pass', 2: 'pass', 3: 'fail' }, 'nas-archive-02 checksum mismatch — see ALR-0005 / TCK-01006.'),
+  ...CC('RGPD', 'Art.32 Encryption at rest', ALL_ORGS, 'db-primary-01', { 1: 'pass', 2: 'pass', 3: 'partial' }, 'TDE enabled on HR-DB-001 / db-primary-01; VVS-SRV-01 pending.'),
+  ...CC('PCI-DSS', 'Req.6.2 Emergency patches', [1, 2], 'db-primary-01', { 1: 'fail', 2: 'partial' }, 'CVE-2026-31337 still open past SLA — ticket TCK-01002 breached.'),
+  ...CC('PCI-DSS', 'Req.11.2 Quarterly scans', ALL_ORGS, null, { 1: 'pass', 2: 'pass', 3: 'pass' }, 'Authenticated vulnerability scans completed Oct 2026 (7 findings tracked).' ),
+  ...CC('DNDD', 'Chiffrement des flux', ALL_ORGS, 'vpn-gw-01', { 1: 'pass', 2: 'pass', 3: 'partial' }, 'Site-to-site tunnels AES-256; VVS-FW-01 pending IKEv2 migration.'),
+];
+
 // ---- Install flag ----------------------------------------------------------
 export function isDemoWorldInstalled(): boolean {
   try { return localStorage.getItem(LS_KEY) === DEMO_WORLD_VERSION; } catch { return false; }
