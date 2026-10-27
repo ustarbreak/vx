@@ -1,5 +1,1 @@
-__pycache__/
-*.pyc
-
-# Pack Customizer persistence (backend)
-backend/data/
+dist/
