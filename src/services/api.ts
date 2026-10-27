@@ -943,3 +943,48 @@ export const attackMapApi = {
     return api.get<AttackMapPayload>(`/security/attack-map${s ? `?${s}` : ''}`);
   },
 };
+
+// ---------------------------------------------------------------------------
+// Organizational Infrastructure Topology — mirrors routers/org_topology.py
+// (GET /api/org-topology). SEPARATE from the worldwide attack map: this is
+// "what does my organization look like and is it healthy?", not attack data.
+// Types match the backend Pydantic schema exactly (TopoNode/OrgTopologyPayload).
+// ---------------------------------------------------------------------------
+export type TopoHealth =
+  | 'healthy' | 'degraded' | 'offline' | 'stale'
+  | 'monitoring_unavailable' | 'unknown';
+
+export interface TopoNode {
+  id: string;                    // "org:<pk>" | "probe:<pk>" | "monitoring:<pk>"
+  kind: 'organization' | 'hq' | 'site' | 'probe';
+  name: string;
+  parent: string | null;         // organizational ownership ONLY (never inferred)
+  org_ref: number;               // owning organization id (authorization anchor)
+  site_status?: string | null;
+  org_type?: string | null;      // HQ | SUBSIDIARY | AGENCY
+  country?: string | null;
+  asset_count?: number | null;
+  health?: TopoHealth | null;    // collector health — real status + timestamps only
+  last_seen?: string | null;
+  agent_version?: string | null;
+  os?: string | null;
+  ip?: string | null;            // internal address — tenant-authorized visibility
+  related_incidents?: number | null; // open alerts for the owning org
+}
+
+export interface TopoEdge { source: string; target: string; type: 'organizational' }
+
+export interface OrgTopologyPayload {
+  nodes: TopoNode[];
+  edges: TopoEdge[];
+  root_org_id: number;
+  hq_configured: boolean;
+  network_topology_available: boolean; // false until device-link data exists
+  note: string;
+  generated_at: string;
+}
+
+export const orgTopologyApi = {
+  get: (opts: { orgId?: number } = {}) =>
+    api.get<OrgTopologyPayload>(`/org-topology${opts.orgId ? `?org_id=${opts.orgId}` : ''}`),
+};

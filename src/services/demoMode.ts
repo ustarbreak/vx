@@ -769,6 +769,79 @@ export const demoStore = {
       } as any) as unknown as T;
     }
 
+    // ---- Organizational Infrastructure Topology — mirrors routers/org_topology.py ----
+    // DEMO-ONLY branch (isDemoMode() gates every call into demoStore.handle()).
+    // Built from the SAME demo world as everything else: demoTenants supplies
+    // the registered org hierarchy (orgType/parentOrgId/location), the probe
+    // fleet mirrors the /agents/probes simulation, and open-alert counts reuse
+    // the alerts array. Honesty rules identical to the backend: sites appear
+    // only when they exist as tenant records; an org with zero probes is
+    // "monitoring_unavailable", never "healthy"; device-to-device network
+    // links are NEVER drawn (network_topology_available stays false).
+    if (root === 'org-topology') {
+      const myOrg = callerOrgId();
+      const rootT = demoTenants.find(t => t.id === (myOrg ?? 1)) ?? demoTenants[0];
+      const children = demoTenants.filter(t => t.parentOrgId === rootT.id);
+      const orgs = [rootT, ...children];
+      const hqConfigured = orgs.some(t => t.orgType === 'HQ');
+      const openByOrg: Record<number, number> = {};
+      for (const a of alerts) {
+        const raw = (a.raw_payload ?? {}) as Record<string, any>;
+        if (raw.resolved || (a.ticket_uid && ['info', 'low'].includes(a.severity))) continue;
+        openByOrg[a.org_id] = (openByOrg[a.org_id] ?? 0) + 1;
+      }
+      const nodes: any[] = [];
+      const edges: any[] = [];
+      nodes.push({
+        id: `org:${rootT.id}`, kind: rootT.orgType === 'HQ' ? 'hq' : 'organization',
+        name: rootT.name, parent: null, org_ref: rootT.id, site_status: 'active',
+        org_type: rootT.orgType, country: rootT.country.toUpperCase(),
+        asset_count: demoDevices.filter(d => d.orgId === rootT.id).length,
+        related_incidents: openByOrg[rootT.id] ?? 0,
+      });
+      for (const c of children) {
+        nodes.push({
+          id: `org:${c.id}`, kind: c.orgType === 'HQ' ? 'hq' : 'site',
+          name: `${c.name} — ${c.location}`, parent: `org:${rootT.id}`, org_ref: c.id,
+          site_status: 'active', org_type: c.orgType, country: c.country.toUpperCase(),
+          asset_count: demoDevices.filter(d => d.orgId === c.id).length,
+          related_incidents: openByOrg[c.id] ?? 0,
+        });
+        edges.push({ source: `org:${rootT.id}`, target: `org:${c.id}`, type: 'organizational' });
+      }
+      for (const o of orgs) {
+        const plist = demoDevices.filter(d => d.orgId === o.id && d.isProbe);
+        if (!plist.length) {
+          nodes.push({ id: `monitoring:${o.id}`, kind: 'probe',
+            name: 'Monitoring unavailable at this site', parent: `org:${o.id}`,
+            org_ref: o.id, health: 'monitoring_unavailable', related_incidents: 0 });
+          edges.push({ source: `org:${o.id}`, target: `monitoring:${o.id}`, type: 'organizational' });
+          continue;
+        }
+        for (const d of plist) {
+          const offline = d.status === 'offline';
+          nodes.push({ id: `probe:${d.id}`, kind: 'probe', name: d.hostname,
+            parent: `org:${o.id}`, org_ref: o.id,
+            health: offline ? 'offline' : d.status === 'degraded' ? 'stale' : 'healthy',
+            last_seen: iso(offline ? 45 : d.lastSeenMin || 1), agent_version: '1.0.0',
+            os: d.os?.toLowerCase().includes('win') ? 'windows' : 'linux', ip: d.ip });
+          edges.push({ source: `org:${o.id}`, target: `probe:${d.id}`, type: 'organizational' });
+        }
+      }
+      const degraded = nodes.filter(n => n.health === 'offline' || n.health === 'stale').length;
+      const noteParts = [
+        'DEMO MODE fixtures — nodes come from the demo tenant registry and probe fleet only.',
+        hqConfigured ? '' : 'Headquarters is not configured for this organization.',
+        degraded ? `${degraded} collector(s) offline or stale — see health badges.` : '',
+        'Device-to-device network topology is unavailable: only organizational ownership links are drawn.',
+      ].filter(Boolean);
+      return delay({
+        nodes, edges, root_org_id: rootT.id, hq_configured: hqConfigured,
+        network_topology_available: false, note: noteParts.join(' '),
+        generated_at: new Date().toISOString(),
+      } as any) as unknown as T;
+    }
+
     // ---- Value Engine (6 money-showing mechanics) — mirrors routers/value.py ----
     // Derived from the SAME demo tickets/alerts arrays so every number on the
     // Overview, ROI report and Proof Pack is synchronized with the rest of the

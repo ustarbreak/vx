@@ -4,6 +4,7 @@ import { useAuth } from '../../../src/context/AuthContext';
 import { Building2, Users, Shield, TrendingUp, CheckCircle2, RefreshCw } from 'lucide-react';
 import ValueEngineSection from '../../components/ValueEngineWidgets';
 import WorldAttackMap from '../../components/WorldAttackMap';
+import OrgTopologyMap from '../../components/OrgTopologyMap';
 import { agentApi, AgentProbeOut } from '../../services/api';
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
 
@@ -102,6 +103,18 @@ export default function ClientAdminDashboardPage() {
           filters={mapWindow(PERIOD_PRESETS[periodIdx].months)}
           onSelectEvent={(e) => nav(`/client-admin/alerts/${e.id}`)}
         />
+      </section>
+
+      {/* Organizational Infrastructure Topology (GET /api/org-topology) —
+          separate, complementary view: "what does my org look like and is it
+          healthy?". Real registered sites + enrolled collectors only; network
+          links are never inferred. Demo fixtures only behind Demo Mode. */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-widest">Organizational infrastructure topology</h2>
+          <span className="text-[11px] text-[var(--ic-muted)]">Registered sites &amp; enrolled collectors · ownership links only · click a node for details</span>
+        </div>
+        <OrgTopologyMap compact />
       </section>
 
       {/* E — Security operations summary with incident drill-down */}
