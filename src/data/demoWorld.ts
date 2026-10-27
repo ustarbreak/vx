@@ -137,21 +137,45 @@ export const demoDevices: DemoDevice[] = [
 
 // ---- Alerts ----------------------------------------------------------------
 // Every alert references a REAL device from demoDevices above.
+/** Approximate geolocation attached to a demo alert — mirrors the optional
+ *  geo block accepted by POST /api/alerts (GeoPoint) and persisted into
+ *  Alert.raw_payload by merge_geo_payload(). lat/lon are city-level
+ *  approximations ONLY (never "the attacker's exact location"). */
+export interface DemoGeoPoint { lat: number; lon: number; country: string; confidence: number }
 export interface DemoAlertSeed {
   uid: string; title: string; severity: 'critical' | 'high' | 'medium' | 'low';
   source: string; hostname: string; orgId: number; minutesAgo: number; correlated: number; description: string;
+  /** Optional geographic context for the Worldwide Attack Map (demo fixtures). */
+  srcGeo?: DemoGeoPoint; dstGeo?: DemoGeoPoint;
+  /** observed = plain telemetry | malicious = classified by a detection engine | confirmed = verified attack. */
+  classification?: 'observed' | 'malicious' | 'confirmed';
 }
+// Demo geo fixtures for the Worldwide Attack Map. Coordinates are city-level
+// APPROXIMATIONS (IP-geolocation style) attached to security-relevant seeds
+// only — telemetry/monitor alerts stay geo-less so the map's "geo-only"
+// filtering behaves exactly like the real backend. These fixtures are used
+// strictly inside the Demo Mode branch of demoStore.handle().
+const G = {
+  moscow:   { lat: 55.75, lon: 37.62, country: 'RU', confidence: 0.7 },
+  beijing:  { lat: 39.9, lon: 116.4, country: 'CN', confidence: 0.72 },
+  lagos:    { lat: 6.52, lon: 3.38, country: 'NG', confidence: 0.6 },
+  amsterdam:{ lat: 52.37, lon: 4.9, country: 'NL', confidence: 0.8 },
+  saopaulo: { lat: -23.55, lon: -46.63, country: 'BR', confidence: 0.65 },
+  casablanca:{ lat: 33.57, lon: -7.59, country: 'MA', confidence: 0.9 },
+  rabat:    { lat: 34.02, lon: -6.84, country: 'MA', confidence: 0.9 },
+  marrakech:{ lat: 31.63, lon: -8.0, country: 'MA', confidence: 0.88 },
+};
 export const demoAlertSeeds: DemoAlertSeed[] = [
-  { uid: 'ALR-0001', title: 'Ransomware precursor: vssadmin + mass renames', severity: 'critical', source: 'wazuh', hostname: 'nas-backup-01', orgId: 1, minutesAgo: 46, correlated: 4, description: 'Shadow copy deletion followed by high-entropy renames on \\\\NAS-01\\finance.' },
-  { uid: 'ALR-0002', title: 'Brute-force SSH attempts from 45.132.87.10', severity: 'high', source: 'wazuh', hostname: 'fw-edge-01', orgId: 1, minutesAgo: 91, correlated: 23, description: '23 failed authentications in 60s against sshd on the DMZ gateway.' },
-  { uid: 'ALR-0003', title: 'Unauthorized privilege escalation attempt', severity: 'critical', source: 'suricata', hostname: 'dc-core-sw-01', orgId: 2, minutesAgo: 150, correlated: 1, description: 'TGP-3 payload observed targeting the management VLAN.' },
+  { uid: 'ALR-0001', title: 'Ransomware precursor: vssadmin + mass renames', severity: 'critical', source: 'wazuh', hostname: 'nas-backup-01', orgId: 1, minutesAgo: 46, correlated: 4, description: 'Shadow copy deletion followed by high-entropy renames on \\\\NAS-01\\finance.', dstGeo: G.casablanca, classification: 'malicious' },
+  { uid: 'ALR-0002', title: 'Brute-force SSH attempts from 45.132.87.10', severity: 'high', source: 'wazuh', hostname: 'fw-edge-01', orgId: 1, minutesAgo: 91, correlated: 23, description: '23 failed authentications in 60s against sshd on the DMZ gateway.', srcGeo: G.moscow, dstGeo: G.casablanca, classification: 'malicious' },
+  { uid: 'ALR-0003', title: 'Unauthorized privilege escalation attempt', severity: 'critical', source: 'suricata', hostname: 'dc-core-sw-01', orgId: 2, minutesAgo: 150, correlated: 1, description: 'TGP-3 payload observed targeting the management VLAN.', srcGeo: G.beijing, dstGeo: G.rabat, classification: 'confirmed' },
   { uid: 'ALR-0004', title: 'CPU sustained above 92% for 15 minutes', severity: 'medium', source: 'monitor', hostname: 'app-node-03', orgId: 1, minutesAgo: 30, correlated: 3, description: 'Load average 12.4 on a 4-vCPU host.' },
   { uid: 'ALR-0005', title: 'Backup job failed with checksum mismatch', severity: 'low', source: 'backup-agent', hostname: 'nas-archive-02', orgId: 3, minutesAgo: 210, correlated: 1, description: 'Nightly snapshot verification failed.' },
-  { uid: 'ALR-0006', title: 'Anomalous outbound traffic 4.7 GB (off-hours)', severity: 'high', source: 'network-dlp', hostname: 'FIN-WS-042', orgId: 1, minutesAgo: 120, correlated: 2, description: 'Unusual egress volume to an external IP during non-business hours.' },
+  { uid: 'ALR-0006', title: 'Anomalous outbound traffic 4.7 GB (off-hours)', severity: 'high', source: 'network-dlp', hostname: 'FIN-WS-042', orgId: 1, minutesAgo: 120, correlated: 2, description: 'Unusual egress volume to an external IP during non-business hours.', srcGeo: G.casablanca, dstGeo: G.lagos, classification: 'observed' },
   { uid: 'ALR-0007', title: 'CVE-2026-31337 unpatched OpenSSL RCE detected', severity: 'critical', source: 'vuln-scanner', hostname: 'db-primary-01', orgId: 1, minutesAgo: 300, correlated: 1, description: 'Authenticated scan found CVSS 9.8 on the production database.' },
   { uid: 'ALR-0008', title: 'TLS certificate expires in 6 days', severity: 'medium', source: 'monitor', hostname: 'web-prod-02', orgId: 1, minutesAgo: 200, correlated: 1, description: 'portal.damanecash.ma certificate expires soon.' },
   { uid: 'ALR-0009', title: 'Access point ap-conf-01 unreachable', severity: 'high', source: 'nms', hostname: 'ap-conf-01', orgId: 1, minutesAgo: 35, correlated: 5, description: 'ICMP/SNMP timeouts since 08:45 — PoE port suspected.' },
-  { uid: 'ALR-0010', title: 'Compromised npm package beaconing detected', severity: 'high', source: 'edr', hostname: 'DEV-SRV-007', orgId: 2, minutesAgo: 65, correlated: 3, description: 'Outbound to known malicious registry mirror from CI runner.' },
+  { uid: 'ALR-0010', title: 'Compromised npm package beaconing detected', severity: 'high', source: 'edr', hostname: 'DEV-SRV-007', orgId: 2, minutesAgo: 65, correlated: 3, description: 'Outbound to known malicious registry mirror from CI runner.', srcGeo: G.rabat, dstGeo: G.amsterdam, classification: 'malicious' },
   { uid: 'ALR-0011', title: 'SD-WAN tunnel flapping BRU↔PAR', severity: 'medium', source: 'sdwan', hostname: 'BRU-RT-01', orgId: 2, minutesAgo: 80, correlated: 9, description: '9 tunnel state changes in 30 min, packet loss 4.2%.' },
   { uid: 'ALR-0012', title: 'VPN concurrent seats at 96% capacity', severity: 'low', source: 'monitor', hostname: 'vpn-gw-01', orgId: 2, minutesAgo: 25, correlated: 1, description: 'Quarter-close peak approaching license limit.' },
 ];

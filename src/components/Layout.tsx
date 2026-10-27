@@ -280,71 +280,117 @@ export default function Layout() {
     ];
     servicesNav = [];
   } else if (user?.role === 'client_admin') {
+    // ---------------------------------------------------------------------------
+    // Client Portal — six logical groups (COMMAND CENTER · PROTECT & MONITOR ·
+    // RESPOND & AUTOMATE · SERVICES & PEOPLE · REPORTS & PROOF · ACCOUNT).
+    // Every entry reuses an existing route; nothing is renamed or duplicated.
+    // Secondary service pages stay reachable through their parent sub-group.
+    // ---------------------------------------------------------------------------
     operationsNav = [
-      { to: '/client-admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-      { to: '/client-admin/alerts', icon: AlertTriangle, label: 'Active Incidents', badge: undefined },
-      { to: '/client-admin/statistics', icon: BarChart3, label: 'Performance Metrics' },
-      { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
-      // Grouped drop-down (hover/click expands): everything incident/statistic related.
       {
-        group: true, icon: Activity, label: 'Incidents & Statistics', items: [
-          { to: '/client-admin/security-history', icon: Shield, label: 'Security History' },
-          { to: '/client-admin/statistics', icon: BarChart3, label: 'Statistics' },
-          { to: '/client-admin/statistics/devices', icon: Monitor, label: 'Devices' },
-          { to: '/client-admin/statistics/network', icon: Network, label: 'Network Statistics' },
-          { to: '/client-admin/statistics/performance', icon: Activity, label: 'System Performance' },
-          { to: '/client-admin/compliance-reports', icon: FileCheck, label: 'Compliance' },
+        group: true, icon: LayoutDashboard, label: 'Command Center', items: [
+          { to: '/client-admin/dashboard', icon: LayoutDashboard, label: 'Overview & Live Proof' },
+          {
+            group: true, icon: AlertTriangle, label: 'Security Incidents', items: [
+              { to: '/client-admin/alerts', icon: AlertTriangle, label: 'Active Incidents' },
+              { to: '/client-admin/security-history', icon: Shield, label: 'Security History' },
+              { to: '/incidents', icon: Target, label: 'Incident Response' },
+            ],
+          },
+          {
+            group: true, icon: BarChart3, label: 'Security Analytics', items: [
+              { to: '/client-admin/statistics', icon: BarChart3, label: 'Performance Metrics' },
+              { to: '/client-admin/statistics/devices', icon: Monitor, label: 'Devices' },
+              { to: '/client-admin/statistics/network', icon: Network, label: 'Network Statistics' },
+              { to: '/client-admin/statistics/performance', icon: Activity, label: 'System Performance' },
+              { to: '/analytics', icon: TrendingUp, label: 'Analytics' },
+            ],
+          },
         ],
       },
-      // "Architecture & Integration" hidden for now — see INTEGRATION-HIDDEN.md
-      // to bring it back online (one line to re-add + one route already exists).
-      { to: '/client-admin/infrastructure', icon: Network, label: 'Infrastructure Map' },
       {
-        group: true, icon: Zap, label: 'Automation', items: [
-          { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
-          { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
-          { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
+        group: true, icon: ShieldCheck, label: 'Protect & Monitor', items: [
+          {
+            group: true, icon: Monitor, label: 'Assets & Infrastructure', items: [
+              { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
+              { to: '/client-admin/infrastructure', icon: Network, label: 'Infrastructure Map' },
+            ],
+          },
+          {
+            group: true, icon: Radar, label: 'Monitoring & Collectors', items: [
+              { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
+              { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
+              { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+              { to: '/network', icon: Wifi, label: 'Network Monitoring' },
+              { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
+            ],
+          },
+          {
+            group: true, icon: Target, label: 'Threat Intelligence', items: [
+              { to: '/threats', icon: Target, label: 'Threat Intel Feed' },
+              { to: '/client-admin/endpoint-protection', icon: Shield, label: 'Endpoint Protection' },
+              { to: '/client-admin/email-security', icon: Mail, label: 'Email Security' },
+              { to: '/client-admin/cloud-security', icon: Cloud, label: 'Cloud Security' },
+              { to: '/client-admin/dns-filtering', icon: Globe, label: 'DNS Filtering' },
+              { to: '/client-admin/firewall-mgmt', icon: Lock, label: 'Firewall Management' },
+              { to: '/client-admin/vpn-gateway', icon: Wifi, label: 'VPN Gateway' },
+              { to: '/client-admin/sd-wan', icon: Network, label: 'SD-WAN' },
+            ],
+          },
+          {
+            group: true, icon: FileCheck, label: 'Compliance & Risk', items: [
+              { to: '/client-admin/compliance-reports', icon: FileCheck, label: 'Compliance Reports' },
+              { to: '/compliance', icon: ShieldCheck, label: 'Compliance Posture' },
+              { to: '/client-admin/vulnerability-scanning', icon: Scan, label: 'Vulnerability Scanning' },
+              { to: '/client-admin/patch-management', icon: Wrench, label: 'Patch Management' },
+              { to: '/client-admin/backup-dr', icon: Database, label: 'Backup & DR' },
+            ],
+          },
         ],
       },
-      { to: '/client-admin/advanced-tickets', icon: Inbox, label: 'Service Desk' },
-      { to: '/projects', icon: FolderKanban, label: 'Projects' },
-      { to: '/reports', icon: FileBarChart2, label: 'Advanced Reporting' },
-    ];
-    adminNav = [
-      { to: '/client-admin/plans', icon: ShieldCheck, label: 'Subscription & Billing' },
       {
-        group: true, icon: Monitor, label: 'Asset Inventory', items: [
-          { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
-          { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
-          { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
-          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+        group: true, icon: Zap, label: 'Respond & Automate', items: [
+          {
+            group: true, icon: Zap, label: 'SOAR Playbooks', items: [
+              { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
+              { to: '/client-admin/soar', icon: Activity, label: 'SOAR Automation' },
+            ],
+          },
+          {
+            group: true, icon: Activity, label: 'Automation & Execution History', items: [
+              { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
+              { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
+            ],
+          },
         ],
       },
-      { to: '/client-admin/technicians', icon: UserCog, label: 'Team & Roles' },
-      { to: '/client-admin/entitlements', icon: Key, label: 'My Services' },
-      { to: '/settings', icon: Settings, label: 'Platform Configuration' },
+      {
+        group: true, icon: Users, label: 'Services & People', items: [
+          { to: '/client-admin/advanced-tickets', icon: Inbox, label: 'Service Desk' },
+          { to: '/client-admin/technicians', icon: UserCog, label: 'Team & Technicians' },
+          {
+            group: true, icon: FolderKanban, label: 'Projects & Service Status', items: [
+              { to: '/projects', icon: FolderKanban, label: 'Project Portfolio' },
+              { to: '/client-admin/entitlements', icon: Key, label: 'My Services' },
+            ],
+          },
+        ],
+      },
+      {
+        group: true, icon: FileBarChart2, label: 'Reports & Proof', items: [
+          { to: '/reports', icon: FileBarChart2, label: 'Advanced Reporting' },
+          { to: '/admin/audit', icon: ClipboardList, label: 'Audit Trail' },
+        ],
+      },
+      {
+        group: true, icon: Settings, label: 'Account', items: [
+          { to: '/client-admin/plans', icon: ShieldCheck, label: 'Subscription & Billing' },
+          { to: '/settings', icon: Settings, label: 'Organization & Settings' },
+        ],
+      },
     ];
-    servicesNav = [
-      // Security Services
-      { to: '/threats', icon: Target, label: 'Threat Intelligence' },
-      { to: '/compliance', icon: FileCheck, label: 'Compliance' },
-      { to: '/incidents', icon: AlertTriangle, label: 'Incident Response' },
-      { to: '/analytics', icon: BarChart3, label: 'Analytics' },
-      { to: '/client-admin/soar', icon: Zap, label: 'SOAR Automation' },
-      { to: '/client-admin/endpoint-protection', icon: Shield, label: 'Endpoint Protection' },
-      { to: '/client-admin/email-security', icon: Mail, label: 'Email Security' },
-      { to: '/client-admin/cloud-security', icon: Cloud, label: 'Cloud Security' },
-      // Network Services
-      { to: '/network', icon: Network, label: 'Network Monitoring' },
-      { to: '/client-admin/dns-filtering', icon: Globe, label: 'DNS Filtering' },
-      { to: '/client-admin/firewall-mgmt', icon: Lock, label: 'Firewall Management' },
-      { to: '/client-admin/vpn-gateway', icon: Wifi, label: 'VPN Gateway' },
-      { to: '/client-admin/sd-wan', icon: Network, label: 'SD-WAN' },
-      // PSA Services
-      { to: '/client-admin/vulnerability-scanning', icon: Scan, label: 'Vulnerability Scanning' },
-      { to: '/client-admin/patch-management', icon: Wrench, label: 'Patch Management' },
-      { to: '/client-admin/backup-dr', icon: Database, label: 'Backup & DR' },
-    ];
+    adminNav = [];
+    servicesNav = [];
   } else {
     // client_user
     operationsNav = [

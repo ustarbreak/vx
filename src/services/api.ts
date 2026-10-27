@@ -886,3 +886,60 @@ export function agentInstallCommands(token: string, serverUrl?: string): { linux
       `& $env:TEMP\\install.ps1"`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Worldwide Attack Map — mirrors backend/app/routers/security_map.py:
+//   GET /api/security/attack-map (tenant-scoped, JWT-authenticated)
+// Only events that actually carry geographic context in Alert.raw_payload are
+// returned; production mode NEVER receives demo fixtures (the demo branch of
+// demoStore.handle() is the sole place demoAlertSeeds geo data is served).
+// Geolocation is approximate — classification separates observed telemetry
+// from malicious-classified and confirmed attacks.
+// ---------------------------------------------------------------------------
+export interface MapPoint {
+  lat: number | null;
+  lon: number | null;
+  country: string | null; // ISO-ish country code, approximate only
+}
+export type AttackClassification = 'observed' | 'malicious' | 'confirmed';
+export interface AttackMapEvent {
+  id: number;
+  uid: string;
+  timestamp: string;
+  event_type: string;       // alert source (wazuh, suricata, siem, api…)
+  title: string;
+  severity: string;         // critical|high|medium|low|info
+  classification: AttackClassification;
+  src: MapPoint | null;
+  dst: MapPoint | null;
+  confidence: number | null; // min(src,dst) geolocation confidence, 0..1
+  count: number;             // correlated/deduplicated events aggregated here
+  resource: string | null;   // affected asset (tenant-scoped)
+}
+export interface AttackMapPayload {
+  events: AttackMapEvent[];
+  total_events: number;
+  last_ingestion_at: string | null; // newest alert in window (geo or not)
+  generated_at: string;
+  note: string;
+}
+export interface AttackMapFilters {
+  start_time?: string;  // ISO
+  end_time?: string;    // ISO
+  severity?: string;    // comma list ok
+  event_type?: string;  // comma list of sources
+  source_country?: string;
+  destination_country?: string;
+  site_id?: number;     // platform_admin only
+}
+
+export const attackMapApi = {
+  get: (filters: AttackMapFilters = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+    });
+    const s = qs.toString();
+    return api.get<AttackMapPayload>(`/security/attack-map${s ? `?${s}` : ''}`);
+  },
+};

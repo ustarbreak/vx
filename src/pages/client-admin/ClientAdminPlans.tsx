@@ -12,8 +12,48 @@ import { quote, billableUnits, type QuoteInputs, type QuoteResult } from '../../
 import { demoTenants } from '../../data/demoWorld';
 import {
   CreditCard, CheckCircle, XCircle, MessageCircle, Send, Bot, Crown,
-  Star, Server, Zap, Calculator, ArrowRight, AlertTriangle,
+  Star, Server, Zap, Calculator, ArrowRight, AlertTriangle, Gauge,
 } from 'lucide-react';
+
+/** Compact "usage vs. entitlement" progress row. Values come ONLY from real
+ *  sources (live invoice / billing fields / plan config) — never fabricated. */
+function UsageBar({ label, used, limit, unit, unavailable }: {
+  label: string; used?: number | null; limit?: number | null; unit: string; unavailable?: boolean;
+}) {
+  const hasData = !unavailable && used != null && limit != null && Number.isFinite(used) && Number.isFinite(limit);
+  if (!hasData) {
+    return (
+      <div className="bg-[var(--ic-surface-2)] rounded-lg p-4 flex items-center justify-between">
+        <span className="text-gray-300 text-sm">{label}</span>
+        <span className="text-gray-500 text-xs italic">Données indisponibles</span>
+      </div>
+    );
+  }
+  const pct = limit! > 0 ? Math.min((used! / limit!) * 100, 100) : (used! > 0 ? 100 : 0);
+  const over = limit! > 0 && used! > limit!;
+  const near = !over && limit! > 0 && used! / limit! >= 0.8;
+  return (
+    <div className="bg-[var(--ic-surface-2)] rounded-lg p-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-gray-300 text-sm">{label}</span>
+        <span className={`text-sm font-semibold ${over ? 'text-red-400' : near ? 'text-amber-400' : 'text-[var(--ic-heading)]'}`}>
+          {(Math.round(used! * 10) / 10).toLocaleString('fr-FR')} / {(Math.round(limit! * 10) / 10).toLocaleString('fr-FR')} {unit}
+        </span>
+      </div>
+      <div className="h-2 bg-[var(--ic-border)] rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${over ? 'bg-red-500' : near ? 'bg-amber-400' : 'bg-cyan-500'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {over && (
+        <p className="mt-2 text-xs text-red-400 flex items-center gap-1">
+          <AlertTriangle className="w-3.5 h-3.5" /> Quota dépassé — contactez votre conseiller pour augmenter la limite.
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface Message { id: string; role: 'user' | 'bot'; content: string; timestamp: Date }
 
@@ -95,6 +135,23 @@ export default function ClientAdminPlans() {
   }), [currentPack, assets, contractMonths, siemGbDayUsed]);
 
   const invoice = serverInvoice ?? localInvoice;
+
+  // ---- usage vs. entitlement ------------------------------------------------
+  // Every number below is derived from an authoritative source: the live
+  // invoice (GET /pricing/invoice, recomputed server-side by pricing_engine),
+  // the tenant billing record, or PRICING_CONFIG_V2 pack definitions.
+  // When a value cannot be determined we render "indisponible" — never a fake zero.
+  const packDef = PRICING_CONFIG_V2.packs[currentPack];
+  // Billable units actually invoiced (server truth when available) vs. the
+  // pack's unit-range entitlement (maxUnits === null → no upper bound).
+  const invoicedUnits = serverInvoice?.totals.units ?? (serverInvoice ? null : invoice.totals.units);
+  const seatLimit = (organization as any)?.seat_limit ?? null;
+  const seatsUsed = (organization as any)?.seats_used ?? organization?.memberCount ?? null;
+  // SIEM entitlement for the current pack: min + per-unit quota over billed units.
+  const siemEntitledGb = packDef.siemQuota.min > 0
+    ? packDef.siemQuota.min + packDef.siemQuota.perUnit * Math.max(0, invoicedUnits ?? units)
+    : null;
+  const backupEntitledGb = packDef.backupQuotaGbPerUnit * Math.max(0, invoicedUnits ?? units);
 
   // Preview what switching pack / contract length would cost (same engine).
   const previewFor = (pack: PackId, months: 0 | 12 | 24 | 36): QuoteResult => quote({
@@ -305,6 +362,56 @@ export default function ClientAdminPlans() {
             </div>
           );
         })}
+      </div>
+
+      {/* Usage vs. Entitlement — live capacity tracking (sources: GET /pricing/invoice,
+          tenant billing record, PRICING_CONFIG_V2 pack definitions). Server-side
+          entitlement enforcement is authoritative; this panel only surfaces it. */}
+      <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <h2 className="text-xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
+            <Gauge className="w-5 h-5 text-cyan-400" /> Utilisation vs. droits du pack {PACK_META[currentPack].name}
+          </h2>
+          <span className="text-xs text-gray-500">
+            Source : {(serverInvoice ? 'facture serveur (GET /pricing/invoice)' : 'calcul local — moteur de facturation V2')}
+            {siemGbDayUsed > 0 ? ' · consommation SIEM : enregistrement de facturation du tenant' : ''}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <UsageBar
+            label="Unités facturées vs. éligibilité du pack"
+            used={invoicedUnits ?? null}
+            limit={packDef.maxUnits ?? null}
+            unit="unités"
+            unavailable={invoicedUnits == null}
+          />
+          <UsageBar
+            label="SIEM Go/jour consommés vs. quota inclus"
+            used={siemGbDayUsed || null}
+            limit={siemEntitledGb ?? ((organization as any)?.siem_limit_gb ?? null)}
+            unit="Go/jour"
+            unavailable={!siemGbDayUsed && siemEntitledGb == null && !(organization as any)?.siem_limit_gb}
+          />
+          <UsageBar
+            label="Sièges techniciens utilisés vs. limite"
+            used={seatsUsed}
+            limit={seatLimit}
+            unit="sièges"
+            unavailable={seatLimit == null}
+          />
+          <UsageBar
+            label="Sauvegarde incluse (quota contractuel)"
+            used={null}
+            limit={backupEntitledGb}
+            unit="Go"
+            unavailable
+          />
+        </div>
+        <p className="mt-3 text-[11px] text-gray-500">
+          Les quotas sont contrôlés côté serveur (moteur de facturation + application des limites d’entitlements) ;
+          ce panneau reflète ces mêmes règles. Une valeur « indisponible » signifie que la source de données ne fournit
+          pas cette mesure — elle n’est jamais inventée ni remplacée par zéro.
+        </p>
       </div>
 
       {/* Billing History */}

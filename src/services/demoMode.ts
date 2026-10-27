@@ -282,12 +282,23 @@ approvalsByUid[tickets[0].uid] = [{
 const ticketsByAlertUid: Record<string, string> = {};
 demoTicketSeeds.forEach(s => { if (s.alertUid) ticketsByAlertUid[s.alertUid] = s.uid; });
 
-const alerts: any[] = demoAlertSeeds.map((s, i) => ({
-  id: i + 1, uid: s.uid, org_id: s.orgId, title: s.title, severity: s.severity, source: s.source,
-  resource: s.hostname, correlated_count: s.correlated, storm_suppressed: s.correlated > 10,
-  acked_by: null, acked_at: null, ticket_uid: ticketsByAlertUid[s.uid] ?? null,
-  created_at: iso(s.minutesAgo), description: s.description,
-}));
+const alerts: any[] = demoAlertSeeds.map((s, i) => {
+  // Geo fixtures mirror the real ingest path (merge_geo_payload): src_geo /
+  // dst_geo / classification live inside raw_payload — used ONLY by the demo
+  // attack-map handler below. Seeds without geo stay geo-less, exactly like
+  // production alerts, so they never appear on the map.
+  const raw: Record<string, any> = {};
+  if (s.srcGeo) raw.src_geo = { lat: s.srcGeo.lat, lon: s.srcGeo.lon, country: s.srcGeo.country, confidence: s.srcGeo.confidence };
+  if (s.dstGeo) raw.dst_geo = { lat: s.dstGeo.lat, lon: s.dstGeo.lon, country: s.dstGeo.country, confidence: s.dstGeo.confidence };
+  if (s.classification) raw.classification = s.classification;
+  return {
+    id: i + 1, uid: s.uid, org_id: s.orgId, title: s.title, severity: s.severity, source: s.source,
+    resource: s.hostname, correlated_count: s.correlated, storm_suppressed: s.correlated > 10,
+    acked_by: null, acked_at: null, ticket_uid: ticketsByAlertUid[s.uid] ?? null,
+    created_at: iso(s.minutesAgo), description: s.description,
+    raw_payload: Object.keys(raw).length ? raw : undefined,
+  };
+});
 alertSeq = demoAlertSeeds.length + 1;
 
 const rules: any[] = [
@@ -458,7 +469,7 @@ export const demoStore = {
     // ---- Alerts / notification rules / notifications ----
     if (root === 'alerts') {
       if (method === 'POST' && parts.length === 1) {
-        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, acked_by: null, acked_at: null, ticket_uid: null, created_at: iso(0) };
+        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, acked_by: null, acked_at: null, ticket_uid: null, created_at: iso(0), raw_payload: b.raw_payload ?? undefined };
         alerts.unshift(a);
         const pipeline: any = { notifications: [] as any[] };
         for (const r of rules.filter(x => x.enabled)) {
@@ -710,6 +721,52 @@ export const demoStore = {
         const st = computeDemoStats();
         return delay({ ok: true, version: DEMO_WORLD_VERSION, engines: ['ticketing', 'notifications', 'playbooks', 'discovery', 'reports', 'partners'], stats: st } as any) as unknown as T;
       }
+    }
+
+    // ---- Worldwide Attack Map — mirrors routers/security_map.py ----------
+    // DEMO-ONLY branch: this code runs exclusively when isDemoMode() is true
+    // (api.ts routes every call through demoStore.handle in that case). In
+    // production the same URL hits the real FastAPI endpoint instead, so demo
+    // fixtures can never leak into the live product. Filtering rules are the
+    // ones of the backend router: geo-only events, severity/event_type/country
+    // filters, tenant scoping via callerOrgId(), honest empty state.
+    if (root === 'security' && parts[1] === 'attack-map') {
+      const org = callerOrgId();
+      let list = org == null ? [...alerts] : alerts.filter(a => a.org_id === org);
+      const startT = query.get('start_time'), endT = query.get('end_time');
+      if (startT) list = list.filter(a => a.created_at >= startT);
+      if (endT) list = list.filter(a => a.created_at < endT);
+      const sevSet = query.get('severity')?.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      const typeSet = query.get('event_type')?.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      const srcC = query.get('source_country')?.toLowerCase();
+      const dstC = query.get('destination_country')?.toLowerCase();
+      const lastIngestion = list.length ? list.map(a => a.created_at).sort()[list.length - 1] : null;
+      const events: any[] = [];
+      for (const a of list) {
+        const raw = (a.raw_payload ?? {}) as Record<string, any>;
+        const src = raw.src_geo ?? null, dst = raw.dst_geo ?? null;
+        if (!src && !dst) continue; // geo-only — same honesty rule as the backend
+        if (sevSet?.length && !sevSet.includes(String(a.severity).toLowerCase())) continue;
+        if (typeSet?.length && !typeSet.includes(String(a.source).toLowerCase())) continue;
+        if (srcC && !(src && String(src.country).toLowerCase() === srcC)) continue;
+        if (dstC && !(dst && String(dst.country).toLowerCase() === dstC)) continue;
+        const confs = [src?.confidence, dst?.confidence].filter((x: any) => typeof x === 'number');
+        const cls = ['observed', 'malicious', 'confirmed'].includes(raw.classification)
+          ? raw.classification : 'observed'; // unverified telemetry is never an "attack"
+        events.push({
+          id: a.id, uid: a.uid, timestamp: a.created_at, event_type: a.source, title: a.title,
+          severity: String(a.severity).toLowerCase(), classification: cls,
+          src: src ? { lat: src.lat, lon: src.lon, country: src.country } : null,
+          dst: dst ? { lat: dst.lat, lon: dst.lon, country: dst.country } : null,
+          confidence: confs.length ? Math.min(...confs) : null,
+          count: Math.max(1, a.correlated_count ?? 1), resource: a.resource,
+        });
+      }
+      return delay({
+        events, total_events: events.reduce((n, e) => n + e.count, 0),
+        last_ingestion_at: lastIngestion, generated_at: new Date().toISOString(),
+        note: "DEMO MODE fixtures — approximate geolocation; 'observed' events are telemetry, not confirmed attacks.",
+      } as any) as unknown as T;
     }
 
     // ---- Value Engine (6 money-showing mechanics) — mirrors routers/value.py ----

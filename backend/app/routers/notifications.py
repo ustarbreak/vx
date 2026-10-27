@@ -49,7 +49,7 @@ async def ingest_alert(
         uid=await nv.next_uid(db, Alert, "ALR"), org_id=org,
         title=body.title, description=body.description or "",
         severity=body.severity, source=body.source, resource=body.resource,
-        raw_payload=body.raw_payload or {}, created_at=now_utc(),
+        raw_payload=nv.merge_geo_payload(body), created_at=now_utc(),
     )
     db.add(alert)
     await db.commit()
