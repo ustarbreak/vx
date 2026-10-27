@@ -710,6 +710,42 @@ def _pack_services_from(details: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[st
 _live_config: Dict[str, Any] = json.loads(json.dumps(PRICING_CONFIG))
 _live_config["packDetails"] = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
 
+# Persistence for the live pack composition (Pack Customizer edits). In-memory
+# state alone is lost on restart/reload; we mirror it to a small JSON file next
+# to the backend so edits survive dev-server restarts. Override the location
+# with env PACK_STORE_PATH (e.g. a mounted volume in Docker/prod).
+_PACK_STORE_PATH = os.environ.get(
+    "PACK_STORE_PATH",
+    str(FsPath(__file__).resolve().parents[2] / "data" / "pack_details.json"),
+)
+
+
+def _persist_pack_details() -> None:
+    try:
+        p = FsPath(_PACK_STORE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(_live_config["packDetails"], ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:  # read-only FS etc. — in-memory state still correct
+        pass
+
+
+def _load_pack_details() -> None:
+    try:
+        raw = FsPath(_PACK_STORE_PATH).read_text(encoding="utf-8")
+        stored = json.loads(raw)
+        if isinstance(stored, dict):
+            merged = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
+            for pid, d in stored.items():
+                if isinstance(d, dict) and isinstance(d.get("services"), list) and isinstance(d.get("freePicks"), list):
+                    base = merged.get(pid) or {}
+                    merged[pid] = {**base, **d, "id": pid}
+            _live_config["packDetails"] = merged
+    except (OSError, ValueError):
+        pass
+
+
+_load_pack_details()
+
 PACK_SERVICES = _pack_services_from(DEFAULT_PACK_DETAILS, PRICING_CONFIG)
 PACK_SERVICES["trial"] = ["dns", "analytics", "threat_intel"]
 NEXT_PACK_MSG = {"starter": "Pro", "pro": "Souverain", "souverain": "Sur mesure"}
@@ -831,6 +867,7 @@ async def update_pack(pack_id: str, body: PackCustomizerIn, db: AsyncSession = D
             if k_dst in (_live_config["packs"].get(pack_id) or {}):
                 _live_config["packs"].setdefault(pack_id, {})[k_dst] = v
     _live_config["packDetails"][pack_id] = merged
+    _persist_pack_details()
     _persist_pack(db, pack_id, merged)
     await db.commit()
     await _audit(db, user, "pricing.pack.updated", "pack", pack_id,
@@ -843,6 +880,7 @@ async def reset_packs(db: AsyncSession = Depends(get_db), user: User = Depends(g
     if user.role != "platform_admin":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform admin only")
     _live_config["packDetails"] = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
+    _persist_pack_details()
     for pid, d in DEFAULT_PACK_DETAILS.items():
         _persist_pack(db, pid, d)
     await db.commit()

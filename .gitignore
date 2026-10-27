@@ -1,5 +1,5 @@
 __pycache__/
 *.pyc
-.env
-.env.local
-.env.*.local
+
+# Pack Customizer persistence (backend)
+backend/data/

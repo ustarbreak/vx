@@ -103,10 +103,40 @@ import { quote } from './pricingEngine';
 import { PRICING_CONFIG_V2, DEFAULT_PACK_DETAILS, fmtMad, type PackId } from '../data/pricingConfig';
 
 /** Live pack composition edited by the platform admin in the Pack Customizer
- *  (/admin/packs). Seeded with the shipped defaults; PUT /pricing/packs/{id}
+ *  (/admin/packs). Seeded from localStorage (key below) so edits survive a
+ *  page refresh / dev-server restart, falling back to the shipped defaults;
+ *  PUT /pricing/packs/{id}
  *  mutates it and GET /pricing/config returns it as `packDetails` — exactly
  *  like the FastAPI backend (pricing_v2.py _live_config). */
-let livePackDetails: Record<string, any> = JSON.parse(JSON.stringify(DEFAULT_PACK_DETAILS));
+const PACK_STORE_KEY = 'infracentra.packCustomizer.v1';
+
+/** Load the last saved pack composition from localStorage (Demo Mode only). */
+function loadStoredPackDetails(): Record<string, any> {
+  const fresh = () => JSON.parse(JSON.stringify(DEFAULT_PACK_DETAILS));
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(PACK_STORE_KEY) : null;
+    if (!raw) return fresh();
+    const parsed = JSON.parse(raw);
+    // Merge onto defaults so new packs/fields added later never disappear.
+    const merged: Record<string, any> = fresh();
+    for (const [pid, def] of Object.entries(parsed as Record<string, any>)) {
+      if (def && Array.isArray(def.services) && Array.isArray(def.freePicks)) {
+        merged[pid] = { ...(merged[pid] ?? {}), ...def, id: pid };
+      }
+    }
+    return merged;
+  } catch {
+    return fresh();
+  }
+}
+
+function persistPackDetails(store: Record<string, any>): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(PACK_STORE_KEY, JSON.stringify(store));
+  } catch { /* storage full/unavailable — in-memory state still correct */ }
+}
+
+let livePackDetails: Record<string, any> = loadStoredPackDetails();
 
 /** Legacy tier name -> V2 pack id. */
 const PACK_FROM_LEGACY: Record<string, PackId> = { STARTER: 'starter', PRO: 'pro', SOUVERAIN: 'souverain' };
@@ -857,12 +887,14 @@ export const demoStore = {
           return Promise.reject(new Error('Pack invalide : services et freePicks requis.')) as unknown as T;
         }
         const prev = livePackDetails[pid] ?? DEFAULT_PACK_DETAILS[pid];
-        livePackDetails[pid] = { ...(prev ?? {} as any), ...def, id: pid };
+        livePackDetails = { ...livePackDetails, [pid]: { ...(prev ?? {} as any), ...def, id: pid } };
+        persistPackDetails(livePackDetails);
         pushPlatformAudit('pricing.pack.updated', `pack « ${pid} » : ${def.services.length + def.freePicks.length} services (${def.services.length} payants, ${def.freePicks.length} inclus)`);
         return delay({ ok: true, pack: livePackDetails[pid] } as any) as unknown as T;
       }
       if (parts[1] === 'packs' && parts[2] === 'reset' && method === 'POST') {
         livePackDetails = JSON.parse(JSON.stringify(DEFAULT_PACK_DETAILS));
+        persistPackDetails(livePackDetails);
         pushPlatformAudit('pricing.packs.reset', 'composition des packs restaurée aux valeurs par défaut');
         return delay({ ok: true, version: PRICING_CONFIG_V2.version } as any) as unknown as T;
       }
