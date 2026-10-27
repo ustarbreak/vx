@@ -1,47 +1,96 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../../src/context/AuthContext';
-import { 
-  Server, Network, Monitor, Printer, Wifi, Shield, 
+import { discoveryApi, type DiscoveredDevice, type DeviceDetailInfo } from '../../services/api';
+import {
+  Server, Network, Monitor, Printer, Wifi, Shield, HardDrive, HelpCircle,
   AlertTriangle, CheckCircle, XCircle, Activity,
-  Map, ZoomIn, ZoomOut, RefreshCw, Settings
+  Map, ZoomIn, ZoomOut, RefreshCw
 } from 'lucide-react';
 
 interface Device {
   id: string;
   hostname: string;
-  type: 'server' | 'switch' | 'router' | 'firewall' | 'endpoint' | 'printer' | 'ap';
+  type: 'server' | 'switch' | 'router' | 'firewall' | 'endpoint' | 'printer' | 'ap' | 'storage' | 'unknown';
   ip: string;
-  status: 'online' | 'offline' | 'warning';
+  status: 'online' | 'offline' | 'warning' | 'unmonitored';
   os?: string;
   location?: string;
   cpu?: number;
   memory?: number;
   uptime?: string;
-  alerts?: number;
+  alerts?: number;        // open incidents — undefined means no alert data (never a fake 0)
+  lastSeen?: string;      // real heartbeat timestamp when monitored
+  snmp_match?: boolean;
+  open_ports?: number[];
+}
+
+const KNOWN_TYPES: Device['type'][] = ['server','switch','router','firewall','endpoint','printer','ap','storage'];
+
+// Identity comes ONLY from persisted DiscoveredDevice rows. Live status is
+// attached afterwards from actual probe/collector records (deviceDetail) —
+// never inferred from mere existence in the inventory.
+function baseDevice(d: DiscoveredDevice): Device {
+  const t = (d.device_type || 'unknown') as Device['type'];
+  return {
+    id: String(d.id),
+    hostname: d.hostname || d.ip,
+    type: KNOWN_TYPES.includes(t) ? t : 'unknown',
+    ip: d.ip,
+    status: 'unmonitored',
+    os: d.os_guess || undefined,
+    location: (d as any).location || undefined,
+    alerts: undefined,
+    snmp_match: !!d.snmp_match,
+    open_ports: d.open_ports || [],
+  };
+}
+
+function enrich(dev: Device, info: DeviceDetailInfo): Device {
+  const status: Device['status'] = !info.monitored ? 'unmonitored'
+    : info.status === 'online' ? 'online'
+    : info.status === 'offline' ? 'offline'
+    : (info.status === 'degraded' || info.status === 'stale') ? 'warning'
+    : 'unmonitored';
+  return { ...dev, status, os: info.os || dev.os, location: info.location || dev.location,
+           lastSeen: info.last_seen || undefined, alerts: info.related_incidents ?? undefined };
 }
 
 export default function ClientAdminDashboard() {
   const { user, organization } = useAuth();
+  const navigate = useNavigate();
   const [view, setView] = useState<'grid' | 'map'>('map');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [zoom, setZoom] = useState(1);
 
-  // Mock devices data
-  const [devices] = useState<Device[]>([
-    { id: '1', hostname: 'router-main', type: 'router', ip: '10.0.10.1', status: 'online', os: 'pfSense', location: 'Datacenter', cpu: 25, memory: 40, uptime: '45d 12h', alerts: 0 },
-    { id: '2', hostname: 'switch-core', type: 'switch', ip: '10.0.10.2', status: 'online', os: 'Cisco IOS', location: 'Datacenter', cpu: 15, memory: 30, uptime: '45d 12h', alerts: 0 },
-    { id: '3', hostname: 'firewall-ext', type: 'firewall', ip: '10.0.10.3', status: 'online', os: 'pfSense', location: 'Datacenter', cpu: 35, memory: 50, uptime: '45d 12h', alerts: 2 },
-    { id: '4', hostname: 'server-web', type: 'server', ip: '10.0.10.10', status: 'online', os: 'Ubuntu 22.04', location: 'Datacenter', cpu: 45, memory: 60, uptime: '30d 8h', alerts: 0 },
-    { id: '5', hostname: 'server-db', type: 'server', ip: '10.0.10.11', status: 'warning', os: 'Ubuntu 22.04', location: 'Datacenter', cpu: 75, memory: 85, uptime: '30d 8h', alerts: 3 },
-    { id: '6', hostname: 'server-app', type: 'server', ip: '10.0.10.12', status: 'online', os: 'Ubuntu 22.04', location: 'Datacenter', cpu: 55, memory: 70, uptime: '30d 8h', alerts: 1 },
-    { id: '7', hostname: 'workstation-01', type: 'endpoint', ip: '10.0.10.20', status: 'online', os: 'Windows 11', location: 'Office', cpu: 30, memory: 45, uptime: '5d 3h', alerts: 0 },
-    { id: '8', hostname: 'workstation-02', type: 'endpoint', ip: '10.0.10.21', status: 'offline', os: 'Windows 11', location: 'Office', cpu: 0, memory: 0, uptime: '0d 0h', alerts: 0 },
-    { id: '9', hostname: 'printer-hr', type: 'printer', ip: '10.0.10.30', status: 'online', os: 'HP LaserJet', location: 'HR Department', cpu: 10, memory: 20, uptime: '15d 6h', alerts: 0 },
-    { id: '10', hostname: 'ap-floor1', type: 'ap', ip: '10.0.10.40', status: 'online', os: 'Ubiquiti', location: 'Floor 1', cpu: 20, memory: 35, uptime: '60d 2h', alerts: 0 },
-    { id: '11', hostname: 'ap-floor2', type: 'ap', ip: '10.0.10.41', status: 'warning', os: 'Ubiquiti', location: 'Floor 2', cpu: 65, memory: 75, uptime: '60d 2h', alerts: 1 },
-    { id: '12', hostname: 'server-backup', type: 'server', ip: '10.0.10.50', status: 'online', os: 'Ubuntu 22.04', location: 'Datacenter', cpu: 40, memory: 55, uptime: '90d 4h', alerts: 0 },
-  ]);
+  // Real inventory: discovery rows + per-device monitoring enrichment.
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<string | null>(null);
 
+  const load = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const rows = await discoveryApi.devices();
+      const list = rows.map(baseDevice);
+      // Enrich with ACTUAL monitoring status where available; a failed or
+      // unmonitored lookup leaves the device honestly "unmonitored".
+      await Promise.all(list.map(async (dv, i) => {
+        try { Object.assign(list[i], enrich(dv, await discoveryApi.deviceDetail(Number(dv.id)))); }
+        catch { /* keep unmonitored */ }
+      }));
+      setDevices(list);
+      setRefreshedAt(new Date().toISOString());
+    } catch (ex: any) {
+      setLoadError(ex?.message || 'Failed to load infrastructure inventory from the backend.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
   const getDeviceIcon = (type: string) => {
     switch (type) {
       case 'server': return Server;
@@ -51,7 +100,8 @@ export default function ClientAdminDashboard() {
       case 'endpoint': return Monitor;
       case 'printer': return Printer;
       case 'ap': return Wifi;
-      default: return Monitor;
+      case 'storage': return HardDrive;
+      default: return HelpCircle;   // unknown type — never pretend it's a monitor
     }
   };
 
@@ -60,7 +110,7 @@ export default function ClientAdminDashboard() {
       case 'online': return 'text-green-500';
       case 'offline': return 'text-red-500';
       case 'warning': return 'text-yellow-500';
-      default: return 'text-gray-500';
+      default: return 'text-gray-400';  // unmonitored = gray, NOT green
     }
   };
 
@@ -69,6 +119,7 @@ export default function ClientAdminDashboard() {
     online: devices.filter(d => d.status === 'online').length,
     offline: devices.filter(d => d.status === 'offline').length,
     warning: devices.filter(d => d.status === 'warning').length,
+    unmonitored: devices.filter(d => d.status === 'unmonitored').length,
   };
 
   return (
@@ -78,7 +129,8 @@ export default function ClientAdminDashboard() {
         <div>
           <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Infrastructure Dashboard</h1>
           <p className="text-gray-400 mt-1">
-            {organization?.name} - Real-time monitoring
+            {organization?.name} — inventory &amp; monitoring status from actual backend records
+            {refreshedAt && <span className="ml-2 text-gray-500">· refreshed {new Date(refreshedAt).toLocaleTimeString()}</span>}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -89,14 +141,38 @@ export default function ClientAdminDashboard() {
             <Map className="w-4 h-4" />
             {view === 'grid' ? 'Map View' : 'Grid View'}
           </button>
-          <button className="p-2 bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] rounded-lg text-[var(--ic-heading)]">
-            <RefreshCw className="w-5 h-5" />
-          </button>
-          <button className="p-2 bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] rounded-lg text-[var(--ic-heading)]">
-            <Settings className="w-5 h-5" />
+          <button onClick={() => load()} title="Reload inventory from the backend"
+            className="p-2 bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] rounded-lg text-[var(--ic-heading)]">
+            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+          <XCircle className="w-5 h-5 text-red-400 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-red-300 font-semibold">Could not load the infrastructure inventory</p>
+            <p className="text-red-400/80 text-sm mt-1">{loadError}</p>
+          </div>
+          <button onClick={() => load()} className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm">Retry</button>
+        </div>
+      )}
+
+      {!loadError && !loading && devices.length === 0 && (
+        <div className="bg-[var(--ic-surface)] border border-dashed border-[var(--ic-border)] rounded-xl p-10 text-center">
+          <Activity className="w-10 h-10 text-gray-500 mx-auto mb-3" />
+          <p className="text-[var(--ic-heading)] font-semibold">No devices registered yet</p>
+          <p className="text-gray-400 text-sm mt-2 max-w-md mx-auto">
+            This map shows only hosts that exist in your actual discovery/monitoring records.
+            Run an Auto Discovery scan to populate it — nothing is simulated here.
+          </p>
+          <button onClick={() => navigate('/client-admin/monitored-devices')}
+            className="mt-4 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium">
+            Open Auto Discovery
+          </button>
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -165,34 +241,10 @@ export default function ClientAdminDashboard() {
               className="relative w-full h-full"
               style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
             >
-              {/* Network Topology Visualization */}
-              <svg className="absolute inset-0 w-full h-full" style={{ pointerEvents: 'none' }}>
-                {/* Connection lines */}
-                {devices.map((device, idx) => {
-                  if (idx === 0) return null;
-                  const parentIdx = Math.floor((idx - 1) / 2);
-                  const parent = devices[parentIdx];
-                  if (!parent) return null;
-                  
-                  const x1 = 100 + (parentIdx % 4) * 200;
-                  const y1 = 100 + Math.floor(parentIdx / 4) * 150;
-                  const x2 = 100 + (idx % 4) * 200;
-                  const y2 = 100 + Math.floor(idx / 4) * 150;
-                  
-                  return (
-                    <line
-                      key={idx}
-                      x1={x1}
-                      y1={y1}
-                      x2={x2}
-                      y2={y2}
-                      stroke="#475569"
-                      strokeWidth="2"
-                      strokeDasharray="5,5"
-                    />
-                  );
-                })}
-              </svg>
+              {/* No physical/logical network links are drawn: no relationship table
+                  exists in the backend, and connections are NEVER inferred from
+                  inventory order or shared subnets. Organizational hierarchy lives
+                  in the Dashboard topology (orgTopologyApi). */}
 
               {/* Devices */}
               <div className="relative grid grid-cols-4 gap-8">
@@ -206,9 +258,10 @@ export default function ClientAdminDashboard() {
                     >
                       <div className="flex items-center justify-between mb-2">
                         <Icon className={`w-8 h-8 ${getStatusColor(device.status)}`} />
-                        <div className={`w-3 h-3 rounded-full ${
+                        <div title={device.status === 'unmonitored' ? 'No collector/probe reports for this host' : device.status} className={`w-3 h-3 rounded-full ${
                           device.status === 'online' ? 'bg-green-500' :
-                          device.status === 'offline' ? 'bg-red-500' : 'bg-yellow-500'
+                          device.status === 'offline' ? 'bg-red-500' :
+                          device.status === 'warning' ? 'bg-yellow-500' : 'bg-gray-500'
                         } animate-pulse`} />
                       </div>
                       <p className="text-[var(--ic-heading)] font-semibold text-sm truncate">{device.hostname}</p>
@@ -263,18 +316,21 @@ export default function ClientAdminDashboard() {
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           device.status === 'online' ? 'bg-green-500/20 text-green-400' :
                           device.status === 'offline' ? 'bg-red-500/20 text-red-400' :
-                          'bg-yellow-500/20 text-yellow-400'
+                          device.status === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
+                          'bg-gray-500/20 text-gray-400'
                         }`}>
                           {device.status}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-gray-300">{device.cpu || 0}%</td>
-                      <td className="py-3 px-4 text-gray-300">{device.memory || 0}%</td>
+                      <td className="py-3 px-4 text-gray-500" title="No resource-metric feed wired for this view">{device.cpu !== undefined ? device.cpu + '%' : '\u2014'}</td>
+                      <td className="py-3 px-4 text-gray-500" title="No resource-metric feed wired for this view">{device.memory !== undefined ? device.memory + '%' : '\u2014'}</td>
                       <td className="py-3 px-4">
-                        {device.alerts && device.alerts > 0 ? (
+                        {device.alerts !== undefined && device.alerts > 0 ? (
                           <span className="text-red-400 font-semibold">{device.alerts}</span>
-                        ) : (
+                        ) : device.alerts === 0 ? (
                           <span className="text-gray-500">0</span>
+                        ) : (
+                          <span className="text-gray-600" title="Unmonitored host or no alert correlation data">no data</span>
                         )}
                       </td>
                     </tr>
@@ -324,9 +380,16 @@ export default function ClientAdminDashboard() {
                 <p className="text-[var(--ic-heading)] text-lg">{selectedDevice.location || 'N/A'}</p>
               </div>
               <div className="bg-[var(--ic-surface)] rounded-lg p-4">
-                <p className="text-gray-400 text-sm">Uptime</p>
-                <p className="text-[var(--ic-heading)] text-lg">{selectedDevice.uptime || 'N/A'}</p>
+                <p className="text-gray-400 text-sm">Last heartbeat</p>
+                <p className="text-[var(--ic-heading)] text-lg">
+                  {selectedDevice.lastSeen ? new Date(selectedDevice.lastSeen).toLocaleString() : 'No collector data'}
+                </p>
               </div>
+              {selectedDevice.status === 'unmonitored' && (
+                <div className="col-span-2 bg-gray-500/10 border border-gray-500/30 rounded-lg p-3 text-sm text-gray-400">
+                  This host exists in the discovery inventory but no probe/collector reports on it — health cannot be shown and is never assumed.
+                </div>
+              )}
             </div>
 
             {selectedDevice.cpu !== undefined && selectedDevice.memory !== undefined && (
@@ -365,12 +428,16 @@ export default function ClientAdminDashboard() {
             )}
 
             <div className="mt-6 flex gap-3">
-              <button className="flex-1 bg-blue-600 hover:bg-blue-700 text-[var(--ic-heading)] py-2 rounded-lg font-medium">
-                View Details
+              {/* Real drill-down: monitored devices view, focused on this host. */}
+              <button onClick={() => navigate(`/client-admin/monitored-devices?q=${encodeURIComponent(selectedDevice.hostname || selectedDevice.ip)}`)}
+                className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white py-2 rounded-lg font-medium">
+                View in Monitored Devices
               </button>
-              <button className="flex-1 bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)] py-2 rounded-lg font-medium">
-                Edit Device
-              </button>
+              {/* No device-edit endpoint exists — do not offer a fake action. */}
+              <a href="/client-admin/asset-inventory"
+                className="flex-1 text-center bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)] py-2 rounded-lg font-medium">
+                Asset Inventory
+              </a>
             </div>
           </div>
         </div>

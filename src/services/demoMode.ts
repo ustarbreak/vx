@@ -576,14 +576,51 @@ export const demoStore = {
         const s = { id: scanSeq++, org_id: b.org_id ?? 1, network_cidr: b.network_cidr ?? '10.0.0.0/24', status: 'completed', credential_ids: b.credential_ids ?? [], total_hosts: 254, discovered: 18, snmp_matched: 6, started_at: iso(1), finished_at: iso(0), created_by: 'demo@infracentra.io', created_at: iso(1) };
         scans.unshift(s);
         for (let i = 1; i <= 8; i++) {
-          discoveredDevices.push({ id: devSeq++, scan_id: s.id, org_id: s.org_id, ip: `10.0.0.${i * 7}`, mac: `aa:bb:cc:00:${String(i).padStart(2, '0')}:ff`, hostname: `demo-host-${i}`, os_guess: i % 3 === 0 ? 'Linux 6.x' : 'Windows Server 2022', device_type: i % 2 ? 'server' : 'network', open_ports: [22, 443].slice(0, (i % 2) + 1), snmp_match: i % 2 === 0, sys_desc: 'Demo simulated device', imported: false, created_at: iso(0) });
+          discoveredDevices.push({ id: devSeq++, scan_id: s.id, org_id: s.org_id, ip: `10.0.0.${i * 7}`, mac: `aa:bb:cc:00:${String(i).padStart(2, '0')}:ff`, hostname: `demo-host-${i}`, os_guess: i % 3 === 0 ? 'Linux 6.x' : 'Windows Server 2022', device_type: i % 2 ? 'server' : 'network', open_ports: [22, 443].slice(0, (i % 2) + 1), snmp_match: i % 2 === 0, sys_desc: 'Demo simulated device', imported: false, verified: i % 2 === 0, source: 'discovery' as const, last_seen: iso(0), created_at: iso(0) });
         }
         return delay(s as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'cancel') {
+        const sc = scans.find(x => x.id === Number(parts[1]));
+        if (!sc) throw new Error('Scan not found');
+        if (!['queued', 'running'].includes(sc.status)) throw new Error(`Scan already ${sc.status} — nothing to cancel`);
+        sc.status = 'cancelled'; sc.finished_at = iso(0);
+        return delay({ ...sc } as any) as unknown as T;
       }
       if (method === 'GET' && parts[2] === 'devices') return delay(discoveredDevices.filter(d => d.scan_id === Number(parts[1])) as any) as unknown as T;
       if (method === 'GET') return delay(scans.find(s => s.id === Number(parts[1])) as any) as unknown as T;
     }
     if (root === 'devices') {
+      if (method === 'GET' && parts.length === 2) {
+        // Device detail — mirrors backend GET /discovery/devices/{id}.
+        // Live status attaches ONLY from the matching demo probe/collector row;
+        // unmonitored hosts honestly report monitoring_unavailable.
+        const d = discoveredDevices.find(x => x.id === Number(parts[1]));
+        if (!d) throw new Error('Device not found');
+        // Monitoring match ONLY against the simulated probe fleet (same rule as
+        // GET /agents/probes: first ⌈n/3⌉ tenant devices run an agent).
+        const orgDev = demoDevices.filter(x => x.orgId === d.org_id);
+        const fleetSize = Math.max(2, Math.ceil(orgDev.length / 3));
+        const hostnames = new Set(orgDev.slice(0, fleetSize).map(x => x.hostname));
+        const dd = demoDevices.find(x => x.hostname === d.hostname && x.orgId === d.org_id);
+        const inFleet = !!dd && hostnames.has(dd.hostname);
+        const probe = inFleet && dd ? {
+          status: dd.status === 'offline' ? 'offline' : 'online',
+          last_seen: iso(dd.lastSeenMin || 1), os: dd.os,
+        } : null;
+        const openInc = alerts.filter(a => a.org_id === d.org_id && !a.acked_by &&
+          ((d.hostname && (a.resource || '').toLowerCase().includes(String(d.hostname).toLowerCase())) ||
+           (d.ip && (a.resource || '').includes(d.ip)))).length;
+        return delay({
+          id: d.id, monitored: !!probe, monitor_source: probe ? 'probe' : null,
+          status: probe ? probe.status : 'monitoring_unavailable',
+          last_seen: probe ? probe.last_seen : null,
+          os: probe ? (probe.os || d.os_guess) : d.os_guess,
+          hostname: d.hostname, ip: d.ip, mac: d.mac, device_type: d.device_type,
+          snmp_match: !!d.snmp_match, open_ports: d.open_ports || [],
+          location: d.location ?? null, related_incidents: openInc, org_id: d.org_id,
+        } as any) as unknown as T;
+      }
       if (method === 'GET') return delay(discoveredDevices as any) as unknown as T;
       if (method === 'POST' && parts[2] === 'import') { const d = discoveredDevices.find(x => x.id === Number(parts[1])); if (d) d.imported = true; return delay(d as any) as unknown as T; }
     }

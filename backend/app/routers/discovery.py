@@ -6,6 +6,7 @@ tenant's SNMP credentials are flagged `snmp_match` and emit an event into the
 Notification Engine (which can auto-create a ticket via rules).
 """
 import ipaddress
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,8 +14,10 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user
+from sqlalchemy import or_
 from app.models import (
     User, SnmpCredential, DiscoveryScan, DiscoveredDevice, Organization,
+    AgentProbe, Alert,
 )
 from app.schemas import (
     SnmpCredentialCreate, SnmpCredentialResponse, ScanCreate, ScanResponse,
@@ -94,14 +97,28 @@ async def list_scans(current_user: User = Depends(get_current_user),
     return (await db.execute(stmt)).scalars().all()
 
 
+MAX_SCAN_HOSTS = 1024   # engine cap (services.discovery.cidr_hosts) — scans stay bounded
+
+
 @router.post("/scans", response_model=ScanResponse, status_code=status.HTTP_202_ACCEPTED)
 async def start_scan(body: ScanCreate, current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
     org = _scope_org(current_user, body.org_id)
     try:
-        ipaddress.ip_network(body.network_cidr, strict=False)
+        net = ipaddress.ip_network(body.network_cidr, strict=False)
     except ValueError:
         raise HTTPException(422, "Invalid CIDR (e.g. 192.168.1.0/24)")
+    # Optional explicit mask override — never allows a LARGER scope than the
+    # requested CIDR, and never below /22 (keeps scans bounded).
+    if body.prefix is not None:
+        if body.prefix < net.prefixlen:
+            raise HTTPException(422, "prefix override cannot widen the scan beyond the requested CIDR")
+        if body.prefix < 22:
+            raise HTTPException(422, "prefix must be >= /22 — unbounded scans are not permitted")
+        net = ipaddress.ip_network(f"{net.network_address}/{body.prefix}", strict=False)
+    hosts = cidr_hosts(str(net))
+    if len(hosts) > MAX_SCAN_HOSTS:
+        raise HTTPException(422, f"Scan too large ({len(hosts)} hosts, max {MAX_SCAN_HOSTS}) — use a smaller CIDR")
     creds = (await db.execute(
         select(SnmpCredential).where(SnmpCredential.org_id == org)
     )).scalars().all()
@@ -110,15 +127,34 @@ async def start_scan(body: ScanCreate, current_user: User = Depends(get_current_
         if not set(body.credential_ids).issubset(valid):
             raise HTTPException(422, "Unknown credential id for this tenant")
     scan = DiscoveryScan(
-        org_id=org, network_cidr=body.network_cidr,
+        org_id=org, network_cidr=str(net),
         credential_ids=body.credential_ids or [c.id for c in creds],
-        status="queued", total_hosts=len(cidr_hosts(body.network_cidr)),
+        status="queued", total_hosts=len(hosts),
         created_by=current_user.email,
     )
     db.add(scan)
     await db.commit()
     await db.refresh(scan)
     schedule_scan(scan.id)  # fire-and-forget background nmap pass
+    return scan
+
+
+@router.post("/scans/{scan_id}/cancel", response_model=ScanResponse)
+async def cancel_scan(scan_id: int, current_user: User = Depends(get_current_user),
+                      db: AsyncSession = Depends(get_db)):
+    """Cancel a queued/running scan. The background executor re-checks status
+    before persisting results; a cancelled scan is never resurrected."""
+    scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
+    if not scan:
+        raise HTTPException(404, "Scan not found")
+    if current_user.role != "platform_admin" and scan.org_id != current_user.org_id:
+        raise HTTPException(403, "Cross-tenant access denied")
+    if scan.status not in ("queued", "running"):
+        raise HTTPException(409, f"Scan already {scan.status} — nothing to cancel")
+    scan.status = "cancelled"
+    scan.finished_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(scan)
     return scan
 
 
@@ -158,6 +194,85 @@ async def all_devices(current_user: User = Depends(get_current_user),
     if snmp_only:
         stmt = stmt.where(DiscoveredDevice.snmp_match.is_(True))
     return (await db.execute(stmt)).scalars().all()
+
+
+@router.get("/devices/{device_id}")
+async def device_detail(device_id: int, current_user: User = Depends(get_current_user),
+                        db: AsyncSession = Depends(get_db)):
+    """Device detail for the Infrastructure Map / DeviceDetails pages.
+
+    Honesty rules (mirrors routers/org_topology.py):
+      * Identity fields come from the persisted DiscoveredDevice row only.
+      * Live status/heartbeat attach ONLY when an actual AgentProbe matches the
+        host (ip or hostname) — never inferred, never defaulted to "online".
+      * related_incidents counts OPEN alerts whose resource references this
+        device; null means "no alert data", not zero problems elsewhere.
+    """
+    dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
+    if not dev:
+        raise HTTPException(404, "Device not found")
+    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
+        raise HTTPException(403, "Cross-tenant access denied")
+
+    # --- real monitoring match: probe by IP first, then by hostname ---------
+    probe = None
+    probes = (await db.execute(
+        select(AgentProbe).where(AgentProbe.org_id == dev.org_id)
+    )).scalars().all()
+    for p in probes:
+        if dev.ip and p.ip == dev.ip:
+            probe = p
+            break
+    if probe is None and dev.hostname:
+        for p in probes:
+            if p.hostname and p.hostname.lower() == dev.hostname.lower():
+                probe = p
+                break
+
+    monitored = probe is not None
+    status_val = None
+    last_seen = None
+    os_val = dev.os_guess
+    if monitored:
+        status_val = probe.status or "unknown"
+        last_seen = probe.last_seen.isoformat() if probe.last_seen else None
+        os_val = probe.os or dev.os_guess
+
+    # --- open incidents referencing this device (resource = hostname/IP) -----
+    inc_stmt = select(Alert).where(
+        Alert.org_id == dev.org_id,
+        Alert.acked_by.is_(None),          # unacknowledged ≈ still open
+    )
+    res_terms = [c for c in (dev.hostname, dev.ip) if c]
+    if res_terms:
+        conds = []
+        for term in res_terms:
+            like = f"%{term}%"
+            conds.append(Alert.resource.like(like))
+        inc_stmt = inc_stmt.where(or_(*conds))
+        related_incidents = len((await db.execute(inc_stmt.limit(500))).scalars().all())
+    else:
+        related_incidents = None  # no identity to correlate against — honest null
+
+    org = (await db.execute(select(Organization).where(Organization.id == dev.org_id))).scalars().first()
+
+    return {
+        "id": dev.id,
+        "monitored": monitored,
+        "monitor_source": "probe" if monitored else None,
+        "status": status_val if monitored else "monitoring_unavailable",
+        "last_seen": last_seen,
+        "os": os_val,
+        "hostname": dev.hostname,
+        "ip": dev.ip,
+        "mac": dev.mac,
+        "device_type": dev.device_type,
+        "snmp_match": bool(dev.snmp_match),
+        "open_ports": dev.open_ports or [],
+        "location": getattr(org, "city", None) or getattr(org, "country", None),
+        "related_incidents": related_incidents,
+        "org_id": dev.org_id,
+    }
 
 
 @router.post("/devices/{device_id}/import")

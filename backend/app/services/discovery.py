@@ -147,6 +147,9 @@ async def execute_scan(scan_id: int) -> None:
         scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
         if not scan:
             return
+        if scan.status == "cancelled":
+            # User cancelled between queueing and execution — never resurrect.
+            return
         scan.status = "running"
         scan.started_at = now_utc()
         hosts = cidr_hosts(scan.network_cidr)

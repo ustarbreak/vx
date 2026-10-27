@@ -494,7 +494,7 @@ export interface ScanRow {
   id: number;
   org_id: number;
   network_cidr: string;
-  status: string;
+  status: string;              // queued | running | completed | failed | cancelled
   credential_ids: number[];
   total_hosts: number;
   discovered: number;
@@ -518,7 +518,29 @@ export interface DiscoveredDevice {
   snmp_match: boolean;
   sys_desc?: string | null;
   imported: boolean;
+  verified?: boolean | null;   // SNMP-verified identity (server-derived)
+  source?: 'discovery' | 'manual'; // provenance — never inferred client-side
+  last_seen?: string | null;   // real observation timestamp, null = unknown
   created_at: string;
+}
+
+// Optional live-monitoring enrichment for a discovered device. The backend
+// attaches these ONLY when the host matches an actual probe / collector row —
+// they are never inferred. Absent fields mean "not monitored", not "down".
+export interface DeviceDetailInfo {
+  monitored: boolean;
+  monitor_source: 'probe' | 'collector' | null;
+  status: string | null;            // online | offline | degraded | stale | unknown
+  last_seen: string | null;         // real timestamp from the matching record
+  os: string | null;
+  hostname: string | null;
+  ip: string;
+  mac: string | null;
+  device_type: string | null;
+  snmp_match: boolean;
+  open_ports: number[];
+  location: string | null;          // site label when registered; null = unconfigured
+  related_incidents: number | null; // open alerts referencing this resource/IP
 }
 
 export const discoveryApi = {
@@ -529,9 +551,11 @@ export const discoveryApi = {
   scans: () => api.get<ScanRow[]>('/scans'),
   startScan: (network_cidr: string, credential_ids: number[], org_id?: number) =>
     api.post<ScanRow>('/scans', { network_cidr, credential_ids, org_id }),
+  cancelScan: (id: number) => api.post<ScanRow>(`/scans/${id}/cancel`),
   scanStatus: (id: number) => api.get<ScanRow>(`/scans/${id}`),
   scanDevices: (id: number) => api.get<DiscoveredDevice[]>(`/scans/${id}/devices`),
   devices: () => api.get<DiscoveredDevice[]>('/devices'),
+  deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
 };

@@ -321,7 +321,7 @@ export default function OrgTopologyMap({ compact = false }: { compact?: boolean 
             </dl>
             <div className="mt-3 space-y-1.5">
               {selectedNode.kind === 'probe' && /^\d+$/.test(selectedNode.id.split(':')[1]) && (
-                <button onClick={() => nav(`/client-admin/monitored-devices?probe=${selectedNode.id.split(':')[1]}`)}
+                <button onClick={() => nav(`/client-admin/monitored-devices?q=${encodeURIComponent(selectedNode.name || '')}`)}
                   className="w-full text-[11px] px-2 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20">Open device / collector view</button>
               )}
               {selectedNode.kind !== 'probe' && (selectedNode.related_incidents ?? 0) > 0 && (

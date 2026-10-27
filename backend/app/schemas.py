@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 from typing import Optional, List
 from datetime import datetime
 
@@ -500,6 +500,9 @@ class SnmpCredentialResponse(SnmpCredentialCreate):
 
 class ScanCreate(BaseModel):
     network_cidr: str                    # e.g. 192.168.1.0/24
+    prefix: Optional[int] = Field(None, ge=8, le=32,
+        description="Optional explicit mask override; must be >= /22 to keep "
+                    "scans bounded (never larger than the engine's 1024-host cap).")
     credential_ids: List[int] = []
     org_id: Optional[int] = None
 
@@ -536,6 +539,24 @@ class DiscoveredDeviceResponse(BaseModel):
     sys_desc: Optional[str]
     imported: bool
     created_at: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def verified(self) -> Optional[bool]:
+        """Server-derived provenance: identity confirmed by a stored-credential SNMP walk."""
+        return bool(self.snmp_match)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def source(self) -> str:
+        """This table only stores scanner findings; manually configured assets live in the CMDB."""
+        return "discovery"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def last_seen(self) -> Optional[datetime]:
+        """Real observation timestamp of this finding - never synthesized."""
+        return self.created_at
 
     class Config:
         from_attributes = True
