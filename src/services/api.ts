@@ -116,7 +116,16 @@ export function downloadText(filename: string, text: string, mime = 'text/csv;ch
 // Demo Mode OFF → real FastAPI backend through the Vite dev proxy.
 // ---------------------------------------------------------------------------
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (isDemoMode()) return demoStore.handle<T>(options.method ?? 'GET', path, options.body);
+  if (isDemoMode()) {
+    // Demo errors carry `demoStatus`; rethrow as ApiError so pages can react
+    // to 403/409/422 exactly like they would against the real backend.
+    try {
+      return await demoStore.handle<T>(options.method ?? 'GET', path, options.body);
+    } catch (e: any) {
+      if (e && typeof e.demoStatus === 'number') throw new ApiError(e.demoStatus, e.message);
+      throw e;
+    }
+  }
   return realRequest<T>(path, options);
 }
 

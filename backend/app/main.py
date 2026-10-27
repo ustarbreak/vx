@@ -12,6 +12,8 @@ from app.database import init_db, AsyncSessionLocal
 from app.routers import auth, organizations, users, entitlements, integrations, audit
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
 from app.routers import security_map, org_topology
+from app.routers import incidents as incidents_router
+from app.routers import soar as soar_router
 from app.routers import value as value_router
 from app.routers import pricing_v2
 from app.routers import reports as reports_router
@@ -86,7 +88,13 @@ app.include_router(security_map.router, prefix="/api")
 app.include_router(org_topology.router, prefix="/api")
 app.include_router(discovery.router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+# Legacy in-memory playbooks router is superseded by the SOAR v2 API below.
+# It stays mounted (same URL shape) only for backward compatibility and now
+# requires authentication — see app/routers/settings.py.
 app.include_router(router_playbooks, prefix="/api")
+# Incident Response + SOAR Workflows (real backend for those two pages)
+app.include_router(incidents_router.router, prefix="/api")
+app.include_router(soar_router.router, prefix="/api")
 app.include_router(threat_intel.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")

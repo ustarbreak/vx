@@ -319,6 +319,350 @@ const playbooks: any[] = demoPlaybookSeeds.map((p, i) => ({
   id: i + 1, ...p, steps: p.steps.map(s => ({ ...s, params: {} })),
 }));
 
+// ===========================================================================
+// SOAR v2 mirror (backend/app/routers/soar.py) — used ONLY in Demo Mode.
+// Same allow-list, modes and honesty rules as app/services/soar.py: preview
+// never runs anything, simulate marks steps 'skipped', execute reports REAL
+// outcomes — block_ip/isolate_host honestly FAIL because no firewall/EDR
+// connector exists here, exactly like the backend does without connectors.
+// ===========================================================================
+const SOAR_SAFE_ACTIONS: Record<string, boolean> = {
+  wait: false, notify: false, create_ticket: false, add_evidence: false,
+  snmp_query: false, snapshot: false, block_ip: true, isolate_host: true,
+};
+const soarPlaybooks: any[] = demoPlaybookSeeds.map((p, i) => ({
+  id: i + 1,
+  uid: `PBK-${String(i + 1).padStart(6, '0')}`,
+  org_id: null, // platform-shared demo playbooks
+  name: p.name, description: p.description ?? '', category: p.category ?? 'Incident Response',
+  steps: (p.steps ?? []).map((s: any) => ({ name: s.name, action: s.action, params: {} })),
+  triggers: [{ type: 'manual' }], enabled: p.enabled !== false,
+  created_by: 'demo@infracentra.io', created_at: iso(9000), updated_at: null,
+}));
+let soarPbSeq = soarPlaybooks.length + 1;
+const soarRuns: any[] = [];
+let soarRunSeq = 1;
+
+const soarHasConsequential = (steps: any[]) =>
+  (steps ?? []).some((s: any) => SOAR_SAFE_ACTIONS[s.action] === true);
+
+const soarRedact = (v: any): any => {
+  const keyRe = /(passphrase|password|secret|token|community|key)/i;
+  const kvRe = /((?:passphrase|password|secret|token|community|api[_-]?key)\s*[=:]\s*)(\S+)/gi;
+  if (Array.isArray(v)) return v.map(soarRedact);
+  if (typeof v === 'string') return v.replace(kvRe, '$1***REDACTED***');
+  if (v && typeof v === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = keyRe.test(k) ? '***REDACTED***' : soarRedact(val);
+    return out;
+  }
+  return v;
+};
+
+const soarPbOut = (p: any) => ({
+  ...p,
+  consequential: soarHasConsequential(p.steps),
+  action_summary: [...new Set((p.steps ?? []).map((s: any) => s.action))].sort(),
+});
+
+const soarRunOut = (r: any, includeLog = true) => {
+  const { idempotency_key, ...rest } = r;   // internal dedup token never leaks
+  if (!includeLog) delete rest.result_log;
+  return rest;
+};
+
+/** Simulated step outcome — mirrors _run_step() semantics of the real engine. */
+const soarStepOutcome = (action: string, params: any, executing: boolean, run: any): [string, string] => {
+  if (!executing) return ['skipped', `[simulate] would ${action}: ${JSON.stringify(soarRedact(params ?? {}))}`];
+  switch (action) {
+    case 'wait': return ['completed', 'Waited (simulated timer)'];
+    case 'notify': return ['completed', `Notification queued on channel '${params?.channel ?? 'in_app'}'`];
+    case 'create_ticket': {
+      const t = mkTicket({ title: `[SOAR] ${params?.title ?? run.uid}`, description: `Created by playbook run ${run.uid}`, priority: params?.priority ?? 'p3', source: 'api', created_at: iso(0), updated_at: iso(0) });
+      tickets.unshift(t);
+      return ['completed', `Ticket ${t.uid} created via ticketing engine`];
+    }
+    case 'add_evidence': {
+      const inc = incidents.find(x => x.uid === run.incident_uid);
+      const tuid = inc?.ticket_uid;
+      if (!tuid) return ['failed', 'add_evidence requires an incident linked to a ticket'];
+      pushEvidence(tuid, params?.name ?? 'soar-snapshot.txt', 'report', 64);
+      return ['completed', `Evidence stored in ticket vault ${tuid}`];
+    }
+    case 'snapshot': return ['completed', `Snapshot request recorded for target ${JSON.stringify(soarRedact(params?.target ?? ''))}`];
+    case 'snmp_query': return ['failed', 'snmp_query requires a discovery credential context; use the Discovery service directly'];
+    case 'block_ip':
+    case 'isolate_host':
+      return ['failed', 'No firewall/EDR connector configured — action was NOT executed (recorded honestly as failure, not success)'];
+    default: return ['failed', `Unknown action '${action}'`];
+  }
+};
+
+/** Execute one SOAR step in the demo mirror — mirrors _run_step() semantics. */
+const soarExecSteps = (run: any, steps: any[], executing: boolean): { log: any[]; completed: number; failed: number; skipped: number } => {
+  const log: any[] = [];
+  let completed = 0, failed = 0, skipped = 0;
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const [st, detail] = soarStepOutcome(s.action, s.params, executing, run);
+    log.push({ step: i + 1, name: s.name, action: s.action, status: st, detail });
+    if (st === 'completed') completed += 1;
+    else if (st === 'failed') {
+      failed += 1;
+      // fail-fast: remaining steps honestly marked skipped (same as backend)
+      for (let j = i + 1; j < steps.length; j++) {
+        log.push({ step: j + 1, name: steps[j].name, action: steps[j].action,
+                   status: 'skipped', detail: 'Skipped after previous step failed' });
+        skipped += 1;
+      }
+      break;
+    } else skipped += 1;
+  }
+  return { log, completed, failed, skipped };
+};
+
+const soarFinalStatus = (completed: number, failed: number) =>
+  failed ? (completed ? 'partial' : 'failed') : 'completed';
+
+/** Record a real execution against the incident ledger (mirrors router logic). */
+const soarLinkIncidentRun = (run: any, pbName: string) => {
+  const inc = incidents.find(x => x.uid === run.incident_uid);
+  if (!inc) return;
+  const map: Record<string, string> = { completed: 'completed', failed: 'failed', partial: 'failed', cancelled: 'cancelled' };
+  (incActionsByUid[inc.uid] ??= []).push({
+    id: actSeq++, incident_uid: inc.uid, action_type: 'run_playbook',
+    status: map[run.status] ?? 'failed',
+    detail: `Playbook '${pbName}' run ${run.uid}: ${run.completed_steps}/${run.total_steps} steps completed`,
+    performed_by: run.triggered_by, playbook_run_uid: run.uid, created_at: new Date().toISOString(),
+  });
+  incPushActivity(inc.uid, run.triggered_by, 'playbook_run',
+    `Executed playbook '${pbName}' (${run.uid}) → ${run.status}`);
+};
+
+// ===========================================================================
+// Incident Response mirror (backend/app/routers/incidents.py) — Demo Mode only.
+// Same lifecycle state machine, dedup guarantees and immutable activity trail
+// as app/services/incidents.py so the UI behaves identically vs the real API.
+// ===========================================================================
+const INCIDENT_STATUSES_DEMO = ['open', 'investigating', 'contained', 'resolved', 'closed'];
+const INC_TRANSITIONS: Record<string, string[]> = {
+  open: ['investigating', 'contained'],
+  investigating: ['contained', 'resolved'],
+  contained: ['resolved', 'investigating'],
+  resolved: ['closed', 'investigating'],
+  closed: [],
+};
+let incSeq = 1;
+const incActivityByUid: Record<string, any[]> = {};
+const incNotesByUid: Record<string, any[]> = {};
+const incEvidenceByUid: Record<string, any[]> = {};
+const incActionsByUid: Record<string, any[]> = {};
+let noteSeq = 1; let evSeq = 1; let actSeq = 1; let aActSeq = 1;
+
+const incPushActivity = (uid: string, actor: string, action: string, detail: string,
+                         from_value: string | null = null, to_value: string | null = null) => {
+  (incActivityByUid[uid] ??= []).push({
+    id: aActSeq++, incident_uid: uid, actor, action, detail,
+    from_value, to_value, created_at: new Date().toISOString(),
+  });
+};
+
+const mkIncident = (t: Partial<any> & { title: string }) => ({
+  uid: `INC-${String(incSeq++).padStart(6, '0')}`,
+  org_id: callerOrgIdSafe() ?? 1,
+  site_org_id: null,
+  title: t.title,
+  description: '',
+  severity: 'medium',
+  status: 'open',
+  reporter: 'demo@infracentra.io',
+  assignee: null,
+  acknowledged_by: null,
+  acknowledged_at: null,
+  ticket_uid: null,
+  affected_assets: [] as string[],
+  ioc_related: [] as string[],
+  tags: [] as string[],
+  category: 'other',
+  alert_uid: null,
+  resolved_at: null,
+  closed_at: null,
+  created_at: iso(60),
+  updated_at: iso(60),
+  ...t,
+});
+
+// tenant-safe accessor usable before handle() (seeds are materialised eagerly)
+function callerOrgIdSafe(): number | null {
+  try {
+    const s = JSON.parse(localStorage.getItem('ic_demo_session') ?? '{}');
+    if (s.role === 'platform_admin') return null;
+    const m = /^org-dw-(\d+)$/.exec(String(s.orgId ?? ''));
+    return m ? Number(m[1]) : 1;
+  } catch { return 1; }
+}
+
+const incHasRole = (roles: string[]) => {
+  const r = demoSession().role ?? 'client_user';
+  return roles.includes(r);
+};
+
+/** Row shape served by GET /api/incidents (mirrors _inc_out of the backend). */
+const incRowOut = (i: any) => ({ ...i });
+
+/** Detail shape served by GET /api/incidents/{uid} (mirrors get_incident). */
+const incDetailOut = (i: any) => {
+  const alert = i.alert_uid ? alerts.find(a => a.uid === i.alert_uid) : null;
+  const ticket = i.ticket_uid ? tickets.find(t => t.uid === i.ticket_uid) : null;
+  const org = orgs.find(o => o.id === i.org_id);
+  const site = i.site_org_id ? orgs.find(o => o.id === i.site_org_id) : null;
+  return {
+    ...i,
+    alert: alert ? { uid: alert.uid, severity: alert.severity, source: alert.source,
+                     resource: alert.resource, correlated_count: alert.correlated_count ?? null,
+                     created_at: alert.created_at } : null,
+    ticket: ticket ? { uid: ticket.uid, status: ticket.status, priority: ticket.priority,
+                       assignee: ticket.assignee ?? null, due_resolve_at: ticket.due_resolve_at ?? null } : null,
+    organization: org ? { id: org.id, name: org.name } : null,
+    site: site ? { id: site.id, name: site.name, org_type: (site as any).org_type ?? null } : null,
+    notes: (incNotesByUid[i.uid] ?? []).slice().sort((a, z) => a.id - z.id),
+    activity: (incActivityByUid[i.uid] ?? []).slice().sort((a, z) => z.id - a.id),
+    evidence: (incEvidenceByUid[i.uid] ?? []).slice(),
+    actions: (incActionsByUid[i.uid] ?? []).slice(),
+    playbook_runs: soarRuns.filter(r => r.incident_uid === i.uid).slice().reverse().slice(0, 10)
+      .map(r => ({ uid: r.uid, mode: r.mode, status: r.status, triggered_by: r.triggered_by,
+                   started_at: r.started_at, finished_at: r.finished_at })),
+  };
+};
+
+const incFindOr404 = (uid: string) => {
+  const scope = callerOrgIdSafe();
+  const inc = incidents.find(x => x.uid === uid && (scope === null || x.org_id === scope));
+  if (!inc) throw httpErr(404, `Incident ${uid} not found`);
+  return inc;
+};
+
+const incTouch = (inc: any) => { inc.updated_at = new Date().toISOString(); };
+
+const incDedupKeyDemo = (org_id: number, title: string, asset?: string | null) =>
+  `${org_id}|${String(title).trim().toLowerCase()}|${(asset ?? '').toLowerCase()}`;
+
+const incEnrichFromTicket = (out: any) => {
+  if (!out?.ticket_uid) return out;
+  const t = tickets.find(x => x.uid === out.ticket_uid);
+  if (t) out.ticket = { uid: t.uid, status: t.status, priority: t.priority,
+                        assignee: t.assignee ?? null, due_resolve_at: t.due_resolve_at ?? null };
+  return out;
+};
+
+const incCreateDemo = (b: any) => {
+  const scope = callerOrgIdSafe();
+  const targetOrg = b.org_id != null && scope === null ? Number(b.org_id) : (scope ?? 1);
+  if (b.alert_uid) {
+    const al = alerts.find(a => a.uid === b.alert_uid);
+    if (!al) throw httpErr(404, 'Alert not found');
+    if (scope !== null && al.org_id !== scope) throw httpErr(403, 'Cross-tenant access denied');
+    const existing = incidents.find(x => x.alert_uid === al.uid && x.status !== 'closed');
+    if (existing) {   // dedup guarantee: update the existing record, never duplicate
+      incPushActivity(existing.uid, demoSession().email ?? 'demo@infracentra.io', 'alert_linked',
+        `Additional alert ${al.uid} correlated`);
+      incTouch(existing);
+      return delay({ reused: true, incident: incRowOut(existing) }) as any;
+    }
+    const inc = mkIncident({ title: b.title || al.title, description: b.description ?? al.description ?? '',
+      severity: b.severity ?? al.severity, org_id: al.org_id, alert_uid: al.uid,
+      ticket_uid: al.ticket_uid ?? null, affected_assets: al.resource ? [al.resource] : [],
+      category: b.category ?? 'other', site_org_id: b.site_org_id ?? null, assignee: b.assignee ?? null,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    incidents.push(inc);
+    incPushActivity(inc.uid, demoSession().email ?? 'demo@infracentra.io', 'created', `Opened from alert ${al.uid}`);
+    return delay({ reused: false, incident: incRowOut(inc) }) as any;
+  }
+  const key = incDedupKeyDemo(targetOrg, b.title ?? '', b.affected_assets?.[0]);
+  const dup = incidents.find(x => x.dedup_key === key && x.status !== 'closed');
+  if (dup) {
+    const e: any = new Error(`A non-closed incident with the same title/asset already exists (${dup.uid}). Update it instead of creating a duplicate.`);
+    e.demoStatus = 409; e.duplicate_uid = dup.uid;
+    throw e;
+  }
+  const inc = mkIncident({ ...b, org_id: targetOrg, dedup_key: key, reporter: demoSession().email ?? 'demo@infracentra.io',
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+  incidents.push(inc);
+  incPushActivity(inc.uid, inc.reporter, 'created', 'Manually opened');
+  return delay({ reused: false, incident: incRowOut(inc) }) as any;
+};
+
+const incListDemo = (query: URLSearchParams) => {
+  const scope = callerOrgIdSafe();
+  let list = incidents.filter(i => scope === null || i.org_id === scope);
+  const statusF = query.get('status'), sevF = query.get('severity');
+  if (statusF) {
+    if (!INCIDENT_STATUSES_DEMO.includes(statusF)) throw httpErr(422, `Unknown status '${statusF}'`);
+    list = list.filter(i => i.status === statusF);
+  }
+  if (sevF) {
+    if (!['critical', 'high', 'medium', 'low', 'info'].includes(sevF)) throw httpErr(422, `Unknown severity '${sevF}'`);
+    list = list.filter(i => i.severity === sevF);
+  }
+  if (query.get('assignee')) list = list.filter(i => i.assignee === query.get('assignee'));
+  if (query.get('category')) list = list.filter(i => i.category === query.get('category'));
+  if (query.get('org_id')) list = list.filter(i => String(i.org_id) === query.get('org_id'));
+  const q = (query.get('q') ?? '').toLowerCase();
+  if (q) list = list.filter(i =>
+    String(i.title).toLowerCase().includes(q) || String(i.description ?? '').toLowerCase().includes(q) ||
+    String(i.uid).toLowerCase().includes(q) || (i.affected_assets ?? []).some((a: string) => String(a).toLowerCase().includes(q)));
+  const sort = query.get('sort') ?? 'created_at';
+  const order = query.get('order') ?? 'desc';
+  const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+  const dir = order === 'desc' ? -1 : 1;
+  list = [...list].sort((a, z) => {
+    let cmp = 0;
+    if (sort === 'severity') cmp = (sevRank[a.severity] ?? 4) - (sevRank[z.severity] ?? 4);
+    else cmp = String(a[sort] ?? '').localeCompare(String(z[sort] ?? ''));
+    if (sort === 'created_at' || sort === 'updated_at') cmp = String(a[sort] ?? '').localeCompare(String(z[sort] ?? ''));
+    return cmp * dir || z.uid.localeCompare(a.uid);
+  });
+  const page = Math.max(1, Number(query.get('page') ?? 1));
+  const pageSize = Math.min(200, Math.max(1, Number(query.get('page_size') ?? 25)));
+  const statusCounts: Record<string, number> = {};
+  INCIDENT_STATUSES_DEMO.forEach(s => { statusCounts[s] = incidents.filter(i => scope === null || i.org_id === scope).filter(i => i.status === s).length; });
+  return delay({ items: list.slice((page - 1) * pageSize, page * pageSize).map(incRowOut),
+                 total: list.length, page, page_size: pageSize, status_counts: statusCounts }) as any;
+};
+
+// Seed incidents derived from the Demo World critical/high alerts so the IR
+// board is non-empty and every relationship (alert → incident → ticket) is
+// consistent with the same dataset the SIEM/ticket pages show.
+const incidents: any[] = [];
+demoAlertSeeds
+  .filter(a => ['critical', 'high'].includes(a.severity))
+  .slice(0, 8)
+  .forEach((a, idx) => {
+    const tuid = ticketsByAlertUid[a.uid] ?? null;
+    const status = idx === 0 ? 'investigating' : idx % 4 === 0 ? 'contained' : idx % 3 === 0 ? 'resolved' : 'open';
+    const inc = mkIncident({
+      title: a.title, description: a.description ?? '', severity: a.severity,
+      status, org_id: a.orgId, alert_uid: a.uid, ticket_uid: tuid,
+      affected_assets: a.hostname ? [a.hostname] : [],
+      category: /ransom|malware/i.test(a.title) ? 'malware' : /phish/i.test(a.title) ? 'phishing' : /brute|privilege|unauthorized/i.test(a.title) ? 'intrusion' : 'other',
+      assignee: idx % 3 === 1 ? demoTechnicians.find(t0 => t0.orgId === a.orgId)?.email ?? null : null,
+      acknowledged_by: idx % 2 === 0 ? 'demo@infracentra.io' : null,
+      acknowledged_at: idx % 2 === 0 ? iso(a.minutesAgo - 1) : null,
+      created_at: iso(a.minutesAgo), updated_at: iso(Math.max(0, a.minutesAgo - 5)),
+      resolved_at: ['resolved', 'closed'].includes(status) ? iso(Math.max(0, a.minutesAgo - 30)) : null,
+    });
+    incidents.push(inc);
+    incPushActivity(inc.uid, 'alert-engine', 'created', `Auto-opened from SIEM alert ${a.uid}`);
+    if (inc.assignee) incPushActivity(inc.uid, 'dispatcher', 'assigned', 'Ownership assigned', null, inc.assignee);
+    if (inc.acknowledged_by) incPushActivity(inc.uid, inc.acknowledged_by, 'acked', 'Acknowledged');
+    if (status !== 'open') incPushActivity(inc.uid, 'analyst', 'status_changed', `Status moved open → ${status}`, 'open', status);
+    (incNotesByUid[inc.uid] ??= []).push({
+      id: noteSeq++, incident_uid: inc.uid, author: inc.assignee ?? 'soc-bot',
+      content: 'Initial triage: correlated signals reviewed against threat intel; no client-facing impact observed yet.',
+      internal: true, created_at: iso(Math.max(0, a.minutesAgo - 2)),
+    });
+  });
+
 // -- discovery / settings -------------------------------------------------------
 const snmpCredentials: any[] = [
   { id: 1, name: 'Edge switches v2c', version: '2c', community: 'public-ro', username: null, auth_protocol: null, auth_passphrase: null, priv_protocol: null, priv_passphrase: null, port: 161, org_id: null, created_at: iso(20000) },
@@ -561,6 +905,292 @@ export const demoStore = {
         const pb = playbooks[idx];
         const log = (pb?.steps ?? []).map((s, i) => ({ step: i + 1, name: s.name, action: s.action, status: 'success', detail: 'Simulated execution (demo mode)' }));
         return delay({ ok: true, log } as any) as unknown as T;
+      }
+    }
+
+    // ---- Incident Response (mirrors backend routers/incidents.py) ----
+    if (root === 'incidents') {
+      const uid = parts[1];
+      if (method === 'GET' && !uid) return incListDemo(query) as unknown as T;
+      if (method === 'POST' && !uid) {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Only administrators can open incidents');
+        return incCreateDemo(b) as unknown as T;
+      }
+      if (!uid) throw httpErr(404, 'Demo: unknown incidents route');
+      if (method === 'GET' && parts.length === 2) return delay(incDetailOut(incFindOr404(uid))) as unknown as T;
+      if (method === 'PUT' && parts[2] === 'status') {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        const next = b.status;
+        if (!INCIDENT_STATUSES_DEMO.includes(next)) throw httpErr(422, `Unknown status '${next}'`);
+        if (inc.status === next) return delay(incRowOut(inc)) as unknown as T;   // idempotent no-op
+        if (!(INC_TRANSITIONS[inc.status] ?? []).includes(next)) {
+          const e: any = new Error(`Illegal transition ${inc.status} → ${next}`);
+          e.demoStatus = 409; e.current = inc.status; e.allowed = INC_TRANSITIONS[inc.status] ?? [];
+          throw e;
+        }
+        const prev = inc.status;
+        inc.status = next;
+        if (next === 'resolved') inc.resolved_at = new Date().toISOString();
+        if (next === 'closed') inc.closed_at = new Date().toISOString();
+        incTouch(inc);
+        incPushActivity(uid, demoSession().email ?? 'demo@infracentra.io', 'status_changed',
+          b.note ? `Status moved ${prev} → ${next}: ${b.note}` : `Status moved ${prev} → ${next}`, prev, next);
+        return delay(incRowOut(inc)) as unknown as T;
+      }
+      if (method === 'PUT' && parts[2] === 'assign') {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        const prev = inc.assignee; const next = b.assignee ?? null;
+        if (prev !== next) {
+          inc.assignee = next; incTouch(inc);
+          incPushActivity(uid, demoSession().email ?? 'demo@infracentra.io', 'assigned',
+            next ? 'Ownership assigned' : 'Ownership cleared', prev, next);
+        }
+        return delay(incRowOut(inc)) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'acknowledge') {
+        const inc = incFindOr404(uid);
+        const who = demoSession().email ?? 'demo@infracentra.io';
+        if (!inc.acknowledged_by) {
+          inc.acknowledged_by = who; inc.acknowledged_at = new Date().toISOString(); incTouch(inc);
+          incPushActivity(uid, who, 'acked', 'Acknowledged');
+        }
+        return delay(incRowOut(inc)) as unknown as T;
+      }
+      if (method === 'PATCH' && parts.length === 2) {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        let changed = false;
+        for (const f of ['title', 'description', 'severity', 'category', 'site_org_id', 'assignee'] as const) {
+          if (b[f] !== undefined && (inc as any)[f] !== b[f]) {
+            incPushActivity(uid, demoSession().email ?? 'demo@infracentra.io', 'updated',
+              `Field '${f}' updated`, String((inc as any)[f] ?? ''), String(b[f] ?? ''));
+            (inc as any)[f] = b[f]; changed = true;
+          }
+        }
+        if (b.affected_assets !== undefined) { inc.affected_assets = b.affected_assets; changed = true; }
+        if (b.tags !== undefined) { inc.tags = b.tags; changed = true; }
+        if (changed) incTouch(inc);
+        return delay(incRowOut(inc)) as unknown as T;   // idempotent no-op when nothing changed
+      }
+      if (method === 'POST' && parts[2] === 'notes') {
+        const inc = incFindOr404(uid);
+        const n = { id: noteSeq++, incident_uid: uid, author: demoSession().email ?? 'demo@infracentra.io',
+                    content: String(b.content ?? ''), internal: b.internal !== false, created_at: new Date().toISOString() };
+        (incNotesByUid[uid] ??= []).push(n);
+        incPushActivity(uid, n.author, 'note_added', 'Investigation note added');
+        incTouch(inc);
+        return delay(n) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'evidence') {
+        const inc = incFindOr404(uid);
+        const e2 = { id: evSeq++, incident_uid: uid, name: String(b.name ?? 'artifact'), kind: b.kind ?? 'log',
+                     sha256: null, ticket_uid: inc.ticket_uid ?? null,
+                     collected_by: demoSession().email ?? 'demo@infracentra.io', created_at: new Date().toISOString() };
+        (incEvidenceByUid[uid] ??= []).push(e2);
+        incPushActivity(uid, e2.collected_by!, 'evidence_added', `Evidence '${e2.name}' attached`);
+        incTouch(inc);
+        return delay({ id: e2.id }) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'actions') {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        const who = demoSession().email ?? 'demo@infracentra.io';
+        const a2 = { id: actSeq++, incident_uid: uid, action_type: String(b.action_type ?? ''), status: 'completed',
+                     detail: String(b.detail ?? ''), performed_by: who, playbook_run_uid: null, created_at: new Date().toISOString() };
+        (incActionsByUid[uid] ??= []).push(a2);
+        incPushActivity(uid, who, 'action_recorded', `Response action recorded: ${a2.action_type}`);
+        incTouch(inc);
+        return delay({ id: a2.id, action_type: a2.action_type, status: a2.status, detail: a2.detail,
+                       performed_by: a2.performed_by, playbook_run_uid: null, created_at: a2.created_at }) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'link-ticket') {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        const tk = tickets.find(t => t.uid === b.ticket_uid);
+        if (!tk) throw httpErr(404, 'Ticket not found');
+        if (inc.ticket_uid !== tk.uid) {
+          const prev = inc.ticket_uid;
+          inc.ticket_uid = tk.uid; incTouch(inc);
+          incPushActivity(uid, demoSession().email ?? 'demo@infracentra.io', 'ticket_linked',
+            `Linked to ticket ${tk.uid}`, prev, tk.uid);
+        }
+        return delay(incRowOut(inc)) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'create-ticket') {
+        if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+        const inc = incFindOr404(uid);
+        if (inc.ticket_uid) return delay({ reused: true, ticket_uid: inc.ticket_uid }) as unknown as T;
+        const ai = fakeAi(inc.title, inc.severity === 'critical' || inc.severity === 'high' ? 'p1' : 'p2', 'incident');
+        const t = mkTicket({ title: `[IR] ${inc.title}`, description: `Opened from incident ${inc.uid}`,
+          priority: ai.ai_priority, source: 'api', org_id: inc.org_id, ...ai });
+        tickets.unshift(t);
+        inc.ticket_uid = t.uid; incTouch(inc);
+        incPushActivity(uid, demoSession().email ?? 'demo@infracentra.io', 'ticket_created', `Ticket ${t.uid} opened from incident`);
+        return delay({ reused: false, ticket_uid: t.uid }) as unknown as T;
+      }
+      if (method === 'GET' && parts[2] === 'activity') {
+        incFindOr404(uid);
+        const all = (incActivityByUid[uid] ?? []).slice().sort((a, z) => z.id - a.id);
+        const page = Math.max(1, Number(query.get('page') ?? 1));
+        const pageSize = Math.min(200, Math.max(1, Number(query.get('page_size') ?? 50)));
+        return delay({ items: all.slice((page - 1) * pageSize, page * pageSize), total: all.length,
+                       page, page_size: pageSize }) as unknown as T;
+      }
+    }
+
+    // ---- SOAR v2 (mirrors backend routers/soar.py) ----
+    if (root === 'soar') {
+      const sub = parts[1];
+      if (sub === 'playbooks') {
+        const idNum = Number(parts[2]);
+        const pb = soarPlaybooks.find(p => p.id === idNum);
+        if (method === 'GET' && !parts[2]) {
+          const scope = callerOrgIdSafe();
+          const list = soarPlaybooks.filter(p => p.org_id === null || scope === null || p.org_id === scope);
+          const page = Math.max(1, Number(query.get('page') ?? 1));
+          const pageSize = Math.min(200, Math.max(1, Number(query.get('page_size') ?? 50)));
+          return delay({ items: list.map(soarPbOut), total: list.length, page, page_size: pageSize }) as unknown as T;
+        }
+        if (method === 'POST' && !parts[2]) {
+          if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+          const bad = (b.steps ?? []).filter((s: any) => !(s.action in SOAR_SAFE_ACTIONS));
+          if (bad.length) throw httpErr(422, `Disallowed action(s): ${bad.map((s: any) => s.action).join(', ')}`);
+          const np = { id: soarPbSeq++, uid: `PBK-${String(soarPbSeq - 1).padStart(6, '0')}`,
+            org_id: callerOrgIdSafe(), name: b.name, description: b.description ?? '',
+            category: b.category ?? 'Incident Response', steps: (b.steps ?? []).map((s: any) => ({ name: s.name, action: s.action, params: s.params ?? {} })),
+            triggers: b.triggers ?? [{ type: 'manual' }], enabled: b.enabled !== false,
+            created_by: demoSession().email ?? 'demo@infracentra.io', created_at: new Date().toISOString(), updated_at: null };
+          soarPlaybooks.push(np);
+          return delay(soarPbOut(np)) as unknown as T;
+        }
+        if (!pb) throw httpErr(404, 'Playbook not found');
+        if (method === 'GET' && parts.length === 3) {
+          const recent = soarRuns.filter(r => r.playbook_id === pb.id).slice(-10).reverse();
+          const stats: Record<string, number> = { completed: 0, failed: 0, partial: 0, cancelled: 0, running: 0, queued: 0 };
+          recent.forEach(r => { stats[r.status] = (stats[r.status] ?? 0) + 1; });
+          return delay({ ...soarPbOut(pb), recent_runs: recent.map(r => soarRunOut(r, false)), run_stats: stats }) as unknown as T;
+        }
+        if (method === 'GET' && parts[3] === 'preview') {
+          const plan = (pb.steps ?? []).map((s: any, i: number) => ({
+            step: i + 1, name: s.name, action: s.action, params: soarRedact(s.params ?? {}),
+            consequential: SOAR_SAFE_ACTIONS[s.action] === true, requires_confirmation: SOAR_SAFE_ACTIONS[s.action] === true }));
+          return delay({ playbook_id: pb.id, mode: 'preview', executed: false,
+                         requires_confirmation: soarHasConsequential(pb.steps ?? []), plan }) as unknown as T;
+        }
+        if (method === 'POST' && parts[3] === 'run') {
+          const mode = b.mode;
+          if (!['simulate', 'preview', 'execute'].includes(mode)) throw httpErr(422, 'mode must be simulate|preview|execute');
+          if (mode === 'preview') {
+            const plan = (pb.steps ?? []).map((s: any, i: number) => ({
+              step: i + 1, name: s.name, action: s.action, params: soarRedact(s.params ?? {}),
+              consequential: SOAR_SAFE_ACTIONS[s.action] === true, requires_confirmation: SOAR_SAFE_ACTIONS[s.action] === true }));
+            return delay({ playbook_id: pb.id, mode: 'preview', executed: false,
+                           requires_confirmation: soarHasConsequential(pb.steps ?? []), plan }) as unknown as T;
+          }
+          if (!pb.enabled) throw httpErr(409, 'Playbook is disabled');
+          if ((demoSession().role ?? 'client_user') === 'client_user' && mode === 'execute') {
+            throw httpErr(403, 'Standard users may not execute playbooks; ask an administrator');
+          }
+          const executing = mode === 'execute';
+          if (executing && soarHasConsequential(pb.steps ?? []) && !b.confirm) {
+            const e: any = new Error('This playbook contains consequential actions. Resend with confirm=true to proceed.');
+            e.demoStatus = 409; e.requires_confirmation = true;
+            throw e;
+          }
+          if (b.idempotency_key) {
+            const prev = soarRuns.find(r => r.playbook_id === pb.id && r.idempotency_key === b.idempotency_key);
+            if (prev) return delay({ replayed: true, run: soarRunOut(prev) }) as unknown as T;
+          }
+          if (b.incident_uid) {
+            try { incFindOr404(String(b.incident_uid)); } catch { throw httpErr(404, 'Incident not found'); }
+          }
+          const run = { id: soarRunSeq++, uid: `RUN-${String(soarRunSeq - 1).padStart(6, '0')}`,
+            playbook_id: pb.id, org_id: pb.org_id ?? callerOrgIdSafe() ?? 1, incident_uid: b.incident_uid ?? null,
+            mode, status: 'running', triggered_by: demoSession().email ?? 'demo@infracentra.io',
+            cancel_requested: false, idempotency_key: b.idempotency_key ?? null,
+            total_steps: (pb.steps ?? []).length, completed_steps: 0, failed_steps: 0, skipped_steps: 0,
+            result_log: [], error: null, started_at: new Date().toISOString(), finished_at: null, created_at: new Date().toISOString() };
+          soarRuns.push(run);
+          const res = soarExecSteps(run, pb.steps ?? [], executing);
+          run.result_log = res.log; run.completed_steps = res.completed;
+          run.failed_steps = res.failed; run.skipped_steps = res.skipped;
+          run.status = soarFinalStatus(res.completed, res.failed);
+          run.finished_at = new Date().toISOString();
+          if (run.status === 'failed') run.error = res.log.find((e2: any) => e2.status === 'failed')?.detail ?? 'step failure';
+          if (executing && run.incident_uid) soarLinkIncidentRun(run, pb.name);
+          return delay({ replayed: false, run: soarRunOut(run) }) as unknown as T;
+        }
+        if (method === 'PUT' && parts.length === 3) {
+          if (!incHasRole(['platform_admin', 'client_admin'])) throw httpErr(403, 'Insufficient role');
+          const bad = (b.steps ?? []).filter((s: any) => !(s.action in SOAR_SAFE_ACTIONS));
+          if (bad.length) throw httpErr(422, `Disallowed action(s): ${bad.map((s: any) => s.action).join(', ')}`);
+          Object.assign(pb, { name: b.name ?? pb.name, description: b.description ?? pb.description,
+            category: b.category ?? pb.category, enabled: b.enabled ?? pb.enabled,
+            steps: b.steps ? b.steps.map((s: any) => ({ name: s.name, action: s.action, params: s.params ?? {} })) : pb.steps,
+            triggers: b.triggers ?? pb.triggers, updated_at: new Date().toISOString() });
+          return delay(soarPbOut(pb)) as unknown as T;
+        }
+        if (method === 'DELETE' && parts.length === 3) {
+          if (!incHasRole(['platform_admin'])) throw httpErr(403, 'Insufficient role');
+          const idx = soarPlaybooks.indexOf(pb);
+          if (idx >= 0) soarPlaybooks.splice(idx, 1);
+          return delay(undefined as any) as unknown as T;
+        }
+      }
+      if (sub === 'runs') {
+        if (method === 'GET' && !parts[2]) {
+          const scope = callerOrgIdSafe();
+          let list = soarRuns.filter(r => scope === null || r.org_id === scope || r.org_id == null);
+          if (query.get('playbook_id')) list = list.filter(r => String(r.playbook_id) === query.get('playbook_id'));
+          if (query.get('incident_uid')) list = list.filter(r => r.incident_uid === query.get('incident_uid'));
+          if (query.get('status')) list = list.filter(r => r.status === query.get('status'));
+          if (query.get('mode')) list = list.filter(r => r.mode === query.get('mode'));
+          list = list.slice().reverse();
+          const page = Math.max(1, Number(query.get('page') ?? 1));
+          const pageSize = Math.min(200, Math.max(1, Number(query.get('page_size') ?? 25)));
+          return delay({ items: list.slice((page - 1) * pageSize, page * pageSize).map(r => soarRunOut(r, false)),
+                         total: list.length, page, page_size: pageSize }) as unknown as T;
+        }
+        const run = soarRuns.find(r => r.uid === parts[2]);
+        if (!run) throw httpErr(404, 'Run not found');
+        if (method === 'GET') return delay(soarRunOut(run)) as unknown as T;
+        if (method === 'POST' && parts[3] === 'cancel') {
+          if (!['queued', 'running'].includes(run.status)) throw httpErr(409, `Run already terminal (${run.status})`);
+          run.cancel_requested = true; run.status = 'cancelled'; run.finished_at = new Date().toISOString();
+          return delay(soarRunOut(run)) as unknown as T;
+        }
+        if (method === 'POST' && parts[3] === 'retry') {
+          if (run.status === 'running' || run.status === 'queued') throw httpErr(409, 'Run still in progress');
+          const pb2 = soarPlaybooks.find(p => p.id === run.playbook_id);
+          if (!pb2) throw httpErr(409, 'Playbook no longer exists');
+          if (run.mode === 'execute' && soarHasConsequential(pb2.steps ?? []) && !b.confirm) {
+            const e: any = new Error('Retry re-executes consequential actions. Resend with confirm=true.');
+            e.demoStatus = 409; e.requires_confirmation = true;
+            throw e;
+          }
+          if (b.idempotency_key) {
+            const prev = soarRuns.find(r => r.playbook_id === pb2.id && r.idempotency_key === b.idempotency_key);
+            if (prev) return delay({ replayed: true, run: soarRunOut(prev) }) as unknown as T;
+          }
+          const nrun: any = { id: soarRunSeq++, uid: `RUN-${String(soarRunSeq - 1).padStart(6, '0')}`,
+            playbook_id: pb2.id, org_id: run.org_id, incident_uid: run.incident_uid,
+            mode: run.mode, status: 'running', triggered_by: demoSession().email ?? 'demo@infracentra.io',
+            cancel_requested: false, idempotency_key: b.idempotency_key ?? null,
+            total_steps: (pb2.steps ?? []).length, completed_steps: 0, failed_steps: 0, skipped_steps: 0,
+            result_log: [], error: null, retry_of: run.uid, started_at: new Date().toISOString(),
+            finished_at: null, created_at: new Date().toISOString() };
+          soarRuns.push(nrun);
+          const res = soarExecSteps(nrun, pb2.steps ?? [], nrun.mode === 'execute');
+          nrun.result_log = res.log; nrun.completed_steps = res.completed;
+          nrun.failed_steps = res.failed; nrun.skipped_steps = res.skipped;
+          nrun.status = soarFinalStatus(res.completed, res.failed);
+          nrun.finished_at = new Date().toISOString();
+          if (nrun.status === 'failed') nrun.error = res.log.find((e2: any) => e2.status === 'failed')?.detail ?? 'step failure';
+          if (nrun.mode === 'execute' && nrun.incident_uid) soarLinkIncidentRun(nrun, pb2.name);
+          return delay({ replayed: false, run: soarRunOut(nrun) }) as unknown as T;
+        }
       }
     }
 

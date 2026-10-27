@@ -70,8 +70,8 @@ export const AssetInventoryNav: React.FC<{ current: 'discovery' | 'scans' | 'mon
 // Helpers
 // ---------------------------------------------------------------------------
 const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
-const Badge: React.FC<{ className?: string; children: React.ReactNode }> = ({ className = '', children }) => (
-  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold border border-transparent ${className}`}>{children}</span>
+const Badge: React.FC<{ className?: string; title?: string; children: React.ReactNode }> = ({ className = '', title, children }) => (
+  <span title={title} className={`px-2 py-0.5 rounded-full text-xs font-semibold border border-transparent ${className}`}>{children}</span>
 );
 const scanStatusColor: Record<string, string> = {
   queued: 'bg-slate-600/40 text-[var(--ic-text)]', running: 'bg-cyan-500/20 text-cyan-300 animate-pulse',

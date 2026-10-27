@@ -132,17 +132,23 @@ router_playbooks = APIRouter(prefix="/playbooks", tags=["Playbooks"])
 
 
 # ---------------------------------------------------------------------------
-# Custom Playbooks — persisted per deployment, executed by the backend.
-# The "Run" endpoint walks the real step list and returns a step-by-step log,
-# so the UI's Play / Display buttons show exactly what the playbook does.
+# Custom Playbooks — LEGACY in-memory store, superseded by the SOAR v2 API
+# (app/routers/soar.py → /api/soar/playbooks). Kept mounted at the same URL
+# shape for backward compatibility with older clients, but every endpoint now
+# requires authentication and step actions are validated against the same
+# allow-list used by the real execution engine. The old fake "run" executor
+# (which always reported success) has been removed: run /api/soar instead.
 # ---------------------------------------------------------------------------
 from pydantic import BaseModel as _BM
 from typing import List as _List
 
+from app.core.security import get_current_user as _gcu
+from app.services.soar import validate_steps as _validate_steps, StepValidationError as _SVE
+
 
 class PlaybookStepDef(_BM):
     name: str
-    action: str            # wait|snmp_query|block_ip|notify|create_ticket|isolate|snapshot
+    action: str            # wait|snmp_query|block_ip|notify|create_ticket|isolate_host|snapshot|add_evidence
     params: dict = {}
 
 
@@ -155,22 +161,22 @@ class PlaybookDef(_BM):
     enabled: bool = True
 
 
-class PlaybookRunResult(_BM):
-    ok: bool
-    log: _List[dict]
-
-
 _PLAYBOOKS: dict[int, dict] = {}   # store keyed by playbook id
 _PB_SEQ = {"n": 0}
 
 
 @router_playbooks.get("")
-async def list_playbooks():
+async def list_playbooks(current_user: User = Depends(_gcu)):
     return list(_PLAYBOOKS.values())
 
 
 @router_playbooks.post("", status_code=201)
-async def save_playbook(pb: PlaybookDef):
+async def save_playbook(pb: PlaybookDef, current_user: User = Depends(_gcu)):
+    try:
+        pb.steps = [s for s in pb.steps]  # keep shape
+        _validate_steps([s.model_dump() for s in pb.steps])
+    except _SVE as e:
+        raise HTTPException(422, str(e))
     _PB_SEQ["n"] += 1
     pb.id = _PB_SEQ["n"]
     data = pb.model_dump()
@@ -179,41 +185,31 @@ async def save_playbook(pb: PlaybookDef):
 
 
 @router_playbooks.put("/{pb_id}")
-async def update_playbook(pb_id: int, pb: PlaybookDef):
+async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depends(_gcu)):
     if pb_id not in _PLAYBOOKS:
         raise HTTPException(404, "Playbook not found")
+    try:
+        _validate_steps([s.model_dump() for s in pb.steps])
+    except _SVE as e:
+        raise HTTPException(422, str(e))
     pb.id = pb_id
     _PLAYBOOKS[pb_id] = pb.model_dump()
     return _PLAYBOOKS[pb_id]
 
 
 @router_playbooks.delete("/{pb_id}", status_code=204)
-async def delete_playbook(pb_id: int):
+async def delete_playbook(pb_id: int, current_user: User = Depends(_gcu)):
     _PLAYBOOKS.pop(pb_id, None)
 
 
-@router_playbooks.post("/{pb_id}/run", response_model=PlaybookRunResult)
-async def run_playbook(pb_id: int):
-    """Execute a playbook server-side, step by step, returning a real log."""
-    pb = _PLAYBOOKS.get(pb_id)
-    if not pb:
-        raise HTTPException(404, "Playbook not found")
-    import asyncio as _aio
-    log = []
-    ok = True
-    for i, step in enumerate(pb.get("steps", []), start=1):
-        await _aio.sleep(0.4)  # simulate work; replace with real SOAR connector calls
-        entry = {"step": i, "name": step["name"], "action": step["action"],
-                 "status": "completed"}
-        if step["action"] == "create_ticket":
-            entry["detail"] = "Ticket TCK-AUTO created via ticketing service"
-        elif step["action"] == "notify":
-            entry["detail"] = "Notification dispatched through engine"
-        elif step["action"] == "block_ip":
-            entry["detail"] = "Firewall rule pushed (dry-run mode)"
-        elif step["action"] == "wait":
-            entry["detail"] = f"Waited {step['params'].get('seconds', 5)}s"
-        else:
-            entry["detail"] = f"Executed {step['action']}"
-        log.append(entry)
-    return PlaybookRunResult(ok=ok, log=log)
+@router_playbooks.post("/{pb_id}/run", status_code=410)
+async def run_playbook_legacy(pb_id: int, current_user: User = Depends(_gcu)):
+    """The legacy executor fabricated 'completed' results for every step —
+    it violated the no-invented-execution-rules policy and is retired.
+    Use POST /api/soar/playbooks/{id}/run (simulate | preview | execute) which
+    records honest, per-step backend-confirmed results."""
+    raise HTTPException(
+        status.HTTP_410_GONE,
+        "Legacy simulated runner removed — use POST /api/soar/playbooks/"
+        f"{pb_id}/run (mode=simulate|preview|execute) for real execution history",
+    )
