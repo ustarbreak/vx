@@ -717,3 +717,151 @@ class MonitoringRule(Base):
     enabled = Column(Boolean, default=True)
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============================================================================
+# Incident Response — incidents, notes, activity trail, evidence & actions
+# (wraps the existing SIEM/alert/ticket engines; never replaces them)
+# ============================================================================
+
+class Incident(Base):
+    """Security incident record. One incident may aggregate many alerts and
+    links to tickets/evidence/response actions. `uid` is stable (INC-000123)
+    and deduped via `dedup_key` so alert re-processing updates an existing
+    incident instead of creating duplicates."""
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=False)   # INC-000123
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    site_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)  # affected site (multi-site)
+    title = Column(String, nullable=False)
+    description = Column(Text, default="")
+    severity = Column(String, default="medium")     # critical|high|medium|low|info
+    status = Column(String, default="open", index=True)  # open|investigating|contained|resolved|closed
+    assignee = Column(String, nullable=True)        # user email
+    reporter = Column(String, nullable=True)
+    acknowledged_by = Column(String, nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    affected_assets = Column(JSON, default=list)    # hostnames / IPs (links into device details)
+    ioc_related = Column(JSON, default=list)        # threat-intel IOCs
+    tags = Column(JSON, default=list)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True, index=True)
+    ticket_uid = Column(String, nullable=True, index=True)          # linked TCK-xxxx
+    category = Column(String, default="other")      # malware|phishing|intrusion|data_exfiltration|policy_violation|other
+    dedup_key = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class IncidentNote(Base):
+    """Investigation note attached to an incident (append-only)."""
+    __tablename__ = "incident_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    author = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    internal = Column(Boolean, default=True)        # internal vs client-visible
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentActivity(Base):
+    """Immutable activity/audit trail per incident (lifecycle transitions,
+    assignment, acknowledgment, linked records, playbook runs...)."""
+    __tablename__ = "incident_activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    actor = Column(String, nullable=False)
+    action = Column(String, nullable=False)         # created|status_changed|assigned|acked|note_added|linked|playbook_run ...
+    detail = Column(Text, default="")
+    from_value = Column(String, nullable=True)      # e.g. previous status
+    to_value = Column(String, nullable=True)        # e.g. new status
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentEvidence(Base):
+    """Evidence snapshot referencing a TicketEvidence row (or standalone text).
+    Never copies blobs: points at the evidence vault by (ticket_uid, ev_id)."""
+    __tablename__ = "incident_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    ticket_uid = Column(String, nullable=True, index=True)
+    ticket_evidence_id = Column(Integer, nullable=True)
+    kind = Column(String, default="log")
+    name = Column(String, nullable=False)
+    sha256 = Column(String, nullable=True)          # integrity fingerprint when known
+    collected_by = Column(String, default="system")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAction(Base):
+    """Response action taken on an incident (containment, isolation, block…).
+    Actions are recorded against the real engines that executed them; this
+    table is the ledger, not the executor."""
+    __tablename__ = "incident_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    action_type = Column(String, nullable=False)    # escalate|contain|isolate_host|block_ip|notify|create_ticket|run_playbook|resolve
+    status = Column(String, default="completed")    # proposed|pending_approval|approved|executing|completed|failed|cancelled
+    detail = Column(Text, default="")
+    performed_by = Column(String, nullable=False)
+    playbook_run_uid = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============================================================================
+# SOAR — persisted playbooks + real execution history
+# ============================================================================
+
+class Playbook(Base):
+    """SOAR playbook definition, persisted per tenant (org_id NULL => platform
+    shared playbook managed by platform admins). Steps are validated against
+    the allow-list of safe action types in app.services.soar — there is no
+    arbitrary command/shell execution."""
+    __tablename__ = "soar_playbooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=True)    # PBK-000001
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    category = Column(String, default="Incident Response")
+    steps = Column(JSON, default=list)      # [{name, action, params}]
+    triggers = Column(JSON, default=list)   # [{type: alert|schedule|manual, ...}] descriptive only
+    enabled = Column(Boolean, default=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class PlaybookRun(Base):
+    """One execution of a playbook. `mode` separates simulation/preview from
+    actual execution; terminal status is written ONLY after every step has
+    really completed (or failed) — the UI never sees an optimistic success."""
+    __tablename__ = "soar_playbook_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=False)   # RUN-000123
+    playbook_id = Column(Integer, ForeignKey("soar_playbooks.id"), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    incident_uid = Column(String, nullable=True, index=True)        # triggering incident, if any
+    mode = Column(String, default="simulate")   # simulate|preview|execute
+    status = Column(String, default="queued", index=True)  # queued|running|completed|failed|partial|cancelled
+    triggered_by = Column(String, nullable=False)
+    idempotency_key = Column(String, nullable=True, index=True)
+    cancel_requested = Column(Boolean, default=False)
+    total_steps = Column(Integer, default=0)
+    completed_steps = Column(Integer, default=0)
+    failed_steps = Column(Integer, default=0)
+    skipped_steps = Column(Integer, default=0)
+    result_log = Column(JSON, default=list)     # redacted step log
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
