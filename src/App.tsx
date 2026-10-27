@@ -136,6 +136,9 @@ function AppRoutes() {
       <Route path="/login" element={isFastDemo() ? <DemoAutoEnter /> : <LoginPage />} />
       <Route path="/service/:serviceId" element={<ServiceDetailPage />} />
       <Route path="/coming-soon/:serviceId" element={<ComingSoonPage />} />
+      {/* Academy: nav/footer link target — renders the coming-soon experience
+          until the learning platform ships (no fabricated course catalog). */}
+      <Route path="/academy" element={<ComingSoonPage />} />
 
       {/* Protected Routes - Require authentication */}
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>

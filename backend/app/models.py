@@ -556,6 +556,13 @@ class DiscoveryScan(Base):
     finished_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String, default="system")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # --- Infrastructure Map / Auto Discovery completion -------------------
+    # Approved site (multi-site org hierarchy: HQ/SUBSIDIARY/AGENCY org id)
+    # the scan targets. Null for legacy scans — never inferred.
+    site_id = Column(Integer, nullable=True)
+    # Explicit operator authorization recorded at launch time (scope consent).
+    authorized = Column(Boolean, default=False)
+    authorization_note = Column(String, nullable=True)
 
 
 class DiscoveredDevice(Base):

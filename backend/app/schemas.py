@@ -505,6 +505,9 @@ class ScanCreate(BaseModel):
                     "scans bounded (never larger than the engine's 1024-host cap).")
     credential_ids: List[int] = []
     org_id: Optional[int] = None
+    site_id: Optional[int] = Field(None, description="Approved site/org the scan targets (multi-site hierarchy).")
+    authorized: bool = Field(False, description="Explicit operator authorization for this scan scope.")
+    authorization_note: Optional[str] = Field(None, max_length=500)
 
 
 class ScanResponse(BaseModel):
@@ -520,6 +523,9 @@ class ScanResponse(BaseModel):
     finished_at: Optional[datetime]
     created_by: str
     created_at: datetime
+    site_id: Optional[int] = None
+    authorized: bool = False
+    authorization_note: Optional[str] = None
 
     class Config:
         from_attributes = True

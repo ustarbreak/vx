@@ -104,10 +104,24 @@ MAX_SCAN_HOSTS = 1024   # engine cap (services.discovery.cidr_hosts) — scans s
 async def start_scan(body: ScanCreate, current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
     org = _scope_org(current_user, body.org_id)
+    # --- explicit authorization gate --------------------------------------
+    # A scan is an intrusive action; the operator must confirm the scope.
+    if not body.authorized:
+        raise HTTPException(403, "Discovery requires explicit authorization of the scan scope (set authorized=true after reviewing target, limits and impact)")
     try:
         net = ipaddress.ip_network(body.network_cidr, strict=False)
     except ValueError:
         raise HTTPException(422, "Invalid CIDR (e.g. 192.168.1.0/24)")
+    # --- approved site check (multi-site hierarchy) ------------------------
+    # site_id references an organization row within the tenant's own site
+    # tree (HQ or a child SUBSIDIARY/AGENCY). Cross-tenant sites are refused.
+    if body.site_id is not None:
+        site = (await db.execute(select(Organization).where(Organization.id == body.site_id))).scalars().first()
+        if not site:
+            raise HTTPException(422, "Unknown site")
+        root = site.parent_org_id if site.org_type != "HQ" and site.parent_org_id else site.id
+        if root != org and site.id != org:
+            raise HTTPException(403, "Site does not belong to this tenant — discovery denied")
     # Optional explicit mask override — never allows a LARGER scope than the
     # requested CIDR, and never below /22 (keeps scans bounded).
     if body.prefix is not None:
@@ -131,6 +145,8 @@ async def start_scan(body: ScanCreate, current_user: User = Depends(get_current_
         credential_ids=body.credential_ids or [c.id for c in creds],
         status="queued", total_hosts=len(hosts),
         created_by=current_user.email,
+        site_id=body.site_id, authorized=True,
+        authorization_note=(body.authorization_note or "").strip() or None,
     )
     db.add(scan)
     await db.commit()

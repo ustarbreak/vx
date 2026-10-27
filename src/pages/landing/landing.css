@@ -1,0 +1,195 @@
+/* ============================================================
+   INFRACENTRA LANDING — "Cyber Cinematic" design layer
+   ------------------------------------------------------------
+   The app-wide theme system (src/styles/themes.css) stays
+   untouched: the product itself can remain light ("Calm
+   Operations"). This file scopes the premium dark cybersecurity
+   identity (deep navy #031426, electric cyan #00D4FF) to the
+   public landing page ONLY, via `.ic-landing` + `ic-lx-*`
+   utility classes. All decorative textures reference the local
+   public assets (root-relative paths served by Vite).
+   ============================================================ */
+
+.ic-landing {
+  --lx-bg: #031426;            /* primary background        */
+  --lx-bg-2: #061B30;          /* secondary background      */
+  --lx-surface: #08243D;       /* elevated surface          */
+  --lx-cyan: #00D4FF;          /* electric cyan             */
+  --lx-blue: #078BFF;          /* electric blue             */
+  --lx-text: #F4F9FF;          /* main text                 */
+  --lx-text-2: #A9BED1;        /* secondary text            */
+  --lx-muted: #7894AC;         /* muted text                */
+  --lx-border: rgba(0, 212, 255, 0.22);
+  --lx-glow: rgba(0, 212, 255, 0.16);
+
+  background: var(--lx-bg);
+  color: var(--lx-text-2);
+  font-feature-settings: "ss01", "cv02";
+}
+
+/* ---------- shared surfaces ---------- */
+.ic-lx-card {
+  background: linear-gradient(160deg, rgba(8, 36, 61, 0.9), rgba(6, 27, 48, 0.9));
+  border: 1px solid var(--lx-border);
+  border-radius: 18px;
+  box-shadow: 0 1px 0 rgba(0, 212, 255, 0.06) inset, 0 18px 40px -24px rgba(0, 0, 0, 0.7);
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.ic-lx-card:hover {
+  border-color: rgba(0, 212, 255, 0.45);
+  box-shadow: 0 0 0 1px var(--lx-glow), 0 24px 60px -28px rgba(0, 0, 0, 0.85), 0 0 32px -8px var(--lx-glow);
+  transform: translateY(-3px);
+}
+.ic-lx-chip {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.35rem 0.9rem; border-radius: 999px;
+  border: 1px solid var(--lx-border);
+  background: rgba(0, 212, 255, 0.06);
+  color: var(--lx-cyan);
+  font-size: 0.75rem; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.ic-lx-eyebrow {
+  color: var(--lx-cyan);
+  font-size: 0.78rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
+}
+.ic-lx-h { color: var(--lx-text); }
+.ic-lx-muted { color: var(--lx-muted); }
+.ic-lx-text2 { color: var(--lx-text-2); }
+
+.ic-lx-btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem;
+  background: linear-gradient(120deg, var(--lx-cyan), var(--lx-blue));
+  color: #032033; font-weight: 700; border-radius: 12px;
+  box-shadow: 0 0 24px -6px var(--lx-glow), 0 8px 24px -12px rgba(0, 212, 255, 0.5);
+  transition: filter 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.ic-lx-btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); box-shadow: 0 0 34px -4px rgba(0, 212, 255, 0.4); }
+.ic-lx-btn-outline {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.6rem;
+  border: 1px solid var(--lx-border); color: var(--lx-text);
+  background: rgba(0, 212, 255, 0.04); border-radius: 12px; font-weight: 600;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+.ic-lx-btn-outline:hover { border-color: var(--lx-cyan); background: rgba(0, 212, 255, 0.1); transform: translateY(-1px); }
+
+/* focus visibility on the dark surface */
+.ic-landing a:focus-visible,
+.ic-landing button:focus-visible {
+  outline: 2px solid var(--lx-cyan);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* ---------- reusable texture layer ---------- */
+.ic-lx-textured { position: relative; isolation: isolate; }
+.ic-lx-textured::before {
+  content: "";
+  position: absolute; inset: 0; z-index: -1;
+  background-image: url('/reusable-textures.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.14;
+  pointer-events: none;
+}
+.ic-lx-textured-strong::before { opacity: 0.22; }
+
+/* fine circuit/hex grid motif for plain dark sections */
+.ic-lx-grid { position: relative; }
+.ic-lx-grid::before {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none; opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 30%, transparent 75%);
+}
+
+/* ---------- brand logo ---------- */
+.ic-lx-logo { height: 100%; width: auto; object-fit: contain; display: block; }
+
+/* ---------- hero ---------- */
+.ic-lx-hero {
+  position: relative;
+  min-height: 92vh;
+  display: flex; align-items: center;
+  background-color: var(--lx-bg);
+  overflow: hidden;
+}
+.ic-lx-hero-bg {
+  position: absolute; inset: 0; z-index: 0;
+  background-image: url('/Centre.png');
+  background-size: cover;
+  background-position: 50% 50%;           /* Centre.png hub emblem is centred */
+  background-repeat: no-repeat;
+}
+@media (max-width: 768px) {
+  .ic-lx-hero-bg { background-position: 50% 50%; background-size: 150% auto; }
+}
+.ic-lx-hero-overlay {
+  position: absolute; inset: 0; z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(3, 20, 38, 0.92) 0%, rgba(3, 20, 38, 0.72) 45%, rgba(3, 20, 38, 0.94) 100%),
+    radial-gradient(ellipse 70% 55% at 28% 45%, rgba(3, 20, 38, 0.88) 0%, rgba(3, 20, 38, 0.25) 60%, transparent 100%);
+}
+.ic-lx-hero-title {
+  background: linear-gradient(95deg, #F4F9FF 15%, var(--lx-cyan) 55%, var(--lx-blue) 90%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* ---------- image frames ---------- */
+.ic-lx-frame {
+  border: 1px solid var(--lx-border);
+  border-radius: 18px;
+  background: radial-gradient(120% 120% at 50% 0%, rgba(0, 212, 255, 0.08), transparent 60%), var(--lx-bg-2);
+  box-shadow: 0 0 40px -18px var(--lx-glow), 0 30px 60px -30px rgba(0, 0, 0, 0.8);
+  overflow: hidden;
+}
+.ic-lx-img-contain img { object-fit: contain; width: 100%; height: auto; display: block; }
+
+/* workflow connector line animation */
+@keyframes ic-lx-dash { to { stroke-dashoffset: -240; } }
+.ic-lx-flow-line {
+  stroke-dasharray: 6 6;
+  animation: ic-lx-dash 8s linear infinite;
+}
+
+/* node pulse */
+@keyframes ic-lx-pulse { 0%,100% { opacity: 0.5; r: 4; } 50% { opacity: 1; r: 6; } }
+.ic-lx-node-dot { animation: ic-lx-pulse 3s ease-in-out infinite; }
+
+/* scroll entrance (progressive enhancement — visible without JS) */
+.ic-lx-reveal { opacity: 0; transform: translateY(22px); transition: opacity 0.7s ease, transform 0.7s ease; }
+.ic-lx-reveal.is-visible { opacity: 1; transform: none; }
+
+/* slow ambient drift for hero bg (subtle) */
+@keyframes ic-lx-drift { from { transform: scale(1.02); } to { transform: scale(1.06); } }
+.ic-lx-hero-bg { animation: ic-lx-drift 26s ease-in-out infinite alternate; }
+
+/* sticky header state */
+.ic-lx-nav { transition: background 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease; }
+.ic-lx-nav-scrolled {
+  background: rgba(3, 20, 38, 0.88) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom-color: var(--lx-border) !important;
+  box-shadow: 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+}
+
+/* pricing highlight */
+.ic-lx-plan-featured {
+  border-color: rgba(0, 212, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.35), 0 0 60px -20px var(--lx-glow);
+}
+
+/* reduced motion — disable all landing animations & transitions */
+@media (prefers-reduced-motion: reduce) {
+  .ic-landing *, .ic-landing *::before, .ic-landing *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+  .ic-lx-reveal { opacity: 1; transform: none; }
+}
