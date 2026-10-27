@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { navigationData } from '../../data/navigationData';
 import SmartLink from './SmartLink';
-import { ChevronDown, Menu, X, LogIn, Zap } from 'lucide-react';
+import BrandWordmark from '../../components/BrandWordmark';
+import { ChevronDown, Menu, X, LogIn } from 'lucide-react';
 
 // Landing CTA helper: sign in with the simulated demo session for a portal
 // key. In real-backend mode (Demo Mode OFF) loginAsDemo authenticates against
@@ -41,22 +42,23 @@ export default function Navigation() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  const handleDemoLogin = async (key: string) => {
-    // Legacy call sites keep their previous behaviour (full-access client admin).
-    await loginPortal(key === 'platform-admin' ? 'platform-admin' : key,
-      key === 'platform-admin' ? '/admin/dashboard' : '/client-admin/dashboard');
-  };
-
   return (
     <nav className={`ic-lx-nav fixed top-0 left-0 right-0 z-50 border-b ${scrolled ? 'ic-lx-nav-scrolled' : ''}`} style={{ background: 'rgba(3, 20, 38, 0.55)', borderColor: 'rgba(0, 212, 255, 0.14)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)' }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
-          {/* Logo */}
+          {/* Logo — official brand mark (public/InfraLOGO.png) + two-tone
+              wordmark: "Infra" in the heading colour, "Centra" in blue. Both
+              colours are CSS variables, so the lock-up adapts to light/dark. */}
           <Link to="/" aria-label="Infracentra — home" className="flex items-center gap-2">
-            <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(120deg,#00D4FF,#078BFF)' }}>
-              <Zap className="w-5 h-5" style={{ color: '#032033' }} />
-            </span>
-            <span className="text-xl font-bold" style={{ color: '#F4F9FF' }}>Infracentra</span>
+            <img
+              src="/InfraLOGO.png"
+              alt="Infracentra logo"
+              width={32} height={32}
+              className="w-8 h-8 rounded-lg object-contain"
+              style={{ background: 'rgba(0, 212, 255, 0.06)' }}
+              decoding="async"
+            />
+            <BrandWordmark className="text-xl font-bold tracking-tight" />
           </Link>
 
           {/* Desktop Navigation */}
@@ -185,9 +187,25 @@ export default function Navigation() {
                 )}
               </div>
             ))}
-            <button onClick={() => handleDemoLogin('platform-admin')} className="ic-lx-btn-primary w-full px-4 py-2 text-sm mt-2">
+            {/* Portals — same three entry points as the desktop dropdown */}
+            <div className="pt-2 border-t" style={{ borderColor: 'rgba(0,212,255,0.22)' }}>
+              <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#7894AC' }}>Portails de connexion</p>
+              {PORTAL_OPTIONS.map((p) => (
+                <button
+                  key={p.key}
+                  onClick={() => { setMobileMenuOpen(false); loginPortal(p.key, p.to); }}
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-[var(--ic-surface-2)] transition-colors"
+                >
+                  <span className="block text-sm font-medium" style={{ color: '#F4F9FF' }}>{p.label}</span>
+                  <span className="block text-xs" style={{ color: '#7894AC' }}>{p.desc}</span>
+                </button>
+              ))}
+            </div>
+            {/* Real route — previously this button signed into the platform
+                admin dashboard while being labelled "Request Demo". */}
+            <SmartLink href="/demo-request" className="ic-lx-btn-primary block w-full px-4 py-2 text-sm mt-2 text-center" onClick={() => setMobileMenuOpen(false)}>
               Request Demo
-            </button>
+            </SmartLink>
           </div>
         </div>
       )}

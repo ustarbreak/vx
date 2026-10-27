@@ -35,13 +35,13 @@ export default function PricingSection() {
             Voir les packs et l’estimateur
             <ArrowRight className="w-5 h-5" />
           </Link>
-          <a
-            href="#/health-check"
+          <Link
+            to="/health-check"
             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-semibold border ic-text hover:ic-heading transition-all"
             style={{ borderColor: 'var(--ic-border)' }}
           >
             Bilan de sécurité gratuit — 30 jours
-          </a>
+          </Link>
         </div>
         <p className="text-xs ic-muted mt-8 max-w-2xl mx-auto">
           Prix en dirhams marocains (MAD), hors TVA ({Math.round(PRICING_CONFIG_V2.vat * 100)} % appliquée sur le total).

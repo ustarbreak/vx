@@ -5,7 +5,7 @@
 //  • Service comparison uses the real catalog split from servicesData.ts.
 //  • Partner tiers come from PRICING_CONFIG_V2.partner.tiers (single source
 //    of truth — discounts are actual configured values, not invented).
-//  • /partnerships.jpg (1536×1024 ecosystem artwork) framed with contain-safe
+//  • /partners.png (1672×941 ecosystem artwork) framed with contain-safe
 //    cover crop preserving the central connection cluster.
 // ---------------------------------------------------------------------------
 import React from 'react';
@@ -89,8 +89,8 @@ export default function PartnerProgramSection() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center mb-14">
             <Reveal>
               <figure className="ic-lx-frame">
-                <div style={{ aspectRatio: '3 / 2', overflow: 'hidden' }}>
-                  <img src="/partnerships.jpg" alt="Connected partner ecosystem artwork" width={1536} height={1024}
+                <div style={{ aspectRatio: '1672 / 941', overflow: 'hidden' }}>
+                  <img src="/partners.png" alt="Connected partner ecosystem artwork" width={1672} height={941}
                     loading="lazy" decoding="async" className="w-full h-full"
                     style={{ objectFit: 'cover', objectPosition: 'center' }} />
                 </div>

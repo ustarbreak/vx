@@ -9,6 +9,12 @@ import LandingPage from './pages/LandingPage';
 import PricingPage from './pages/pricing/PricingPage';
 import PartnerProgramPage from './pages/partner/PartnerProgramPage';
 import DemoRequestPage from './pages/pricing/DemoRequestPage';
+import HealthCheckPage from './pages/pricing/HealthCheckPage';
+import AboutPage from './pages/company/AboutPage';
+import RecognitionPage from './pages/company/RecognitionPage';
+import CustomerStoriesPage from './pages/company/CustomerStoriesPage';
+import FindPartnerPage from './pages/company/FindPartnerPage';
+import ComparePage from './pages/company/ComparePage';
 import LoginPage from './pages/LoginPage';
 import ServiceDetailPage from './pages/ServiceDetailPage';
 import ComingSoonPage from './pages/ComingSoonPage';
@@ -130,6 +136,16 @@ function AppRoutes() {
       <Route path="/pricing" element={<PricingPage />} />
       <Route path="/mssp" element={<PartnerProgramPage />} />
       <Route path="/demo-request" element={<DemoRequestPage />} />
+      {/* Free security health check — real page (was falling through the
+          catch-all → home when clicked from the pricing hero). */}
+      <Route path="/health-check" element={<HealthCheckPage />} />
+
+      {/* Company / "Why Infracentra" pages */}
+      <Route path="/about" element={<AboutPage />} />
+      <Route path="/recognition" element={<RecognitionPage />} />
+      <Route path="/customer-stories" element={<CustomerStoriesPage />} />
+      <Route path="/find-a-partner" element={<FindPartnerPage />} />
+      <Route path="/compare/:rival" element={<ComparePage />} />
       {/* Fast access: /demo goes straight in with the simulated demo session
           (guarded — never touches the real backend). */}
       <Route path="/demo" element={<DemoAutoEnter />} />

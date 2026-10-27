@@ -17,6 +17,8 @@ const ROUTED_PREFIXES = [
   '/pricing', '/mssp', '/demo-request', '/login', '/demo', '/service/',
   '/coming-soon/', '/health-check', '/academy', '/dashboard', '/admin/',
   '/partner/', '/client-admin/', '/portal', '/reports', '/settings',
+  // Company / "Why Infracentra" pages (real routes registered in App.tsx)
+  '/about', '/recognition', '/customer-stories', '/find-a-partner', '/compare/',
 ];
 
 /** Normalise any href ("#/pricing", "/pricing", "/#about") to a router path
