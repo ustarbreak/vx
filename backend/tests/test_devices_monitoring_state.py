@@ -43,7 +43,10 @@ from app.routers.discovery import derive_monitoring_state, OFFLINE_AFTER, STALE_
 
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 
-pytestmark = pytest.mark.asyncio
+# NOTE: pytest-asyncio >= 1.0 forbids module-level `pytestmark =
+# pytest.mark.asyncio` (the mark would leak onto fixtures and collection
+# aborts with "Marks cannot be applied to fixtures"), so each async test
+# carries its own @pytest.mark.asyncio marker instead.
 
 
 @pytest_asyncio.fixture()
@@ -130,6 +133,7 @@ def test_derive_pure_function():
 # ---------------------------------------------------------------------------
 # Endpoint behaviour
 # ---------------------------------------------------------------------------
+@pytest.mark.asyncio
 async def test_state_derived_from_heartbeat_not_row_existence(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=1) as c:
@@ -150,6 +154,7 @@ async def test_state_derived_from_heartbeat_not_row_existence(session_factory):
             assert "community" not in blob and "token" not in blob and "secret" not in blob
 
 
+@pytest.mark.asyncio
 async def test_state_filter_pagination_and_search(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=1) as c:
@@ -170,6 +175,7 @@ async def test_state_filter_pagination_and_search(session_factory):
         assert body["offset"] == 2 and body["limit"] == 1
 
 
+@pytest.mark.asyncio
 async def test_tenant_isolation_and_auth(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory) as c:
@@ -183,6 +189,7 @@ async def test_tenant_isolation_and_auth(session_factory):
         assert body["total"] == 1
 
 
+@pytest.mark.asyncio
 async def test_empty_inventory(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=3) as c:
@@ -191,6 +198,7 @@ async def test_empty_inventory(session_factory):
         assert r.json()["items"] == [] and r.json()["total"] == 0
 
 
+@pytest.mark.asyncio
 async def test_limit_bounds_validated(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=1) as c:

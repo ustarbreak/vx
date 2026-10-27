@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Monitor, Plus, Trash2, Play, RefreshCw, ShieldAlert, KeyRound, Download,
   CheckCircle, Radar, Server, Wifi, X, Search, Terminal, Clock, ChevronDown, Eye,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
-  discoveryApi, ApiError,
-  SnmpCredential, ScanRow, DiscoveredDevice,
+  discoveryApi, agentApi, ApiError,
+  SnmpCredential, ScanRow, DiscoveredDevice, AgentProbeOut,
 } from '../../services/api';
+
+/** Minimal probe shape used to attach REAL heartbeat evidence to scanned rows. */
+type AgentProbeOutLite = Pick<AgentProbeOut, 'hostname' | 'ip' | 'status' | 'last_seen' | 'agent_version'>;
 import { demoDevices, demoTenants, type DemoDevice } from '../../data/demoWorld';
 import { demoProjects } from '../../data/demoProjects';
 import { isDemoMode } from '../../services/demoMode';
@@ -491,19 +494,84 @@ export const ScanHistoryPage: React.FC = () => {
 // devices across Damanecash / Valoris System / Vivalis Salaf); in real mode
 // it reads the imported (in-CMDB) devices from the backend.
 // ---------------------------------------------------------------------------
+/**
+ * Monitoring state derivation — honest, backend-evidence based.
+ * Never invent a lifecycle transition: a device is only "actively monitored"
+ * when a real record (probe heartbeat or last observation) proves it. The
+ * thresholds mirror the backend rules documented in AGENTS-GUIDE.md
+ * (>10 min heartbeat silence ⇒ offline) and the poller cadence (60 s).
+ */
+type MonitorState = 'discovered' | 'enrolled' | 'monitored' | 'stale' | 'offline' | 'unknown';
+const HEARTBEAT_OFFLINE_S = 10 * 60;   // backend rule: >10 min probe silence = offline
+const DATA_STALE_S = 15 * 60;          // one LAN-sweep cycle without observation = stale
+const secondsSince = (iso?: string | null): number | null => {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : Math.max(0, (Date.now() - t) / 1000);
+};
+const deriveState = (opts: {
+  enrolled: boolean;            // in CMDB (imported) or demo-world supervised row
+  hasHeartbeatSource: boolean;  // matched to an actual collector/probe record
+  lastSignal: string | null;    // real timestamp: probe last_seen OR device last_seen
+}): { state: MonitorState; ageS: number | null } => {
+  const ageS = secondsSince(opts.lastSignal);
+  if (!opts.enrolled) return { state: 'discovered', ageS };
+  if (!opts.hasHeartbeatSource) return { state: 'enrolled', ageS };   // in CMDB but no verified health signal
+  if (ageS === null) return { state: 'unknown', ageS };               // enrolled+collector but never observed
+  if (ageS > HEARTBEAT_OFFLINE_S) return { state: 'offline', ageS };
+  if (ageS > DATA_STALE_S) return { state: 'stale', ageS };
+  return { state: 'monitored', ageS };
+};
+const stateStyle: Record<MonitorState, { badge: string; label: string; title: string }> = {
+  discovered: { badge: 'bg-slate-600/40 text-[var(--ic-text)]', label: 'discovered', title: 'Seen by a discovery scan only — not enrolled in monitoring' },
+  enrolled:   { badge: 'bg-sky-500/20 text-sky-300', label: 'enrolled', title: 'In the monitored inventory (CMDB) — no collector heartbeat evidence yet' },
+  monitored:  { badge: 'bg-emerald-500/20 text-emerald-300', label: 'actively monitored', title: 'Fresh heartbeat / observation within backend freshness window' },
+  stale:      { badge: 'bg-amber-500/20 text-amber-300', label: 'stale data', title: 'Collector exists but last observation is older than one sweep cycle' },
+  offline:    { badge: 'bg-red-500/20 text-red-300', label: 'offline', title: 'No heartbeat for >10 min (backend offline rule)' },
+  unknown:    { badge: 'bg-zinc-500/20 text-zinc-300', label: 'unknown', title: 'No observation timestamp recorded — state cannot be determined' },
+};
+const StateBadge: React.FC<{ state: MonitorState; ageS: number | null }> = ({ state, ageS }) => {
+  const s = stateStyle[state];
+  const fresh = ageS === null ? 'no data' : ageS < 60 ? `${Math.floor(ageS)}s` : ageS < 3600 ? `${Math.floor(ageS / 60)}m` : `${Math.floor(ageS / 3600)}h`;
+  return (
+    <span title={`${s.title} · freshness: ${fresh}`} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${s.badge}`}>
+      {state === 'monitored' ? <CheckCircle size={12} /> : state === 'offline' ? <X size={12} /> : <Clock size={12} />}
+      {s.label}
+      <span className="opacity-70 font-normal">· {fresh}</span>
+    </span>
+  );
+};
+
+type SortKey = 'hostname' | 'ip' | 'type' | 'client' | 'state' | 'lastSeen';
+const PAGE_SIZE = 10;
+
 export const MonitoredAssetsPage: React.FC = () => {
   const { user } = useAuth();
   const isPlatform = user?.role === 'platform_admin';
   const [imported, setImported] = useState<DiscoveredDevice[]>([]);
+  const [probes, setProbes] = useState<AgentProbeOutLite[]>([]);
   const [q, setQ] = useState('');
+  const [typeFilter, setTypeFilter] = useState<string>('all');
+  const [stateFilter, setStateFilter] = useState<MonitorState | 'all'>('all');
+  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'hostname', dir: 1 });
+  const [page, setPage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [preview, setPreview] = useState<DemoDevice | DiscoveredDevice | null>(null);
-  const loading = false;
 
   useEffect(() => {
     const load = async () => {
-      try { const dv = await discoveryApi.devices(); setImported(dv.filter(d => d.imported)); } catch { /* demo fallback below */ }
+      setError('');
+      try {
+        const dv = await discoveryApi.devices();
+        setImported(dv.filter(d => d.imported));
+      } catch (ex: any) {
+        setError(ex instanceof ApiError ? ex.message : 'Backend unreachable — showing demo world data only.');
+      } finally { setLoading(false); }
     };
-    if (!isDemoMode()) load();
+    load();
+    // Probe list gives REAL heartbeat evidence for scanned devices (never fake "online").
+    agentApi.listProbes().then(setProbes).catch(() => setProbes([]));
     window.addEventListener('demo-world-pushed', load);
     return () => window.removeEventListener('demo-world-pushed', load);
   }, []);
@@ -519,70 +587,181 @@ export const MonitoredAssetsPage: React.FC = () => {
     return { demo: [] as (DemoDevice & { _kind: 'demo' })[], scanned: imported.map(d => ({ ...d, _kind: 'scanned' as const })) };
   }, [imported, isPlatform, user]);
 
-  const filteredDemo = rows.demo.filter(d => !q || [d.hostname, d.ip, d.os, d.location, tenantName(d.orgId)].some(x => (x || '').toLowerCase().includes(q.toLowerCase())));
+  /** Match a scanned device to a real collector row (by IP first, then hostname),
+   *  exactly like the backend /devices/{id} detail endpoint does. */
+  const collectorFor = useCallback((ip: string, hostname?: string | null): AgentProbeOutLite | null => {
+    const norm = (s?: string | null) => (s || '').toLowerCase();
+    return probes.find(p => ip && p.ip === ip)
+        ?? (hostname ? probes.find(p => norm(p.hostname) === norm(hostname)) ?? null : null);
+  }, [probes]);
+
+  // Unified view-model with derived state, sorting keys and drill-down links.
+  const allRows = useMemo(() => {
+    const out: Array<{
+      key: string; id: string; hostname: string; ip: string; type: string; orgId: number;
+      location: string; state: MonitorState; ageS: number | null; lastSeenIso: string | null;
+      collector: string | null; source: 'demo' | 'scanned'; raw: DemoDevice | DiscoveredDevice;
+    }> = [];
+    for (const d of rows.demo) {
+      // Demo-world rows carry their own simulated heartbeat age (lastSeenMin).
+      const lastSeenIso = d.lastSeenMin != null ? new Date(Date.now() - d.lastSeenMin * 60_000).toISOString() : null;
+      const st = deriveState({ enrolled: true, hasHeartbeatSource: true, lastSignal: lastSeenIso });
+      out.push({
+        key: `d-${d.id}`, id: String(d.id), hostname: d.hostname, ip: d.ip, type: d.type, orgId: d.orgId,
+        location: d.location ?? '—', state: st.state, ageS: st.ageS, lastSeenIso,
+        collector: d.isProbe ? 'goinfra probe (host)' : 'SNMP poller (demo world)',
+        source: 'demo', raw: d,
+      });
+    }
+    for (const d of rows.scanned) {
+      const col = collectorFor(d.ip, d.hostname);
+      const st = deriveState({ enrolled: true, hasHeartbeatSource: !!col, lastSignal: col?.last_seen ?? d.last_seen ?? null });
+      out.push({
+        key: `s-${d.id}`, id: String(d.id), hostname: d.hostname || d.ip, ip: d.ip,
+        type: d.device_type || 'unknown', orgId: d.org_id, location: d.sys_desc ? d.sys_desc.slice(0, 24) : '—',
+        state: st.state, ageS: st.ageS, lastSeenIso: col?.last_seen ?? d.last_seen ?? null,
+        collector: col ? `${col.hostname} (goinfra ${col.agent_version || '?'})` : null,
+        source: 'scanned', raw: d,
+      });
+    }
+    return out;
+  }, [rows, collectorFor]);
+
+  const types = useMemo(() => Array.from(new Set(allRows.map(r => r.type))).sort(), [allRows]);
+
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    let list = allRows.filter(r =>
+      (!ql || [r.hostname, r.ip, r.type, tenantName(r.orgId), r.collector ?? '', projectForDevice(r.hostname, r.orgId)].some(x => (x || '').toLowerCase().includes(ql)))
+      && (typeFilter === 'all' || r.type === typeFilter)
+      && (stateFilter === 'all' || r.state === stateFilter));
+    const cmp = (a: typeof list[number], b: typeof list[number]) => {
+      const get = (r: typeof list[number]) => sort.key === 'hostname' ? r.hostname.toLowerCase()
+        : sort.key === 'ip' ? r.ip : sort.key === 'type' ? r.type
+        : sort.key === 'client' ? tenantName(r.orgId) : sort.key === 'state' ? r.state
+        : (r.lastSeenIso ? new Date(r.lastSeenIso).getTime() : 0);
+      const av = get(a), bv = get(b);
+      return (av < bv ? -1 : av > bv ? 1 : 0) * sort.dir;
+    };
+    return [...list].sort(cmp);
+  }, [allRows, q, typeFilter, stateFilter, sort]);
+
+  useEffect(() => { setPage(0); }, [q, typeFilter, stateFilter, sort]);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  const toggleSort = (key: SortKey) => setSort(s => s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: 1 });
+  const SortTh: React.FC<{ k: SortKey; children: React.ReactNode; cls?: string }> = ({ k, children, cls = '' }) => (
+    <th className={`px-4 py-3 ${cls}`}>
+      <button onClick={() => toggleSort(k)} className="inline-flex items-center gap-1 hover:text-cyan-300 uppercase">
+        {children}{sort.key === k && <ChevronDown size={12} className={sort.dir === 1 ? '' : 'rotate-180'} />}
+      </button>
+    </th>
+  );
+
+  const stateCounts = useMemo(() => {
+    const c: Partial<Record<MonitorState, number>> = {};
+    for (const r of allRows) c[r.state] = (c[r.state] ?? 0) + 1;
+    return c;
+  }, [allRows]);
 
   return (
     <div className="p-6 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2"><Monitor className="text-cyan-400" /> Monitored Devices</h1>
-          <p className="text-sm text-[var(--ic-muted)]">{rows.demo.length + rows.scanned.length} assets under supervision — client, project, SNMP preview included.</p>
+          <p className="text-sm text-[var(--ic-muted)]">{allRows.length} assets under supervision — state derived from real heartbeats / observations, never assumed.</p>
         </div>
-        <AssetInventoryNav current="monitored" />
+        <div className="flex items-center gap-3">
+          <AssetInventoryNav current="monitored" />
+          <button onClick={() => { setLoading(true); window.dispatchEvent(new Event('demo-world-pushed')); }} className="p-2 rounded-lg bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] text-[var(--ic-text)]"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
+        </div>
       </div>
 
-      <div className="relative max-w-md">
-        <Search size={16} className="absolute left-3 top-2.5 text-[var(--ic-muted)]" />
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search hostname / IP / client / project…"
-          className="w-full bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg pl-9 pr-3 py-2 text-sm text-[var(--ic-heading)] outline-none focus:border-cyan-500" />
+      {error && <div className="bg-red-500/10 border border-red-500/40 rounded-lg p-3 text-sm text-red-300 flex items-center gap-2"><ShieldAlert size={16} />{error}</div>}
+
+      {/* State legend — clear distinction required by the product spec */}
+      <div className="flex flex-wrap gap-2 text-xs">
+        {(Object.keys(stateStyle) as MonitorState[]).map(s => (
+          <button key={s} onClick={() => setStateFilter(f => f === s ? 'all' : s)}
+            className={`px-2.5 py-1 rounded-full border transition ${stateFilter === s ? 'border-cyan-400' : 'border-transparent'} ${stateStyle[s].badge}`}>
+            {stateStyle[s].label}{stateCounts[s] ? ` (${stateCounts[s]})` : ''}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-3 items-center">
+        <div className="relative max-w-md flex-1">
+          <Search size={16} className="absolute left-3 top-2.5 text-[var(--ic-muted)]" />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search hostname / IP / client / collector / project…"
+            className="w-full bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg pl-9 pr-3 py-2 text-sm text-[var(--ic-heading)] outline-none focus:border-cyan-500" />
+        </div>
+        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+          className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg px-3 py-2 text-sm text-[var(--ic-heading)] outline-none focus:border-cyan-500">
+          <option value="all">All types</option>
+          {types.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
       </div>
 
       <div className="bg-[var(--ic-surface)] rounded-xl overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="text-left text-xs uppercase text-[var(--ic-muted)] border-b border-[var(--ic-border)]">
-            <th className="px-4 py-3">Hostname</th><th className="px-4 py-3">IP</th><th className="px-4 py-3">Type</th>
-            <th className="px-4 py-3">Client</th><th className="px-4 py-3">Linked project</th>
-            <th className="px-4 py-3">Status</th><th className="px-4 py-3">Location</th><th className="px-4 py-3" /></tr></thead>
+            <SortTh k="hostname">Hostname</SortTh><SortTh k="ip">IP</SortTh><SortTh k="type">Type</SortTh>
+            <SortTh k="client">Client</SortTh>
+            <th className="px-4 py-3">Collector / source</th>
+            <SortTh k="state">Monitoring state</SortTh>
+            <SortTh k="lastSeen">Last seen</SortTh>
+            <th className="px-4 py-3">Linked project</th>
+            <th className="px-4 py-3">Site</th>
+            <th className="px-4 py-3" /></tr></thead>
           <tbody>
-            {filteredDemo.map(d => (
-              <tr key={d.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
+            {pageRows.map(r => (
+              <tr key={r.key} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
                 <td className="px-4 py-3 text-[var(--ic-heading)] font-medium">
-                  {d.hostname}
-                  {d.isProbe && (
+                  <Link to={`/client-admin/infrastructure/device/${encodeURIComponent(r.id)}?src=${r.source}`}
+                    className="hover:text-cyan-300 hover:underline">{r.hostname}</Link>
+                  {r.source === 'demo' && (r.raw as DemoDevice).isProbe && (
                     <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[10px] font-bold align-middle" title="Machine hôte de l'agent collector — découverte & scans exécutés depuis ce device">
                       <Radar size={10} /> PROBE
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 font-mono text-cyan-300">{d.ip}</td>
-                <td className="px-4 py-3 capitalize text-[var(--ic-text)]">{d.type}</td>
-                <td className="px-4 py-3"><Badge className="bg-violet-500/20 text-violet-300">{tenantName(d.orgId)}</Badge></td>
-                <td className="px-4 py-3 text-xs text-[var(--ic-muted)] max-w-56 truncate" title={projectForDevice(d.hostname, d.orgId)}>{projectForDevice(d.hostname, d.orgId)}</td>
-                <td className="px-4 py-3">{d.status === 'online'
-                  ? <span className="text-emerald-400 text-xs flex items-center gap-1"><CheckCircle size={12} /> online</span>
-                  : d.status === 'degraded' ? <Badge className="bg-amber-500/20 text-amber-300">degraded</Badge>
-                  : <Badge className="bg-red-500/20 text-red-300">offline</Badge>}</td>
-                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{d.location}</td>
-                <td className="px-4 py-3"><button onClick={() => setPreview(d)} className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"><Eye size={12} /> Preview</button></td>
+                <td className="px-4 py-3 font-mono text-cyan-300">{r.ip}</td>
+                <td className="px-4 py-3 capitalize text-[var(--ic-text)]">{r.type}</td>
+                <td className="px-4 py-3"><Badge className="bg-violet-500/20 text-violet-300">{tenantName(r.orgId)}</Badge></td>
+                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{r.collector ?? <span className="italic">no collector assigned</span>}</td>
+                <td className="px-4 py-3"><StateBadge state={r.state} ageS={r.ageS} /></td>
+                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]" title={r.lastSeenIso ?? 'No observation recorded'}>{r.lastSeenIso ? fmt(r.lastSeenIso) : '—'}</td>
+                <td className="px-4 py-3 text-xs text-[var(--ic-muted)] max-w-44 truncate" title={projectForDevice(r.hostname, r.orgId)}>{projectForDevice(r.hostname, r.orgId)}</td>
+                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{r.location}</td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <div className="flex items-center gap-2">
+                    <Link to={`/client-admin/infrastructure/device/${encodeURIComponent(r.id)}?src=${r.source}`}
+                      className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"><Eye size={12} /> Detail</Link>
+                    <button onClick={() => setPreview(r.raw)} className="flex items-center gap-1 text-xs text-[var(--ic-muted)] hover:text-[var(--ic-heading)]"><Server size={12} /> SNMP</button>
+                  </div>
+                </td>
               </tr>
             ))}
-            {rows.scanned.map(d => (
-              <tr key={`s-${d.id}`} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
-                <td className="px-4 py-3 text-[var(--ic-heading)] font-medium">{d.hostname || d.ip}</td>
-                <td className="px-4 py-3 font-mono text-cyan-300">{d.ip}</td>
-                <td className="px-4 py-3 capitalize text-[var(--ic-text)]">{d.device_type || 'unknown'}</td>
-                <td className="px-4 py-3"><Badge className="bg-violet-500/20 text-violet-300">{tenantName(d.org_id)}</Badge></td>
-                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{projectForDevice(d.hostname || d.ip, d.org_id)}</td>
-                <td className="px-4 py-3"><span className="text-emerald-400 text-xs flex items-center gap-1"><CheckCircle size={12} /> monitored</span></td>
-                <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{d.sys_desc ? d.sys_desc.slice(0, 24) : '—'}</td>
-                <td className="px-4 py-3"><button onClick={() => setPreview(d)} className="flex items-center gap-1 text-xs text-cyan-400 hover:underline"><Eye size={12} /> Preview</button></td>
-              </tr>
-            ))}
-            {!loading && filteredDemo.length + rows.scanned.length === 0 && (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-[var(--ic-muted)]">No monitored devices{q ? ' match your search' : ' yet — import them from Auto Discovery'}.</td></tr>
+            {loading && (
+              <tr><td colSpan={10} className="px-4 py-10 text-center text-[var(--ic-muted)]">Loading inventory…</td></tr>
+            )}
+            {!loading && pageRows.length === 0 && (
+              <tr><td colSpan={10} className="px-4 py-10 text-center text-[var(--ic-muted)]">No monitored devices{q || stateFilter !== 'all' || typeFilter !== 'all' ? ' match your filters' : ' yet — import them from Auto Discovery'}.</td></tr>
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex items-center justify-between text-xs text-[var(--ic-muted)]">
+        <span>{filtered.length} row(s) · page {Math.min(page + 1, pages)} / {pages}</span>
+        <div className="flex gap-2">
+          <button disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}
+            className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] disabled:opacity-40 hover:bg-[var(--ic-surface-2)]">← Prev</button>
+          <button disabled={page >= pages - 1} onClick={() => setPage(p => Math.min(pages - 1, p + 1))}
+            className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] disabled:opacity-40 hover:bg-[var(--ic-surface-2)]">Next →</button>
+        </div>
       </div>
 
       {/* Full-information preview: SNMP data + scan parameters + monitoring state */}

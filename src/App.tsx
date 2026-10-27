@@ -198,6 +198,10 @@ function AppRoutes() {
         {/* Client admin views */}
         <Route path="client-admin/dashboard" element={<ClientAdminDashboardPage />} />
         <Route path="client-admin/monitored-devices" element={<MonitoredDevicesPage />} />
+        {/* Alias: some views (e.g. IncidentsPage device chips) link to
+            /client-admin/devices — keep it on the real monitored-devices page
+            instead of falling through the catch-all back to home. */}
+        <Route path="client-admin/devices" element={<Navigate to="/client-admin/monitored-devices" replace />} />
         <Route path="client-admin/scan-history" element={<ScanHistoryPage />} />
         <Route path="client-admin/asset-inventory" element={<MonitoredAssetsPage />} />
         <Route path="client-admin/agents" element={<AgentsPage />} />

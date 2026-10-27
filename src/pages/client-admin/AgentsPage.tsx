@@ -88,19 +88,48 @@ const OsIcon: React.FC<{ os: string }> = ({ os }) => (
     : <Server size={14} className="text-emerald-400" />
 );
 
-const StatusBadge: React.FC<{ status: string }> = ({ status }) => {
-  const online = status === 'online';
+/**
+ * Heartbeat-derived health badge. CRITICAL honesty rule: a probe row alone is
+ * NEVER "online" — the backend recomputes status from last_seen (>10 min
+ * silence ⇒ offline), and we re-verify client-side so a stale DB flag can
+ * never render a green pulse. No heartbeat timestamp at all ⇒ "unknown".
+ */
+const HEARTBEAT_OFFLINE_S = 10 * 60;
+const HEARTBEAT_STALE_S = 15 * 60;
+const heartbeatAgeS = (iso: string | null): number | null => {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : Math.max(0, (Date.now() - t) / 1000);
+};
+type HealthLevel = 'online' | 'stale' | 'offline' | 'unknown';
+const effectiveHealth = (status: string, lastSeen: string | null): HealthLevel => {
+  const age = heartbeatAgeS(lastSeen);
+  if (age === null) return 'unknown';
+  if (age > HEARTBEAT_OFFLINE_S || status === 'offline') return 'offline';
+  if (age > HEARTBEAT_STALE_S) return 'stale';
+  return 'online';
+};
+const StatusBadge: React.FC<{ status: string; lastSeen?: string | null }> = ({ status, lastSeen = null }) => {
+  const level = effectiveHealth(status, lastSeen ?? null);
+  const cls = level === 'online'
+    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+    : level === 'stale'
+      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+      : level === 'unknown'
+        ? 'bg-zinc-500/10 text-zinc-300 border-zinc-500/30'
+        : 'bg-rose-500/10 text-rose-400 border-rose-500/30';
+  const label = level === 'online' ? 'Online' : level === 'stale' ? 'Stale' : level === 'unknown' ? 'No heartbeat' : 'Offline';
+  const title = level === 'online' ? `Heartbeat ${timeAgo(lastSeen)} — within the 10-min window`
+    : level === 'stale' ? `Last heartbeat ${timeAgo(lastSeen)} — data may lag`
+    : level === 'unknown' ? 'No heartbeat timestamp recorded — health cannot be verified'
+    : `No heartbeat for ${timeAgo(lastSeen)} (backend rule: >10 min = offline)`;
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${
-      online
-        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-        : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-    }`}>
+    <span title={title} className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
       <span className="relative flex h-2 w-2">
-        {online && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
-        <span className={`relative inline-flex rounded-full h-2 w-2 ${online ? 'bg-emerald-400' : 'bg-rose-500'}`} />
+        {level === 'online' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
+        <span className={`relative inline-flex rounded-full h-2 w-2 ${level === 'online' ? 'bg-emerald-400' : level === 'stale' ? 'bg-amber-400' : level === 'unknown' ? 'bg-zinc-400' : 'bg-rose-500'}`} />
       </span>
-      {online ? 'Online' : 'Offline'}
+      {label}
     </span>
   );
 };
@@ -144,7 +173,7 @@ const ProbeDrawer: React.FC<{ probe: AgentProbeOut; onClose: () => void }> = ({ 
             <div className="flex items-center gap-2">
               <OsIcon os={probe.os} />
               <h2 className="text-lg font-bold text-[var(--ic-text)]">{probe.hostname}</h2>
-              <StatusBadge status={probe.status} />
+              <StatusBadge status={probe.status} lastSeen={probe.last_seen} />
             </div>
             <p className="text-xs text-[var(--ic-muted)] mt-1">
               Probe #{probe.id} · {probe.ip || '—'} · goinfra v{probe.agent_version} · last seen {timeAgo(probe.last_seen)}
@@ -356,7 +385,9 @@ const AgentsPage: React.FC = () => {
     } finally { setBusy(false); }
   };
 
-  const onlineCount = probes.filter(p => p.status === 'online').length;
+  const onlineCount = probes.filter(p => effectiveHealth(p.status, p.last_seen) === 'online').length;
+  const staleCount = probes.filter(p => effectiveHealth(p.status, p.last_seen) === 'stale').length;
+  const unknownCount = probes.filter(p => effectiveHealth(p.status, p.last_seen) === 'unknown').length;
   const q = search.toLowerCase();
   const filteredProbes = probes.filter(p => !q || p.hostname.toLowerCase().includes(q) || p.ip.includes(q));
   const filteredDevices = devices.filter(d => !q ||
@@ -378,7 +409,7 @@ const AgentsPage: React.FC = () => {
             <MonitorSmartphone size={20} className="text-cyan-400" /> Collection Agents
           </h1>
           <p className="text-sm text-[var(--ic-muted)] mt-1">
-            goinfra probes — remote-installed collectors on client networks. {onlineCount}/{probes.length} online.
+            goinfra probes — remote-installed collectors on client networks. {onlineCount}/{probes.length} online · heartbeat-verified (never assumed from DB rows){staleCount ? ` · ${staleCount} stale` : ''}{unknownCount ? ` · ${unknownCount} without heartbeat` : ''}.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -446,7 +477,7 @@ const AgentsPage: React.FC = () => {
                   <td className="px-4 py-3 font-mono text-xs text-[var(--ic-muted)]">{p.ip || '—'}</td>
                   <td className="px-4 py-3"><span className="flex items-center gap-1.5 capitalize"><OsIcon os={p.os} /> {p.os}</span></td>
                   <td className="px-4 py-3 font-mono text-xs">{p.agent_version}</td>
-                  <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                  <td className="px-4 py-3"><StatusBadge status={p.status} lastSeen={p.last_seen} /></td>
                   <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{timeAgo(p.last_seen)}</td>
                   <td className="px-4 py-3 text-right"><Eye size={15} className="inline text-cyan-400" /></td>
                 </tr>

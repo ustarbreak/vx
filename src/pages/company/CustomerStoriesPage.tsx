@@ -93,7 +93,7 @@ export default function CustomerStoriesPage() {
             <p className="mt-2 text-sm ic-muted">Le Diagnostic de sécurité gratuit montre, sur votre propre parc, ce que ces clients ont vu en production.</p>
             <div className="mt-4 flex flex-wrap justify-center gap-3">
               <Link to="/health-check" className="ic-btn-primary px-6 py-3 inline-flex items-center gap-2">Démarrer le diagnostic gratuit <ArrowRight className="w-5 h-5" /></Link>
-              <a href="#/#clients" className="ic-btn-outline px-6 py-3">Tous les clients</a>
+              <Link to="/#clients" className="ic-btn-outline px-6 py-3 inline-flex items-center">Tous les clients</Link>
             </div>
           </div>
         </section>
