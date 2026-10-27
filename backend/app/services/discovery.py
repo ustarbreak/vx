@@ -161,10 +161,18 @@ async def execute_scan(scan_id: int) -> None:
         )).scalars().all()
         cred_map = {c.id: c for c in creds if not scan.credential_ids or c.id in (scan.credential_ids or [])}
 
-        if await nmap_available():
-            raw = await run_nmap(scan.network_cidr)
-        else:
-            raw = await simulate_scan(scan_id)
+        try:
+            if await nmap_available():
+                raw = await run_nmap(scan.network_cidr)
+            else:
+                raw = await simulate_scan(scan_id)
+        except Exception as exc:  # worker crash / unreachable network — report, never fake success
+            scan.status = "failed"
+            scan.finished_at = now_utc()
+            await db.commit()
+            import logging
+            logging.getLogger("infracentra.discovery").error("discovery scan %s failed: %s", scan_id, exc)
+            return
 
         async def _next_alert_uid() -> str:
             from app.models import Alert as A
@@ -173,22 +181,41 @@ async def execute_scan(scan_id: int) -> None:
 
         discovered = 0
         matched = 0
+        # Dedup identity rule: an IP already seen for this tenant in a previous
+        # scan is refreshed (last observation) instead of duplicated. Real
+        # relationship data only — never invent links between findings.
+        existing = {d.ip: d for d in (await db.execute(
+            select(DiscoveredDevice).where(DiscoveredDevice.org_id == scan.org_id)
+        )).scalars().all()}
         for h in raw:
             snmp_info = None
             for cid, cred in cred_map.items():
                 snmp_info = await snmp_probe(h["ip"], cred)
                 if snmp_info:
                     break
-            dev = DiscoveredDevice(
-                scan_id=scan.id, org_id=scan.org_id, ip=h["ip"],
-                mac=h.get("mac"), hostname=h.get("hostname"),
-                os_guess=h.get("os_guess") or (snmp_info or {}).get("sys_desc", "")[:60] or "unknown",
-                device_type=h.get("device_type") or "unknown",
-                open_ports=h.get("open_ports", []),
-                snmp_match=bool(snmp_info),
-                sys_desc=(snmp_info or {}).get("sys_desc"),
-            )
-            db.add(dev)
+            dev = existing.get(h["ip"])
+            if dev is not None:
+                # refresh the persisted row with the newest real observations
+                dev.hostname = h.get("hostname") or dev.hostname
+                dev.mac = h.get("mac") or dev.mac
+                dev.open_ports = h.get("open_ports", dev.open_ports)
+                dev.os_guess = h.get("os_guess") or dev.os_guess
+                dev.device_type = h.get("device_type") or dev.device_type
+                if snmp_info:
+                    dev.snmp_match = True
+                    dev.sys_desc = snmp_info.get("sys_desc")
+                dev.created_at = now_utc()   # last_seen derives from this row
+            else:
+                dev = DiscoveredDevice(
+                    scan_id=scan.id, org_id=scan.org_id, ip=h["ip"],
+                    mac=h.get("mac"), hostname=h.get("hostname"),
+                    os_guess=h.get("os_guess") or (snmp_info or {}).get("sys_desc", "")[:60] or "unknown",
+                    device_type=h.get("device_type") or "unknown",
+                    open_ports=h.get("open_ports", []),
+                    snmp_match=bool(snmp_info),
+                    sys_desc=(snmp_info or {}).get("sys_desc"),
+                )
+                db.add(dev)
             discovered += 1
             if snmp_info:
                 matched += 1

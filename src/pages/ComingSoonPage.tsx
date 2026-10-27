@@ -1,11 +1,29 @@
 import React from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useLocation, Link } from 'react-router-dom';
 import { getComingSoonById } from '../data/comingSoonServices';
 import { ArrowLeft, Calendar, Users, CheckCircle } from 'lucide-react';
 
+// Minimal coming-soon fallback used when the route has no registered catalog
+// entry (e.g. /academy, legal links added on the landing enhancement branch).
+const GENERIC_SOON = {
+  name: 'Infracentra Academy',
+  tagline: 'Structured learning for security operations teams.',
+  description: 'Training courses, certification paths and community resources are being prepared. Join the waitlist to be notified at launch.',
+  icon: '🎓',
+  category: 'education',
+  estimatedLaunch: 'Q1 2027',
+  expectedFeatures: ['Self-paced platform courses', 'Instructor-led workshops', 'Certification tracks'],
+  targetAudience: 'Security analysts, MSSP operators and IT administrators.',
+};
+
 export default function ComingSoonPage() {
   const { serviceId } = useParams<{ serviceId: string }>();
-  const service = getComingSoonById(serviceId || '');
+  // Route-level "coming soon" pages (like /academy) pass a static fallback via
+  // location state; catalog services resolve through comingSoonServices.
+  const location = useLocation();
+  const service =
+    getComingSoonById(serviceId || '') ||
+    ((location.state as any)?.generic ? (location.state as any).generic : GENERIC_SOON);
 
   if (!service) {
     return (
