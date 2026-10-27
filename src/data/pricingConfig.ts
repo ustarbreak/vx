@@ -23,10 +23,22 @@ export interface PackDef {
 export interface ServiceDef { id: string; tier: number; price: number }
 export interface FreePoolDef { id: string; tier: number; listPrice: number; topTierOnly?: boolean }
 
+/** A pack as configured by the platform admin in the Pack Customizer
+ *  (/admin/packs). `services`/`freePicks` fully describe what the pack grants —
+ *  PACK_SERVICES is derived from them, never hardcoded per page. */
+export interface PackCustomizerDef extends PackDef {
+  id?: string;                    // starter | pro | souverain | custom…
+  services: string[];             // paid service ids included in the pack
+  freePicks: string[];            // free-pool ids included in the pack
+}
+
 export interface PricingConfigV2 {
   version: string; currency: string; vat: number;
   assetClasses: Record<string, number>;
   packs: Record<'starter' | 'pro' | 'souverain', PackDef>;
+  /** Optional — written by the Pack Customizer (PUT /pricing/config).
+   *  When present it is authoritative for pack composition everywhere. */
+  packDetails?: Record<string, PackCustomizerDef>;
   custom: {
     platformBase: number; floor: number; minUnits: number; backupQuotaGbPerUnit: number;
     onboardingBase: number; onboardingPerPaidService: number; unlockThresholds: [number, number, number];
@@ -138,12 +150,57 @@ export const ASSET_CLASS_LABELS_FR: Record<string, string> = {
 
 export type PackId = 'starter' | 'pro' | 'souverain';
 
-/** Services included in each pack (mapping section §2). */
+/** Default pack composition (mapping section §2) expressed as PackCustomizerDef.
+ *  This is the seed the Pack Customizer (/admin/packs) edits — NEVER hardcoded
+ *  per page. PACK_SERVICES below is DERIVED from it (or from a live config). */
+export const DEFAULT_PACK_DETAILS: Record<string, PackCustomizerDef> = {
+  starter: {
+    ...PRICING_CONFIG_V2.packs.starter, id: 'starter',
+    services: ['endpoint', 'vuln', 'patch', 'backup', 'compliance'],
+    freePicks: [],
+  },
+  pro: {
+    ...PRICING_CONFIG_V2.packs.pro, id: 'pro',
+    services: ['endpoint', 'vuln', 'patch', 'backup', 'compliance', 'email', 'incident', 'network'],
+    freePicks: ['dns', 'analytics', 'threat_intel', 'ticketing'],
+  },
+  souverain: {
+    ...PRICING_CONFIG_V2.packs.souverain, id: 'souverain',
+    services: ['endpoint', 'vuln', 'patch', 'backup', 'compliance', 'email', 'incident', 'network', 'soar', 'cloud', 'firewall_mgmt', 'vpn', 'sdwan'],
+    freePicks: ['dns', 'analytics', 'threat_intel', 'ticketing'],
+  },
+};
+
+/** Derive the service list of every pack from its PackCustomizerDef
+ *  (services + freePicks). Works with the bundled default OR a live config
+ *  fetched from GET /api/pricing/config (which may carry admin-edited
+ *  `packDetails`). Order follows the canonical catalog order in
+ *  cfg.services / cfg.freePool — stable across engines and golden fixtures. */
+export function packServicesFrom(cfg: PricingConfigV2): Record<string, string[]> {
+  const details = cfg.packDetails ?? DEFAULT_PACK_DETAILS;
+  const orderPaid = cfg.services.map(s => s.id);
+  const orderFree = cfg.freePool.map(f => f.id);
+  const byCatalog = (ids: string[], catalog: string[]) =>
+    catalog.filter(id => ids.includes(id));
+  // Anything not part of the canonical catalogs (e.g. a custom admin pick) is
+  // appended in the order it was configured — nothing gets silently dropped.
+  const extras = (ids: string[]) => ids.filter(id => !orderPaid.includes(id) && !orderFree.includes(id));
+  const out: Record<string, string[]> = {};
+  for (const [pid, d] of Object.entries(details)) {
+    out[pid] = [...byCatalog(d.services, orderPaid), ...extras(d.services),
+                ...byCatalog(d.freePicks, orderFree), ...extras(d.freePicks)];
+  }
+  return out;
+}
+
+/** Services included in each pack — derived from the canonical pack details.
+ *  Pages must read this (or packServicesFrom(liveConfig)) and never hardcode.
+ *  NOTE: sovereign's free picks are deduplicated because 'ticketing' etc. also
+ *  appear in its paid list; consumers use Set membership anyway. */
 export const PACK_SERVICES: Record<PackId, string[]> = (() => {
-  const starter = ['endpoint', 'vuln', 'patch', 'backup', 'compliance'];
-  const pro = [...starter, 'email', 'incident', 'network', 'dns', 'analytics', 'threat_intel', 'ticketing'];
-  const souverain = [...pro, 'soar', 'cloud', 'firewall_mgmt', 'vpn', 'sdwan'];
-  return { starter, pro, souverain };
+  const derived = packServicesFrom(PRICING_CONFIG_V2);
+  const dedupe = (a: string[]) => [...new Set(a)];
+  return { starter: dedupe(derived.starter), pro: dedupe(derived.pro), souverain: dedupe(derived.souverain) };
 })();
 
 export function fmtMad(n: number): string {

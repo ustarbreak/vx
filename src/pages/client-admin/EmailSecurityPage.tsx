@@ -5,6 +5,8 @@ import {
   Filter, Search, Clock, User, Server
 } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { useAuth } from '../../context/AuthContext';
+import { demoEmailAlerts } from '../../data/demoWorld';
 
 interface EmailAlert {
   id: string;
@@ -19,8 +21,16 @@ interface EmailAlert {
   ticketCreated: boolean;
 }
 
+/** Numeric demo-org id from `org-dw-<n>` / backend numeric org ids. */
+const numericOrgId = (raw?: string | number | null): number | null => {
+  if (raw == null) return null;
+  const n = Number(String(raw).replace(/^org-dw-/, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 export default function EmailSecurityPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [alerts, setAlerts] = useState<EmailAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -35,58 +45,13 @@ export default function EmailSecurityPage() {
         // REAL DATA: same structure, fed by the service's open-source engine
         const live = await tryLiveFeed('email-security');
         if (live) { setAlerts(live as any); setLoading(false); return; }
-        const mockAlerts: EmailAlert[] = [
-          {
-            id: 'EMAIL-001',
-            type: 'phishing',
-            severity: 'critical',
-            sender: 'attacker@fake-bank.com',
-            recipient: 'john.doe@company.com',
-            subject: 'Urgent: Verify Your Account',
-            timestamp: '2027-01-15T09:30:00Z',
-            status: 'blocked',
-            device: 'mail-server-01',
-            ticketCreated: true,
-          },
-          {
-            id: 'EMAIL-002',
-            type: 'malware',
-            severity: 'high',
-            sender: 'newsletter@unknown.com',
-            recipient: 'jane.smith@company.com',
-            subject: 'Your Invoice Attached',
-            timestamp: '2027-01-15T08:45:00Z',
-            status: 'quarantined',
-            device: 'mail-server-01',
-            ticketCreated: false,
-          },
-          {
-            id: 'EMAIL-003',
-            type: 'spoofing',
-            severity: 'medium',
-            sender: 'ceo@company.com',
-            recipient: 'finance@company.com',
-            subject: 'Wire Transfer Request',
-            timestamp: '2027-01-15T07:20:00Z',
-            status: 'investigating',
-            device: 'mail-server-02',
-            ticketCreated: true,
-          },
-          {
-            id: 'EMAIL-004',
-            type: 'spam',
-            severity: 'low',
-            sender: 'promo@marketing.com',
-            recipient: 'all@company.com',
-            subject: 'Special Offer Just for You!',
-            timestamp: '2027-01-15T06:10:00Z',
-            status: 'blocked',
-            device: 'mail-server-01',
-            ticketCreated: false,
-          },
-        ];
-        
-        setAlerts(mockAlerts);
+        // Unified demo world fallback — every record references a real
+        // demoWorld device (fw-edge-01 / VLS-FW-EDGE / VVS-FW-01) and is
+        // scoped to the logged-in tenant, exactly like the backend feed.
+        const orgId = numericOrgId(user?.orgId as any);
+        setAlerts(orgId != null
+          ? demoEmailAlerts.filter(a => a.orgId === orgId)
+          : demoEmailAlerts);
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch email alerts:', error);
@@ -95,7 +60,7 @@ export default function EmailSecurityPage() {
     };
 
     fetchAlerts();
-  }, []);
+  }, [user?.orgId]);
 
   const filteredAlerts = alerts.filter(alert => {
     const matchesFilter = filter === 'all' || alert.type === filter;

@@ -4,8 +4,114 @@ import { Building2, Search, Eye, Edit, CheckCircle2, XCircle, Shield, Ban, Users
 import { demoOrganizations, serviceCatalog } from '../../data/mockData';
 import { Organization, ServiceId, ServiceEntitlement } from '../../types';
 import { organizationsApi, ApiError } from '../../services/api';
+import {
+  demoApiKeys, demoLicenses, demoDevices, demoTechnicians, demoPlatformAudit,
+} from '../../data/demoWorld';
 
 const ORG_TYPE_LABEL: Record<string, string> = { HQ: 'Siège (HQ)', SUBSIDIARY: 'Filiale', AGENCY: 'Agence' };
+
+// ---------------------------------------------------------------------------
+// DEMO WORLD RESOLVERS — every tab below reads the unified dataset in
+// src/data/demoWorld.ts (single source of truth). Legacy hard-coded maps
+// keyed by org-aegis / org-techstart / org-medsecure are deleted; the three
+// demo tenants map to their canonical backend ids (1/2/3). Backend-created
+// orgs fall back to their real asset_count so counts never contradict the DB.
+// ---------------------------------------------------------------------------
+const DW_ORG_ID: Record<string, number> = {
+  'org-infracentra': 1,   // Damanecash       (demoTenants[0])
+  'org-amigraph': 2,      // Valoris System   (demoTenants[1])
+  'org-galenica': 3,      // Vivalis Salaf    (demoTenants[2])
+};
+
+/** Canonical demo tenant id for an org row (demo alias or `org-db-<id>`), else null. */
+const dwOrgId = (orgId: string): number | null =>
+  DW_ORG_ID[orgId] ?? (/^org-db-(\d+)$/.exec(orgId)?.[1] ? Number(/^org-db-(\d+)$/.exec(orgId)![1]) : null);
+
+interface ClientApiKeyRow { key: string; label: string; createdAt: string; lastUsed: string; status: 'active' | 'revoked' }
+interface ClientLicenseRow { id: string; type: string; seats: number; endpoints: number; expiresAt: string; status: 'active' | 'expiring' | 'expired' }
+interface ClientDeviceRow { id: string; hostname: string; type: string; os: string; ip: string; status: 'online' | 'offline' | 'degraded'; lastSeen: string; agent: string; isProbe?: boolean }
+interface ClientMemberRow { name: string; email: string; role: string; mfa: boolean; lastLogin: string }
+interface ClientActivityRow { time: string; action: string; detail: string; actor: string; type: 'system' | 'alert' | 'compliance' | 'auth' | 'ticket' | 'rule' | 'license' }
+
+const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
+  const oid = dwOrgId(orgId);
+  if (oid == null) return [];
+  return demoApiKeys
+    .filter(k => k.orgId === oid)
+    .map(k => ({ key: k.key, label: k.label, createdAt: k.createdAt, lastUsed: k.lastUsed, status: k.status }));
+};
+
+const licenseFor = (org: Organization): ClientLicenseRow | null => {
+  const oid = dwOrgId(org.id);
+  const lic = oid != null ? demoLicenses.find(l => l.orgId === oid) : undefined;
+  if (lic) {
+    return { id: lic.id, type: lic.type, seats: lic.seats, endpoints: lic.endpoints, expiresAt: lic.expiresAt, status: lic.status };
+  }
+  // Backend org without a demo-license record → derive from its real billing fields.
+  if (oid != null && (org.planTier || org.endpointCount)) {
+    return {
+      id: `LIC-BACKEND-${oid}`, type: `${org.planTier ?? 'STARTER'} — ${org.billingCycle === 'ANNUAL' ? 'Annuel' : 'Mensuel'}`,
+      seats: org.seatLimit ?? 0, endpoints: org.endpointCount ?? 0,
+      expiresAt: org.billingCycle === 'ANNUAL' ? '2027-06-30' : '2026-12-31', status: 'active',
+    };
+  }
+  return null;
+};
+
+const devicesFor = (org: Organization): ClientDeviceRow[] => {
+  const oid = dwOrgId(org.id);
+  if (oid == null) return [];
+  const rows = demoDevices.filter(d => d.orgId === oid).map(d => ({
+    id: d.id, hostname: d.hostname, type: d.type, os: d.os, ip: d.ip, status: d.status,
+    lastSeen: new Date(Date.now() - d.lastSeenMin * 60_000).toISOString(),
+    agent: d.isProbe ? 'INFRAvx collector (probe)' : 'goinfra agent v1.4',
+    isProbe: !!d.isProbe,
+  }));
+  if (rows.length > 0) return rows;
+  // Real backend org not present in the demo world: show the count only via assetCount badge.
+  return [];
+};
+
+const deviceCountFor = (org: Organization): number => {
+  const n = devicesFor(org).length;
+  return n > 0 ? n : (org.assetCount ?? 0);
+};
+
+const membersFor = (orgId: string): ClientMemberRow[] => {
+  const oid = dwOrgId(orgId);
+  if (oid == null) return [];
+  return demoTechnicians
+    .filter(t => t.orgId === oid)
+    .map((t, i) => ({
+      name: t.name, email: t.email, role: t.role, mfa: t.email !== 'demo@infracentra.io',
+      lastLogin: new Date(Date.now() - (i + 1) * 47 * 60_000).toLocaleString(),
+    }));
+};
+
+const activityFor = (orgId: string): ClientActivityRow[] => {
+  const oid = dwOrgId(orgId);
+  const now = Date.now();
+  const rel = (iso: string) => {
+    const mins = Math.max(1, Math.round((now - new Date(iso).getTime()) / 60_000));
+    return mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} d ago`;
+  };
+  const auditType = (action: string): ClientActivityRow['type'] =>
+    action.startsWith('alert') ? 'alert' : action.startsWith('ticket') ? 'ticket'
+    : action.startsWith('rule') ? 'rule' : action.startsWith('license') ? 'license'
+    : action.startsWith('organization') ? 'auth' : 'system';
+  const scoped = oid == null ? [] : demoPlatformAudit.filter(a =>
+    a.detail.includes(String(oid)) ||
+    demoDevices.some(d => d.orgId === oid && a.detail.includes(d.hostname)) ||
+    ['y.elamrani@', 's.bennani@', 'n.benali@'].some(e => oid === 1 && a.actor.startsWith(e)) ||
+    ['k.chraibi@', 'a.fassi@'].some(e => oid === 2 && a.actor.startsWith(e)) ||
+    (oid === 3 && a.actor.includes('vivalissalaf'))
+  );
+  return [
+    ...scoped.map(a => ({ time: rel(a.created_at), action: a.action, detail: a.detail, actor: a.actor, type: auditType(a.action) })),
+    { time: '2 h ago', action: 'Risk score recalculated', detail: `Periodic scoring for ${oid ?? 'tenant'}`, actor: 'system', type: 'system' },
+    { time: '6 h ago', action: 'Threat intel feed updated', detail: 'MISP / OTX deltas ingested', actor: 'system', type: 'system' },
+  ];
+};
 
 // ---------------------------------------------------------------------------
 // Create-Organization modal — posts to the REAL backend (POST /api/organizations/)
@@ -107,47 +213,6 @@ const tierColors: Record<string, string> = {
   sme: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
   'mid-market': 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   enterprise: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-};
-
-// Mock API keys per client
-const mockApiKeys: Record<string, { key: string; createdAt: string; lastUsed: string; status: 'active' | 'revoked' }[]> = {
-  'org-aegis': [
-    { key: 'ic_live_a1b2c3d4e5f6g7h8i9j0', createdAt: '2026-06-15', lastUsed: '2027-01-15T09:00:00Z', status: 'active' },
-    { key: 'ic_test_x9y8z7w6v5u4t3s2r1q0', createdAt: '2026-06-15', lastUsed: '2027-01-14T18:00:00Z', status: 'active' },
-  ],
-  'org-techstart': [
-    { key: 'ic_live_m1n2o3p4q5r6s7t8u9v0', createdAt: '2026-09-20', lastUsed: '2027-01-15T07:40:00Z', status: 'active' },
-  ],
-  'org-medsecure': [
-    { key: 'ic_live_w1x2y3z4a5b6c7d8e9f0', createdAt: '2026-11-01', lastUsed: '2027-01-15T06:30:00Z', status: 'active' },
-  ],
-};
-
-// Mock licenses
-const mockLicenses: Record<string, { id: string; type: string; seats: number; expiresAt: string; status: 'active' | 'expiring' | 'expired' }> = {
-  'org-aegis': { id: 'LIC-2026-001', type: 'Enterprise Annual', seats: 500, expiresAt: '2028-06-15', status: 'active' },
-  'org-techstart': { id: 'LIC-2026-002', type: 'SME Annual', seats: 50, expiresAt: '2027-09-20', status: 'expiring' },
-  'org-medsecure': { id: 'LIC-2026-003', type: 'Mid-Market Annual', seats: 200, expiresAt: '2027-11-01', status: 'active' },
-};
-
-// Mock devices per client
-const mockDevices: Record<string, { id: string; hostname: string; type: string; os: string; ip: string; status: 'online' | 'offline' | 'degraded'; lastSeen: string; agent: string }[]> = {
-  'org-aegis': [
-    { id: 'dev-001', hostname: 'FIN-WS-042', type: 'endpoint', os: 'Windows 11', ip: '10.0.5.42', status: 'online', lastSeen: '2027-01-15T09:20:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-002', hostname: 'FIN-SRV-003', type: 'server', os: 'Windows Server 2022', ip: '10.0.1.3', status: 'online', lastSeen: '2027-01-15T09:20:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-003', hostname: 'DEV-SRV-007', type: 'server', os: 'Ubuntu 22.04', ip: '10.0.2.7', status: 'online', lastSeen: '2027-01-15T09:20:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-004', hostname: 'HR-DB-001', type: 'database', os: 'RHEL 9', ip: '10.0.3.1', status: 'online', lastSeen: '2027-01-15T09:20:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-005', hostname: 'MKT-WS-018', type: 'endpoint', os: 'macOS 14.2', ip: '10.0.5.18', status: 'degraded', lastSeen: '2027-01-15T08:45:00Z', agent: 'EDR v4.2.0' },
-  ],
-  'org-techstart': [
-    { id: 'dev-101', hostname: 'TS-WS-001', type: 'endpoint', os: 'Windows 11', ip: '192.168.1.10', status: 'online', lastSeen: '2027-01-15T07:40:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-102', hostname: 'TS-SRV-001', type: 'server', os: 'Ubuntu 22.04', ip: '192.168.1.2', status: 'online', lastSeen: '2027-01-15T07:40:00Z', agent: 'EDR v4.2.1' },
-  ],
-  'org-medsecure': [
-    { id: 'dev-201', hostname: 'MS-WS-001', type: 'endpoint', os: 'Windows 11', ip: '172.16.0.10', status: 'online', lastSeen: '2027-01-15T06:30:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-202', hostname: 'MS-SRV-001', type: 'server', os: 'Windows Server 2022', ip: '172.16.0.2', status: 'online', lastSeen: '2027-01-15T06:30:00Z', agent: 'EDR v4.2.1' },
-    { id: 'dev-203', hostname: 'MS-DB-001', type: 'database', os: 'RHEL 9', ip: '172.16.0.3', status: 'online', lastSeen: '2027-01-15T06:30:00Z', agent: 'EDR v4.2.1' },
-  ],
 };
 
 export default function PlatformClientsPage() {
@@ -270,7 +335,7 @@ export default function PlatformClientsPage() {
             {filtered.map(org => {
               const orgEnts = getEntitlements(org.id);
               const activeCount = orgEnts.filter(e => e.enabled).length;
-              const deviceCount = mockDevices[org.id]?.length || 0;
+              const deviceCount = deviceCountFor(org);
               return (
                 <tr key={org.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] transition-colors cursor-pointer" onClick={() => { setSelectedOrg(org); setActiveTab('services'); }}>
                   <td className="px-4 py-3">
@@ -457,7 +522,7 @@ export default function PlatformClientsPage() {
               {activeTab === 'devices' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({mockDevices[selectedOrg.id]?.length || 0})</h3>
+                    <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({deviceCountFor(selectedOrg)})</h3>
                     <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
                       Deploy Agent
                     </button>
@@ -476,9 +541,14 @@ export default function PlatformClientsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {mockDevices[selectedOrg.id]?.map(device => (
+                        {devicesFor(selectedOrg).map(device => (
                           <tr key={device.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
-                            <td className="px-4 py-3 text-sm text-[var(--ic-heading)] font-mono">{device.hostname}</td>
+                            <td className="px-4 py-3 text-sm text-[var(--ic-heading)] font-mono">
+                              {device.hostname}
+                              {device.isProbe && (
+                                <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-cyan-500/10 text-cyan-400 border border-[var(--ic-border)]">Probe</span>
+                              )}
+                            </td>
                             <td className="px-4 py-3 text-xs text-[var(--ic-muted)] capitalize">{device.type}</td>
                             <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{device.os}</td>
                             <td className="px-4 py-3 text-xs text-[var(--ic-muted)] font-mono">{device.ip}</td>
@@ -524,67 +594,23 @@ export default function PlatformClientsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {/* Mock members based on org */}
-                        {selectedOrg.id === 'org-infracentra' && (
-                          <>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Sarah Chen</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">sarah.chen@infracentracorp.io</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-500/10 text-purple-400">Admin</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-15 09:15</td>
-                            </tr>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Marcus Johnson</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">marcus.j@infracentracorp.io</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/10 text-blue-400">Analyst</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-15 08:50</td>
-                            </tr>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Alex Rivera</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">alex.r@infracentracorp.io</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/10 text-blue-400">Analyst</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-14 22:00</td>
-                            </tr>
-                          </>
-                        )}
-                        {selectedOrg.id === 'org-techstart' && (
-                          <>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Jordan Kim</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">jordan@techstart.io</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-500/10 text-purple-400">Admin</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-15 07:40</td>
-                            </tr>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Sam Ortiz</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">sam@techstart.io</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/10 text-blue-400">User</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-red">Disabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-14 19:10</td>
-                            </tr>
-                          </>
-                        )}
-                        {selectedOrg.id === 'org-medsecure' && (
-                          <>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Dr. Lisa Wong</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">dr.wong@medsecure.health</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-purple-500/10 text-purple-400">Admin</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-15 06:30</td>
-                            </tr>
-                            <tr className="border-b border-[var(--ic-border)]">
-                              <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">Parker Nguyen</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">parker@medsecure.health</td>
-                              <td className="px-4 py-3"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/10 text-blue-400">User</span></td>
-                              <td className="px-4 py-3 text-xs text-cyber-green">Enabled</td>
-                              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">2027-01-15 08:00</td>
-                            </tr>
-                          </>
+                        {membersFor(selectedOrg.id).map(member => (
+                          <tr key={member.email} className="border-b border-[var(--ic-border)]">
+                            <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">{member.name}</td>
+                            <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{member.email}</td>
+                            <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                              member.role === 'client_admin' || member.role === 'platform_admin'
+                                ? 'bg-purple-500/10 text-purple-400'
+                                : member.role === 'analyst' || member.role === 'service-desk'
+                                  ? 'bg-blue-500/10 text-blue-400'
+                                  : 'bg-cyan-500/10 text-cyan-400'
+                            }`}>{member.role.replace(/_/g, ' ')}</span></td>
+                            <td className={`px-4 py-3 text-xs ${member.mfa ? 'text-cyber-green' : 'text-cyber-red'}`}>{member.mfa ? 'Enabled' : 'Disabled'}</td>
+                            <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{member.lastLogin}</td>
+                          </tr>
+                        ))}
+                        {membersFor(selectedOrg.id).length === 0 && (
+                          <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">Aucun membre dans le demo world pour ce tenant — créez des utilisateurs depuis le backend.</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -602,11 +628,12 @@ export default function PlatformClientsPage() {
                     </button>
                   </div>
                   <div className="space-y-3">
-                    {mockApiKeys[selectedOrg.id]?.map((apiKey, idx) => (
+                    {apiKeysFor(selectedOrg.id).map((apiKey, idx) => (
                       <div key={idx} className="p-4 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)]">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <code className="text-sm text-[var(--ic-heading)] font-mono">{apiKey.key}</code>
+                            <span className="text-[10px] uppercase tracking-wider text-[var(--ic-muted)]">{apiKey.label}</span>
                             <button className="p-1 rounded text-[var(--ic-muted)] hover:text-cyan-400 hover:bg-cyan-500/10">
                               <Copy className="w-3.5 h-3.5" />
                             </button>
@@ -631,44 +658,53 @@ export default function PlatformClientsPage() {
                         </div>
                       </div>
                     ))}
+                    {apiKeysFor(selectedOrg.id).length === 0 && (
+                      <p className="text-xs text-[var(--ic-muted)] py-6 text-center">Aucune clé API pour ce tenant dans le demo world.</p>
+                    )}
                   </div>
                 </div>
               )}
 
-              {activeTab === 'license' && (
+              {activeTab === 'license' && (() => {
+                const license = licenseFor(selectedOrg);
+                return (
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">License Information</h3>
-                  {mockLicenses[selectedOrg.id] && (
+                  {license && (
                     <div className="p-6 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)]">
                       <div className="grid grid-cols-2 gap-6">
                         <div>
                           <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">License ID</p>
-                          <p className="text-sm text-[var(--ic-heading)] font-mono mt-1">{mockLicenses[selectedOrg.id].id}</p>
+                          <p className="text-sm text-[var(--ic-heading)] font-mono mt-1">{license.id}</p>
                         </div>
                         <div>
                           <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Type</p>
-                          <p className="text-sm text-[var(--ic-heading)] mt-1">{mockLicenses[selectedOrg.id].type}</p>
+                          <p className="text-sm text-[var(--ic-heading)] mt-1">{license.type}</p>
                         </div>
                         <div>
                           <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Seats</p>
-                          <p className="text-sm text-[var(--ic-heading)] mt-1">{mockLicenses[selectedOrg.id].seats}</p>
+                          <p className="text-sm text-[var(--ic-heading)] mt-1">{license.seats}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Endpoints</p>
+                          <p className="text-sm text-[var(--ic-heading)] mt-1">{license.endpoints}</p>
                         </div>
                         <div>
                           <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Expires</p>
-                          <p className="text-sm text-[var(--ic-heading)] mt-1">{mockLicenses[selectedOrg.id].expiresAt}</p>
+                          <p className="text-sm text-[var(--ic-heading)] mt-1">{license.expiresAt}</p>
                         </div>
                         <div>
                           <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Status</p>
                           <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${
-                            mockLicenses[selectedOrg.id].status === 'active' ? 'bg-cyber-green/10 text-cyber-green' :
-                            mockLicenses[selectedOrg.id].status === 'expiring' ? 'bg-cyber-yellow/10 text-cyber-yellow' :
+                            license.status === 'active' ? 'bg-cyber-green/10 text-cyber-green' :
+                            license.status === 'expiring' ? 'bg-cyber-yellow/10 text-cyber-yellow' :
                             'bg-red-500/10 text-red-400'
                           }`}>
                             <span className={`w-1.5 h-1.5 rounded-full ${
-                              mockLicenses[selectedOrg.id].status === 'active' ? 'bg-cyber-green' :
-                              mockLicenses[selectedOrg.id].status === 'expiring' ? 'bg-cyber-yellow' : 'bg-red-500'
+                              license.status === 'active' ? 'bg-cyber-green' :
+                              license.status === 'expiring' ? 'bg-cyber-yellow' : 'bg-red-500'
                             }`} />
-                            {mockLicenses[selectedOrg.id].status}
+                            {license.status}
                           </span>
                         </div>
                       </div>
@@ -679,28 +715,30 @@ export default function PlatformClientsPage() {
                       </div>
                     </div>
                   )}
+                  {!license && (
+                    <p className="text-xs text-[var(--ic-muted)] py-6 text-center">No license record for this organization.</p>
+                  )}
                 </div>
-              )}
+                );
+              })()}
 
               {activeTab === 'activity' && (
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">Recent Activity</h3>
                   <div className="space-y-2">
-                    {[
-                      { time: '2 min ago', action: 'Risk score recalculated', type: 'system' },
-                      { time: '15 min ago', action: 'New threat alert detected', type: 'alert' },
-                      { time: '1 hour ago', action: 'Compliance scan completed', type: 'compliance' },
-                      { time: '3 hours ago', action: 'User login successful', type: 'auth' },
-                      { time: '6 hours ago', action: 'Threat intel feed updated', type: 'system' },
-                    ].map((log, i) => (
+                    {activityFor(selectedOrg.id).map((log, i) => (
                       <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                           log.type === 'alert' ? 'bg-red-500' :
+                          log.type === 'ticket' ? 'bg-cyan-500' :
+                          log.type === 'rule' ? 'bg-emerald-500' :
+                          log.type === 'license' ? 'bg-amber-500' :
                           log.type === 'compliance' ? 'bg-purple-500' :
                           log.type === 'auth' ? 'bg-yellow-500' : 'bg-slate-500'
                         }`} />
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           <p className="text-sm text-[var(--ic-text)]">{log.action}</p>
+                          <p className="text-xs text-[var(--ic-muted)] truncate" title={log.detail}>{log.detail} · {log.actor}</p>
                         </div>
                         <span className="text-xs text-[var(--ic-muted)] flex-shrink-0">{log.time}</span>
                       </div>

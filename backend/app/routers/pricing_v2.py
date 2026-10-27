@@ -87,8 +87,12 @@ def _sales_or_admin(user: User) -> User:
 # ---------------------------------------------------------------------------
 @v1_router.get("/config")
 async def get_pricing_config():
-    """Public versioned pricing config (single source of truth)."""
-    return PRICING_CONFIG
+    """Public versioned pricing config (single source of truth).
+
+    Carries `packDetails` — the LIVE pack composition edited by the platform
+    admin in the Pack Customizer (/admin/packs), seeded with the shipped
+    defaults. Clients derive PACK_SERVICES from it, never hardcode."""
+    return _live_config
 
 
 class LeadIn(BaseModel):
@@ -661,15 +665,89 @@ async def request_upgrade(body: UpgradeRequestIn, db: AsyncSession = Depends(get
 # ---------------------------------------------------------------------------
 # Entitlements v2 (locked cards in the tenant portal)
 # ---------------------------------------------------------------------------
-PACK_SERVICES = {
-    "starter": ["endpoint", "vuln", "patch", "backup", "compliance"],
-    "pro": ["endpoint", "vuln", "patch", "backup", "compliance", "email", "incident",
-            "network", "dns", "analytics", "threat_intel", "ticketing"],
-    "souverain": ["endpoint", "vuln", "patch", "backup", "compliance", "email", "incident",
-                  "network", "dns", "analytics", "threat_intel", "ticketing",
-                  "soar", "cloud", "firewall_mgmt", "vpn", "sdwan"],
-    "trial": ["dns", "analytics", "threat_intel"],
+# DEFAULT pack composition — mirror of DEFAULT_PACK_DETAILS in
+# src/data/pricingConfig.ts. PACK_SERVICES is DERIVED from it via
+# _pack_services_from(); pages/entitlements never hardcode a second copy.
+DEFAULT_PACK_DETAILS: Dict[str, Any] = {
+    "starter": {
+        "services": ["endpoint", "vuln", "patch", "backup", "compliance"],
+        "freePicks": [],
+    },
+    "pro": {
+        "services": ["endpoint", "vuln", "patch", "backup", "compliance", "email", "incident", "network"],
+        "freePicks": ["dns", "analytics", "threat_intel", "ticketing"],
+    },
+    "souverain": {
+        "services": ["endpoint", "vuln", "patch", "backup", "compliance", "email", "incident",
+                     "network", "soar", "cloud", "firewall_mgmt", "vpn", "sdwan"],
+        "freePicks": ["dns", "analytics", "threat_intel", "ticketing"],
+    },
 }
+
+
+def _pack_services_from(details: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, List[str]]:
+    """Derive each pack's service list (paid + free picks) from its customizer
+    definition, ordered by the canonical catalogs — mirror of
+    packServicesFrom() in src/data/pricingConfig.ts."""
+    order_paid = [s["id"] for s in cfg["services"]]
+    order_free = [f["id"] for f in cfg["freePool"]]
+    out: Dict[str, List[str]] = {}
+    for pid, d in details.items():
+        svc, free = list(d.get("services", [])), list(d.get("freePicks", []))
+        known = set(order_paid) | set(order_free)
+        picked = [i for i in order_paid if i in svc] + [i for i in svc if i not in known] \
+               + [i for i in order_free if i in free] + [i for i in free if i not in known]
+        seen: List[str] = []
+        for i in picked:
+            if i not in seen:
+                seen.append(i)
+        out[pid] = seen
+    return out
+
+
+# Live config served by GET /pricing/config — starts as the bundled copy and
+# carries admin edits made through the Pack Customizer (/admin/packs).
+_live_config: Dict[str, Any] = json.loads(json.dumps(PRICING_CONFIG))
+_live_config["packDetails"] = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
+
+# Persistence for the live pack composition (Pack Customizer edits). In-memory
+# state alone is lost on restart/reload; we mirror it to a small JSON file next
+# to the backend so edits survive dev-server restarts. Override the location
+# with env PACK_STORE_PATH (e.g. a mounted volume in Docker/prod).
+_PACK_STORE_PATH = os.environ.get(
+    "PACK_STORE_PATH",
+    str(FsPath(__file__).resolve().parents[2] / "data" / "pack_details.json"),
+)
+
+
+def _persist_pack_details() -> None:
+    try:
+        p = FsPath(_PACK_STORE_PATH)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(_live_config["packDetails"], ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:  # read-only FS etc. — in-memory state still correct
+        pass
+
+
+def _load_pack_details() -> None:
+    try:
+        raw = FsPath(_PACK_STORE_PATH).read_text(encoding="utf-8")
+        stored = json.loads(raw)
+        if isinstance(stored, dict):
+            merged = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
+            for pid, d in stored.items():
+                if isinstance(d, dict) and isinstance(d.get("services"), list) and isinstance(d.get("freePicks"), list):
+                    base = merged.get(pid) or {}
+                    merged[pid] = {**base, **d, "id": pid}
+            _live_config["packDetails"] = merged
+    except (OSError, ValueError):
+        pass
+
+
+_load_pack_details()
+
+PACK_SERVICES = _pack_services_from(DEFAULT_PACK_DETAILS, PRICING_CONFIG)
+PACK_SERVICES["trial"] = ["dns", "analytics", "threat_intel"]
 NEXT_PACK_MSG = {"starter": "Pro", "pro": "Souverain", "souverain": "Sur mesure"}
 
 
@@ -683,7 +761,7 @@ async def my_entitlements(db: AsyncSession = Depends(get_db),
     plan = (org.plan_tier or "STARTER").lower() if org else "starter"
     if org and org.trial:
         plan = "trial"
-    included = PACK_SERVICES.get(plan, PACK_SERVICES["starter"])
+    included = _pack_services_from(_live_config["packDetails"], PRICING_CONFIG).get(plan, PACK_SERVICES["starter"])
     all_services = [s["id"] for s in PRICING_CONFIG["services"]] + [f["id"] for f in PRICING_CONFIG["freePool"]]
     locked = [sid for sid in all_services if sid not in included]
     labels = {
@@ -717,3 +795,94 @@ async def sync_pricing_config(db: AsyncSession):
             for sid in services:
                 db.add(PlanEntitlementV2(plan=plan, service_id=sid, included=True))
         await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# PACK CUSTOMIZER (platform admin only) — mirrors demoMode.ts /pricing/packs.
+# The step-by-step wizard in /admin/packs edits one pack at a time; every save
+# updates the LIVE config served by GET /pricing/config, re-derives
+# PACK_SERVICES and persists PlanEntitlementV2 rows so tenant portals, locked
+# cards and seed entitlements all follow the customized packs automatically.
+# ---------------------------------------------------------------------------
+class PackCustomizerIn(BaseModel):
+    services: List[str]
+    freePicks: List[str] = Field(default_factory=list)
+    # optional overrides of the numeric pack attributes (step 1/4 of the wizard)
+    price: Optional[float] = None
+    minUnits: Optional[int] = None
+    maxUnits: Optional[int] = None
+    retentionDays: Optional[int] = None
+    backupQuotaGbPerUnit: Optional[int] = None
+    support: Optional[str] = None
+    onboarding: Optional[float] = None
+
+
+def _persist_pack(db: AsyncSession, pid: str, d: Dict[str, Any]) -> None:
+    """Write PlanEntitlementV2 rows for one pack (delete-then-insert, idempotent)."""
+    from sqlalchemy import delete as sa_delete
+    db.add(sa_delete(PlanEntitlementV2).where(PlanEntitlementV2.plan == pid))
+    for sid in _pack_services_from({pid: d}, PRICING_CONFIG)[pid]:
+        db.add(PlanEntitlementV2(plan=pid, service_id=sid, included=True))
+
+
+@v1_router.get("/packs")
+async def list_packs():
+    """Effective pack composition + diff vs the shipped defaults."""
+    details = _live_config["packDetails"]
+    derived = _pack_services_from(details, PRICING_CONFIG)
+    base_derived = _pack_services_from(DEFAULT_PACK_DETAILS, PRICING_CONFIG)
+    eff = {}
+    for pid, d in details.items():
+        cur = set(derived.get(pid, []))
+        base = set(base_derived.get(pid, []))
+        eff[pid] = {
+            "id": pid,
+            "configured": json.dumps(d, sort_keys=True) != json.dumps(DEFAULT_PACK_DETAILS.get(pid, {}), sort_keys=True),
+            "services": d.get("services", []), "free_picks": d.get("freePicks", []),
+            "added": sorted(cur - base), "removed": sorted(base - cur),
+        }
+    return {"version": _live_config["version"], "packs": details, "effective": eff}
+
+
+@v1_router.put("/packs/{pack_id}")
+async def update_pack(pack_id: str, body: PackCustomizerIn, db: AsyncSession = Depends(get_db),
+                      user: User = Depends(get_current_user)):
+    if user.role != "platform_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform admin only")
+    known = {s["id"] for s in PRICING_CONFIG["services"]} | {f["id"] for f in PRICING_CONFIG["freePool"]}
+    invalid = [i for i in body.services + body.freePicks if i not in known]
+    if invalid:
+        raise HTTPException(400, f"Service(s) inconnu(s): {', '.join(invalid)}")
+    prev = _live_config["packDetails"].get(pack_id) or DEFAULT_PACK_DETAILS.get(pack_id)
+    if prev is None and pack_id not in ("custom",):
+        raise HTTPException(404, f"Pack inconnu: {pack_id}")
+    merged = dict(prev or {})
+    merged.update({"id": pack_id, "services": body.services, "freePicks": body.freePicks})
+    for k_src, k_dst in (("price", "price"), ("minUnits", "minUnits"), ("maxUnits", "maxUnits"),
+                         ("retentionDays", "retentionDays"), ("backupQuotaGbPerUnit", "backupQuotaGbPerUnit"),
+                         ("support", "support"), ("onboarding", "onboarding")):
+        v = getattr(body, k_src, None)
+        if v is not None:
+            merged[k_dst] = v
+            if k_dst in (_live_config["packs"].get(pack_id) or {}):
+                _live_config["packs"].setdefault(pack_id, {})[k_dst] = v
+    _live_config["packDetails"][pack_id] = merged
+    _persist_pack_details()
+    _persist_pack(db, pack_id, merged)
+    await db.commit()
+    await _audit(db, user, "pricing.pack.updated", "pack", pack_id,
+                 f"{len(body.services)} payants + {len(body.freePicks)} inclus")
+    return {"ok": True, "pack": merged}
+
+
+@v1_router.post("/packs/reset")
+async def reset_packs(db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+    if user.role != "platform_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform admin only")
+    _live_config["packDetails"] = json.loads(json.dumps(DEFAULT_PACK_DETAILS))
+    _persist_pack_details()
+    for pid, d in DEFAULT_PACK_DETAILS.items():
+        _persist_pack(db, pid, d)
+    await db.commit()
+    await _audit(db, user, "pricing.packs.reset", "pack", "all", "composition par défaut restaurée")
+    return {"ok": True, "version": _live_config["version"]}

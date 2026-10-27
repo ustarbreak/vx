@@ -15,6 +15,7 @@
 import {
   demoTenants, demoDevices, demoAlertSeeds, demoTicketSeeds, demoPlaybookSeeds, demoTechnicians,
   computeDemoStats, isDemoWorldInstalled, markDemoWorldInstalled, DEMO_WORLD_VERSION,
+  demoPlatformAudit,
 } from '../data/demoWorld';
 import { demoProjects } from '../data/demoProjects';
 import { partners, partnerProgramStats } from '../data/partnerWorld';
@@ -29,9 +30,12 @@ const monitoringRules: DemoRule[] = JSON.parse(JSON.stringify(demoRulesSeed));
 const grantsStore: Record<string, Record<string, { enabled: boolean; override_plan: boolean; granted_by: string; updated_at: string }>> = {};
 // goinfra enrollment tokens (demo): secret shown once, kept in memory per org.
 const agentTokensStore: Record<string, any[]> = {};
-/** Platform-level audit trail for admin actions (grants, rules, partners). */
-const platformAudit: { id: number; action: string; detail: string; actor: string; created_at: string }[] = [];
-let pAuditSeq = 1;
+/** Platform-level audit trail for admin actions (grants, rules, partners).
+ *  Seeded from demoWorld.ts (demoPlatformAudit) so the platform Activity /
+ *  audit views are non-empty on first load; newest entries unshifted above. */
+const platformAudit: { id: number; action: string; detail: string; actor: string; created_at: string }[] =
+  JSON.parse(JSON.stringify(demoPlatformAudit));
+let pAuditSeq = demoPlatformAudit.reduce((m, a) => Math.max(m, a.id), 0) + 1;
 function pushPlatformAudit(action: string, detail: string) {
   platformAudit.unshift({ id: pAuditSeq++, action, detail, actor: demoSession().email ?? 'ops@infracentra.io', created_at: new Date().toISOString() });
   if (platformAudit.length > 200) platformAudit.pop();
@@ -96,7 +100,43 @@ const orgs: DemoOrg[] = demoTenants.map(t => ({ ...t }));
 // (src/services/pricingEngine.ts + src/data/pricingConfig.ts) so the UI numbers
 // always match the backend formula. v1 (src/config/pricing.ts) is DELETED.
 import { quote } from './pricingEngine';
-import { PRICING_CONFIG_V2, fmtMad, type PackId } from '../data/pricingConfig';
+import { PRICING_CONFIG_V2, DEFAULT_PACK_DETAILS, fmtMad, type PackId } from '../data/pricingConfig';
+
+/** Live pack composition edited by the platform admin in the Pack Customizer
+ *  (/admin/packs). Seeded from localStorage (key below) so edits survive a
+ *  page refresh / dev-server restart, falling back to the shipped defaults;
+ *  PUT /pricing/packs/{id}
+ *  mutates it and GET /pricing/config returns it as `packDetails` — exactly
+ *  like the FastAPI backend (pricing_v2.py _live_config). */
+const PACK_STORE_KEY = 'infracentra.packCustomizer.v1';
+
+/** Load the last saved pack composition from localStorage (Demo Mode only). */
+function loadStoredPackDetails(): Record<string, any> {
+  const fresh = () => JSON.parse(JSON.stringify(DEFAULT_PACK_DETAILS));
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(PACK_STORE_KEY) : null;
+    if (!raw) return fresh();
+    const parsed = JSON.parse(raw);
+    // Merge onto defaults so new packs/fields added later never disappear.
+    const merged: Record<string, any> = fresh();
+    for (const [pid, def] of Object.entries(parsed as Record<string, any>)) {
+      if (def && Array.isArray(def.services) && Array.isArray(def.freePicks)) {
+        merged[pid] = { ...(merged[pid] ?? {}), ...def, id: pid };
+      }
+    }
+    return merged;
+  } catch {
+    return fresh();
+  }
+}
+
+function persistPackDetails(store: Record<string, any>): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(PACK_STORE_KEY, JSON.stringify(store));
+  } catch { /* storage full/unavailable — in-memory state still correct */ }
+}
+
+let livePackDetails: Record<string, any> = loadStoredPackDetails();
 
 /** Legacy tier name -> V2 pack id. */
 const PACK_FROM_LEGACY: Record<string, PackId> = { STARTER: 'starter', PRO: 'pro', SOUVERAIN: 'souverain' };
@@ -827,7 +867,36 @@ export const demoStore = {
     // POST /pricing/quote    -> pack or custom quote from the request body
     if (root === 'pricing') {
       if (method === 'GET' && parts[1] === 'config') {
-        return delay(PRICING_CONFIG_V2 as any) as unknown as T;
+        return delay({ ...PRICING_CONFIG_V2, packDetails: livePackDetails } as any) as unknown as T;
+      }
+      // ---- Pack Customizer (/admin/packs) — mirrors pricing_v2.py ----
+      if (parts[1] === 'packs' && method === 'GET') {
+        const eff: Record<string, any> = {};
+        for (const [pid, d] of Object.entries(livePackDetails)) {
+          const base = DEFAULT_PACK_DETAILS[pid];
+          const added = (base ? [...d.services, ...d.freePicks].filter(x => !(base.services.includes(x) || base.freePicks.includes(x))) : [...d.services, ...d.freePicks]);
+          const removed = (base ? [...base.services, ...base.freePicks].filter(x => !(d.services.includes(x) || d.freePicks.includes(x))) : []);
+          eff[pid] = { id: pid, configured: JSON.stringify(d) !== JSON.stringify(base), services: d.services, free_picks: d.freePicks, added, removed };
+        }
+        return delay({ version: PRICING_CONFIG_V2.version, packs: livePackDetails, effective: eff } as any) as unknown as T;
+      }
+      if (parts[1] === 'packs' && parts[2] && method === 'PUT') {
+        const pid = parts[2];
+        const def = b as any;
+        if (!Array.isArray(def.services) || !Array.isArray(def.freePicks)) {
+          return Promise.reject(new Error('Pack invalide : services et freePicks requis.')) as unknown as T;
+        }
+        const prev = livePackDetails[pid] ?? DEFAULT_PACK_DETAILS[pid];
+        livePackDetails = { ...livePackDetails, [pid]: { ...(prev ?? {} as any), ...def, id: pid } };
+        persistPackDetails(livePackDetails);
+        pushPlatformAudit('pricing.pack.updated', `pack « ${pid} » : ${def.services.length + def.freePicks.length} services (${def.services.length} payants, ${def.freePicks.length} inclus)`);
+        return delay({ ok: true, pack: livePackDetails[pid] } as any) as unknown as T;
+      }
+      if (parts[1] === 'packs' && parts[2] === 'reset' && method === 'POST') {
+        livePackDetails = JSON.parse(JSON.stringify(DEFAULT_PACK_DETAILS));
+        persistPackDetails(livePackDetails);
+        pushPlatformAudit('pricing.packs.reset', 'composition des packs restaurée aux valeurs par défaut');
+        return delay({ ok: true, version: PRICING_CONFIG_V2.version } as any) as unknown as T;
       }
       if (method === 'GET' && parts[1] === 'invoice') {
         const s = demoSession();
