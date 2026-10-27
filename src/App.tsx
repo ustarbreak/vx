@@ -59,7 +59,7 @@ import StatisticsPage from './pages/client-admin/StatisticsPage';
 import NetworkStatistics from './pages/client-admin/NetworkStatistics';
 import DeviceStatistics from './pages/client-admin/DeviceStatistics';
 import PerformanceStatistics from './pages/client-admin/PerformanceStatistics';
-import DeviceDetails from './pages/client-admin/DeviceDetails';
+import DeviceDetailsPage from './pages/client-admin/DeviceDetailsPage';
 import EmailSecurityPage from './pages/client-admin/EmailSecurityPage';
 import EndpointProtectionPage from './pages/client-admin/EndpointProtectionPage';
 import CloudSecurityPage from './pages/client-admin/CloudSecurityPage';
@@ -212,7 +212,7 @@ function AppRoutes() {
         <Route path="client-admin/statistics/network" element={<NetworkStatistics />} />
         <Route path="client-admin/statistics/devices" element={<DeviceStatistics />} />
         <Route path="client-admin/statistics/performance" element={<PerformanceStatistics />} />
-        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetails />} />
+        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetailsPage />} />
         <Route path="client-admin/tickets" element={<Navigate to="/client-admin/advanced-tickets" replace />} />
         
         {/* Service-specific pages */}
