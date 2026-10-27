@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, isDemoMode } from '../context/AuthContext';
 import { DEMO_WORLD_VERSION, computeDemoStats, isDemoWorldInstalled } from '../data/demoWorld';
 
@@ -82,12 +82,24 @@ interface NavGroup {
   group: true;
   icon: any;
   label: string;
-  items: NavItem[];
+  items: NavEntry[];
 }
 
 type NavEntry = NavItem | NavGroup;
 
 const isGroup = (e: NavEntry): e is NavGroup => (e as NavGroup).group === true;
+
+/** All leaf routes contained in a nav entry (recursive for nested groups). */
+const entryRoutes = (e: NavEntry): string[] =>
+  isGroup(e) ? e.items.flatMap(entryRoutes) : [e.to];
+
+/** Stable key for a group header — unique even when sub-groups share labels. */
+const groupKey = (g: NavGroup, depth: number) => `${depth}:${g.label}`;
+
+/** True if the current pathname matches an item route (exact or nested child,
+ *  e.g. /admin/tenants/3 highlights under Tenant Manager). */
+const routeMatches = (to: string, pathname: string) =>
+  pathname === to || pathname.startsWith(to + '/');
 
 // ---------------------------------------------------------------------------
 // Command palette index — every feature searchable under BOTH its new and its
@@ -182,36 +194,63 @@ export default function Layout() {
   let adminNav: NavEntry[] = [];
   let servicesNav: NavEntry[] = [];
 
+  // ---------------------------------------------------------------------------
+  // Platform Admin — five logical groups (OVERVIEW · TENANT & CUSTOMERS ·
+  // SECURITY OPERATIONS · MANAGEMENT · PLATFORM). Every entry reuses an
+  // existing route; nothing here creates new pages or renames destinations.
+  // ---------------------------------------------------------------------------
+  const PLATFORM_ADMIN_GROUPS: NavGroup[] = [
+    {
+      group: true, icon: LayoutDashboard, label: 'Overview', items: [
+        { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+      ],
+    },
+    {
+      group: true, icon: Building2, label: 'Tenant & Customers', items: [
+        { to: '/admin/clients', icon: Building2, label: 'Tenant Manager' },
+        { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
+      ],
+    },
+    {
+      group: true, icon: ShieldCheck, label: 'Security Operations', items: [
+        {
+          group: true, icon: Monitor, label: 'Asset Inventory', items: [
+            { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
+            { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
+            { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+          ],
+        },
+        { to: '/admin/services-ops', icon: BellRing, label: 'Ticketing & Alerts Ops' },
+        { to: '/client-admin/advanced-tickets', icon: Ticket, label: 'Service Desk' },
+        { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
+        {
+          group: true, icon: Zap, label: 'Automation', items: [
+            { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
+            { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
+            { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
+          ],
+        },
+      ],
+    },
+    {
+      group: true, icon: UserCog, label: 'Management', items: [
+        { to: '/projects', icon: FolderKanban, label: 'Project Manager' },
+        { to: '/reports', icon: FileBarChart2, label: 'Reports' },
+        { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
+      ],
+    },
+    {
+      group: true, icon: Server, label: 'Platform', items: [
+        { to: '/admin/themes', icon: Palette, label: 'Infracentra Themes' },
+        { to: '/admin/packs', icon: Package, label: 'Pack Customizer' },
+        { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
+      ],
+    },
+  ];
+
   if (user?.role === 'platform_admin') {
-    operationsNav = [
-      { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-      { to: '/admin/clients', icon: Building2, label: 'Tenant Manager (Clients)' },
-      { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
-      { to: '/admin/themes', icon: Palette, label: 'Infracentra Themes' },
-      { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
-      { to: '/admin/services-ops', icon: BellRing, label: 'Ticketing & Alerts Ops' },
-      { to: '/projects', icon: FolderKanban, label: 'Project Manager' },
-      { to: '/client-admin/advanced-tickets', icon: Ticket, label: 'Service Desk' },
-      { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
-      {
-        group: true, icon: Zap, label: 'Automation', items: [
-          { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
-          { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
-          { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
-        ],
-      },
-    ];
-    adminNav = [
-      { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
-      { to: '/admin/packs', icon: Package, label: 'Pack Customizer' },
-      {
-        group: true, icon: Monitor, label: 'Asset Inventory', items: [
-          { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
-          { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
-          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
-        ],
-      },
-    ];
+    operationsNav = PLATFORM_ADMIN_GROUPS;
+    adminNav = [];
   } else if (user?.role === 'partner_admin') {
     // MSP Partner Portal — white-label. Partners manage THEIR OWN end-clients;
     // they never see Infracentra's direct clients nor other partners.
@@ -325,25 +364,51 @@ export default function Layout() {
   }
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const location = useLocation();
 
-  const renderEntries = (items: NavEntry[], color: string = 'cyan') =>
+  // Auto-expand any group that contains the active route (direct navigation,
+  // refresh, or nested child routes like /admin/tenants/:orgId).
+  useEffect(() => {
+    const path = location.pathname;
+    const expand = (items: NavEntry[], depth: number) => items.forEach(e => {
+      if (isGroup(e) && entryRoutes(e).some(r => routeMatches(r, path))) {
+        const key = groupKey(e, depth);
+        setOpenGroups(g => (g[key] ? g : { ...g, [key]: true }));
+        expand(e.items, depth + 1);
+      }
+    });
+    expand(operationsNav, 0); expand(adminNav, 0); expand(servicesNav, 0);
+  }, [location.pathname, user?.role]);
+
+  /** Active-route detection for a leaf item: NavLink exact match, plus prefix
+   *  match so parent sections stay highlighted on nested routes. */
+  const isItemActive = (to: string) =>
+    location.pathname === to || location.pathname.startsWith(to + '/');
+
+  const renderEntries = (items: NavEntry[], color: string = 'cyan', depth: number = 0) =>
     items.map(item => {
       if (isGroup(item)) {
-        const expanded = openGroups[item.label] || collapsed;
+        const key = groupKey(item, depth);
+        const expanded = openGroups[key] || collapsed;
+        const groupActive = entryRoutes(item).some(r => isItemActive(r));
         return (
-          <div key={item.label} className="relative group/group"
-            onMouseEnter={() => setOpenGroups(g => ({ ...g, [item.label]: true }))}
-            onMouseLeave={() => setOpenGroups(g => ({ ...g, [item.label]: false }))}>
+          <div key={key} className="relative group/group"
+            onMouseEnter={() => setOpenGroups(g => ({ ...g, [key]: true }))}
+            onMouseLeave={() => setOpenGroups(g => ({ ...g, [key]: false }))}>
             <button
-              onClick={() => setOpenGroups(g => ({ ...g, [item.label]: !g[item.label] }))}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)] transition-all">
-              <item.icon className="w-5 h-5 flex-shrink-0" />
+              onClick={() => setOpenGroups(g => ({ ...g, [key]: !g[key] }))}
+              aria-expanded={expanded}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all
+                ${groupActive
+                  ? 'text-[var(--ic-heading)] bg-[var(--ic-surface-2)]'
+                  : 'text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)]'}`}>
+              <item.icon className={`w-5 h-5 flex-shrink-0 ${groupActive ? (color === 'purple' ? 'text-purple-300' : color === 'green' ? 'text-emerald-300' : 'text-cyan-300') : ''}`} />
               {!collapsed && <span className="text-sm font-medium flex-1 text-left">{item.label}</span>}
               {!collapsed && <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />}
             </button>
             {expanded && (
               <div className={`${collapsed ? 'absolute left-full top-0 ml-2 z-50 bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-2 shadow-2xl min-w-[200px]' : 'ml-5 border-l border-[var(--ic-border)] pl-2 my-1'} space-y-0.5`}>
-                {renderNavItemsFlat(item.items, color)}
+                {renderEntries(item.items, color, depth + 1)}
               </div>
             )}
           </div>
@@ -353,25 +418,28 @@ export default function Layout() {
     });
 
   const renderNavItemsFlat = (items: NavItem[], color: string) =>
-    items.map(item => (
-      <NavLink key={item.to + item.label} to={item.to} end
-        className={({ isActive }) =>
-          `flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm font-medium w-full
-          ${isActive
+    items.map(item => {
+      const active = isItemActive(item.to);
+      return (
+        <NavLink key={item.to + item.label} to={item.to} end
+          className={`relative flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 text-sm font-medium w-full
+          ${active
             ? (color === 'purple'
               ? 'bg-purple-500/10 text-purple-300 border border-purple-500/20'
               : color === 'green'
                 ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
                 : 'bg-cyan-500/10 text-cyan-300 border border-[var(--ic-border)]')
-            : 'text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)] border border-transparent'}`
-        }>
-        <item.icon className="w-4 h-4 flex-shrink-0" />
-        {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
-        {item.badge !== undefined && item.badge > 0 && (
-          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500/20 border border-red-500/40 text-[10px] font-bold text-red-300 flex items-center justify-center">{item.badge}</span>
-        )}
-      </NavLink>
-    ));
+            : 'text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)] border border-transparent'}`}>
+          {/* Narrow left accent indicator on the active item */}
+          {active && <span aria-hidden className={`absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full ${color === 'purple' ? 'bg-purple-400' : color === 'green' ? 'bg-emerald-400' : 'bg-cyan-400'}`} />}
+          <item.icon className="w-4 h-4 flex-shrink-0" />
+          {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+          {item.badge !== undefined && item.badge > 0 && (
+            <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500/20 border border-red-500/40 text-[10px] font-bold text-red-300 flex items-center justify-center">{item.badge}</span>
+          )}
+        </NavLink>
+      );
+    });
 
   const renderNavItems = (items: NavItem[], color: string = 'cyan') => renderNavItemsFlat(items, color);
 
@@ -411,10 +479,10 @@ export default function Layout() {
           )}
         </div>
 
-        {/* Nav Items */}
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+        {/* Nav Items — scrollable region, independent from the rest of the app */}
+        <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto">
           {!collapsed && <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
-            {user?.role === 'platform_admin' ? 'Platform Operations' : user?.role === 'client_admin' ? 'Dashboard & Intelligence' : 'Operations'}
+            {user?.role === 'platform_admin' ? 'Platform Administration' : user?.role === 'client_admin' ? 'Dashboard & Intelligence' : 'Operations'}
           </p>}
           {renderEntries(operationsNav, user?.role === 'platform_admin' ? 'purple' : 'cyan')}
 
@@ -442,29 +510,42 @@ export default function Layout() {
         {/* Collapse Toggle */}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="mx-3 mb-3 p-2 rounded-lg text-[var(--ic-muted)] hover:text-cyan-400 hover:bg-[var(--ic-surface-2)] transition-colors"
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className="mx-3 mb-2 p-2 rounded-lg text-[var(--ic-muted)] hover:text-cyan-400 hover:bg-[var(--ic-surface-2)] transition-colors"
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
 
-        {/* User Info */}
-        {!collapsed && user && (
-          <div className="px-4 py-3 border-t border-[var(--ic-border)]">
-            <button onClick={() => navigate(user?.role === 'platform_admin' ? '/admin/settings' : '/settings')}
-              className="w-full flex items-center gap-2 px-3 py-2 mb-2 rounded-lg text-sm font-medium text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)] transition-colors">
-              <Settings className="w-4 h-4" /> Settings
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center text-xs font-bold">
+        {/* Fixed bottom area — Settings + authenticated user profile.
+            Stays visible while the navigation above scrolls independently. */}
+        {user && (
+          <div className={`border-t border-[var(--ic-border)] py-3 ${collapsed ? 'px-2' : 'px-4'}`}>
+            {!collapsed && (
+              <button onClick={() => navigate(user?.role === 'platform_admin' ? '/admin/settings' : '/settings')}
+                className={`w-full flex items-center gap-2 px-3 py-2 mb-2 rounded-lg text-sm font-medium transition-colors relative
+                  ${isItemActive(user?.role === 'platform_admin' ? '/admin/settings' : '/settings')
+                    ? 'text-cyan-300 bg-cyan-500/10'
+                    : 'text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)]'}`}>
+                <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-cyan-400" style={{ opacity: isItemActive(user?.role === 'platform_admin' ? '/admin/settings' : '/settings') ? 1 : 0 }} />
+                <Settings className="w-4 h-4" /> Settings
+              </button>
+            )}
+            <div className={`flex items-center gap-3 ${collapsed ? 'justify-center' : ''}`}>
+              <div title={user.name} className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center text-xs font-bold flex-shrink-0">
                 {user.name.split(' ').map(n => n[0]).join('')}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--ic-heading)] truncate">{user.name}</p>
-                <p className="text-xs text-[var(--ic-muted)] truncate">{organization?.name || 'Platform Admin'}</p>
-              </div>
-              <button onClick={handleLogout} className="p-1.5 rounded text-[var(--ic-muted)] hover:text-red-400 transition-colors">
-                <LogOut className="w-4 h-4" />
-              </button>
+              {!collapsed && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[var(--ic-heading)] truncate">{user.name}</p>
+                  <p className="text-xs text-[var(--ic-muted)] truncate">{user.role === 'platform_admin' ? 'Platform Administrator' : organization?.name || user.role}</p>
+                </div>
+              )}
+              {!collapsed && (
+                <button onClick={handleLogout} title="Log out" aria-label="Log out"
+                  className="p-1.5 rounded text-[var(--ic-muted)] hover:text-red-400 transition-colors">
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -485,7 +566,9 @@ export default function Layout() {
               </div>
             </div>
             <nav className="px-3 py-4 space-y-1">
-              <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">Operations</p>
+              <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
+                {user?.role === 'platform_admin' ? 'Platform Administration' : 'Operations'}
+              </p>
               {renderEntries(operationsNav, user?.role === 'platform_admin' ? 'purple' : 'cyan')}
               {adminNav.length > 1 && (
                 <>
@@ -503,6 +586,17 @@ export default function Layout() {
                   {renderEntries(servicesNav, 'green')}
                 </>
               )}
+              {/* Mobile fixed-bottom actions: Settings + logout */}
+              <div className="mt-6 pt-3 border-t border-[var(--ic-border)]">
+                <button onClick={() => { navigate(user?.role === 'platform_admin' ? '/admin/settings' : '/settings'); setMobileOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)] transition-colors">
+                  <Settings className="w-4 h-4" /> Settings
+                </button>
+                <button onClick={() => { handleLogout(); setMobileOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-[var(--ic-muted)] hover:text-red-400 transition-colors">
+                  <LogOut className="w-4 h-4" /> Log out
+                </button>
+              </div>
             </nav>
           </aside>
         </div>
