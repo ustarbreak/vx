@@ -494,7 +494,7 @@ export interface ScanRow {
   id: number;
   org_id: number;
   network_cidr: string;
-  status: string;
+  status: string;              // queued | running | completed | failed | cancelled
   credential_ids: number[];
   total_hosts: number;
   discovered: number;
@@ -518,7 +518,29 @@ export interface DiscoveredDevice {
   snmp_match: boolean;
   sys_desc?: string | null;
   imported: boolean;
+  verified?: boolean | null;   // SNMP-verified identity (server-derived)
+  source?: 'discovery' | 'manual'; // provenance — never inferred client-side
+  last_seen?: string | null;   // real observation timestamp, null = unknown
   created_at: string;
+}
+
+// Optional live-monitoring enrichment for a discovered device. The backend
+// attaches these ONLY when the host matches an actual probe / collector row —
+// they are never inferred. Absent fields mean "not monitored", not "down".
+export interface DeviceDetailInfo {
+  monitored: boolean;
+  monitor_source: 'probe' | 'collector' | null;
+  status: string | null;            // online | offline | degraded | stale | unknown
+  last_seen: string | null;         // real timestamp from the matching record
+  os: string | null;
+  hostname: string | null;
+  ip: string;
+  mac: string | null;
+  device_type: string | null;
+  snmp_match: boolean;
+  open_ports: number[];
+  location: string | null;          // site label when registered; null = unconfigured
+  related_incidents: number | null; // open alerts referencing this resource/IP
 }
 
 export const discoveryApi = {
@@ -529,9 +551,11 @@ export const discoveryApi = {
   scans: () => api.get<ScanRow[]>('/scans'),
   startScan: (network_cidr: string, credential_ids: number[], org_id?: number) =>
     api.post<ScanRow>('/scans', { network_cidr, credential_ids, org_id }),
+  cancelScan: (id: number) => api.post<ScanRow>(`/scans/${id}/cancel`),
   scanStatus: (id: number) => api.get<ScanRow>(`/scans/${id}`),
   scanDevices: (id: number) => api.get<DiscoveredDevice[]>(`/scans/${id}/devices`),
   devices: () => api.get<DiscoveredDevice[]>('/devices'),
+  deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
 };
@@ -886,3 +910,105 @@ export function agentInstallCommands(token: string, serverUrl?: string): { linux
       `& $env:TEMP\\install.ps1"`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Worldwide Attack Map — mirrors backend/app/routers/security_map.py:
+//   GET /api/security/attack-map (tenant-scoped, JWT-authenticated)
+// Only events that actually carry geographic context in Alert.raw_payload are
+// returned; production mode NEVER receives demo fixtures (the demo branch of
+// demoStore.handle() is the sole place demoAlertSeeds geo data is served).
+// Geolocation is approximate — classification separates observed telemetry
+// from malicious-classified and confirmed attacks.
+// ---------------------------------------------------------------------------
+export interface MapPoint {
+  lat: number | null;
+  lon: number | null;
+  country: string | null; // ISO-ish country code, approximate only
+}
+export type AttackClassification = 'observed' | 'malicious' | 'confirmed';
+export interface AttackMapEvent {
+  id: number;
+  uid: string;
+  timestamp: string;
+  event_type: string;       // alert source (wazuh, suricata, siem, api…)
+  title: string;
+  severity: string;         // critical|high|medium|low|info
+  classification: AttackClassification;
+  src: MapPoint | null;
+  dst: MapPoint | null;
+  confidence: number | null; // min(src,dst) geolocation confidence, 0..1
+  count: number;             // correlated/deduplicated events aggregated here
+  resource: string | null;   // affected asset (tenant-scoped)
+}
+export interface AttackMapPayload {
+  events: AttackMapEvent[];
+  total_events: number;
+  last_ingestion_at: string | null; // newest alert in window (geo or not)
+  generated_at: string;
+  note: string;
+}
+export interface AttackMapFilters {
+  start_time?: string;  // ISO
+  end_time?: string;    // ISO
+  severity?: string;    // comma list ok
+  event_type?: string;  // comma list of sources
+  source_country?: string;
+  destination_country?: string;
+  site_id?: number;     // platform_admin only
+}
+
+export const attackMapApi = {
+  get: (filters: AttackMapFilters = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+    });
+    const s = qs.toString();
+    return api.get<AttackMapPayload>(`/security/attack-map${s ? `?${s}` : ''}`);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Organizational Infrastructure Topology — mirrors routers/org_topology.py
+// (GET /api/org-topology). SEPARATE from the worldwide attack map: this is
+// "what does my organization look like and is it healthy?", not attack data.
+// Types match the backend Pydantic schema exactly (TopoNode/OrgTopologyPayload).
+// ---------------------------------------------------------------------------
+export type TopoHealth =
+  | 'healthy' | 'degraded' | 'offline' | 'stale'
+  | 'monitoring_unavailable' | 'unknown';
+
+export interface TopoNode {
+  id: string;                    // "org:<pk>" | "probe:<pk>" | "monitoring:<pk>"
+  kind: 'organization' | 'hq' | 'site' | 'probe';
+  name: string;
+  parent: string | null;         // organizational ownership ONLY (never inferred)
+  org_ref: number;               // owning organization id (authorization anchor)
+  site_status?: string | null;
+  org_type?: string | null;      // HQ | SUBSIDIARY | AGENCY
+  country?: string | null;
+  asset_count?: number | null;
+  health?: TopoHealth | null;    // collector health — real status + timestamps only
+  last_seen?: string | null;
+  agent_version?: string | null;
+  os?: string | null;
+  ip?: string | null;            // internal address — tenant-authorized visibility
+  related_incidents?: number | null; // open alerts for the owning org
+}
+
+export interface TopoEdge { source: string; target: string; type: 'organizational' }
+
+export interface OrgTopologyPayload {
+  nodes: TopoNode[];
+  edges: TopoEdge[];
+  root_org_id: number;
+  hq_configured: boolean;
+  network_topology_available: boolean; // false until device-link data exists
+  note: string;
+  generated_at: string;
+}
+
+export const orgTopologyApi = {
+  get: (opts: { orgId?: number } = {}) =>
+    api.get<OrgTopologyPayload>(`/org-topology${opts.orgId ? `?org_id=${opts.orgId}` : ''}`),
+};

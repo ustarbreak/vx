@@ -4,6 +4,8 @@ import {
   Eye, Mail, Phone, Shield, CheckCircle, XCircle,
   AlertTriangle, Clock
 } from 'lucide-react';
+import { ticketsApi } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
 
 interface Technician {
   id: string;
@@ -19,6 +21,10 @@ interface Technician {
   lastLogin?: string;
   createdAt: string;
   assignedServices: string[];
+  /** Live workload — joined from the ticketing backend (GET /tickets), NOT a
+   *  fixture. null = not loaded / unavailable (rendered as "unavailable"). */
+  openTickets: number | null;
+  p1Tickets: number | null;
 }
 
 export default function TechniciansManagementPage() {
@@ -56,11 +62,35 @@ export default function TechniciansManagementPage() {
             lastLogin: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
             createdAt: '2026-06-15T00:00:00Z',
             assignedServices: myTickets.length ? ['threat-intel', 'endpoint-protection', 'ticketing'] : ['threat-intel'],
+            openTickets: null, p1Tickets: null,
           };
         });
         
         setTechnicians(mockTechnicians);
         setLoading(false);
+
+        // Workload columns via users+tickets join through the API layer:
+        // GET /tickets hits the real backend query in production and the
+        // demoStore tickets array in Demo Mode — never a second mock here.
+        try {
+          const rows: any[] = await ticketsApi.list();
+          const byAssignee: Record<string, { open: number; p1: number }> = {};
+          for (const t of rows) {
+            if (['resolved', 'closed'].includes(t.status)) continue;
+            const key = String(t.assignee ?? '').trim();
+            if (!key) continue;
+            const agg = (byAssignee[key] ??= { open: 0, p1: 0 });
+            agg.open += 1;
+            if (t.priority === 'p1') agg.p1 += 1;
+          }
+          setTechnicians(prev => prev.map(tc => {
+            const full = `${tc.firstName} ${tc.lastName}`.replace(/\s+/g, ' ').trim();
+            const hit = byAssignee[full];
+            return { ...tc, openTickets: hit ? hit.open : 0, p1Tickets: hit ? hit.p1 : 0 };
+          }));
+        } catch {
+          // Leave workload null → table shows "unavailable", never fake zeros.
+        }
       } catch (error) {
         console.error('Failed to fetch technicians:', error);
         setLoading(false);
@@ -257,6 +287,7 @@ export default function TechniciansManagementPage() {
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Status</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">MFA</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Services</th>
+                <th className="text-left py-3 px-4 text-gray-400 font-semibold" title="Open / P1 tickets currently assigned — joined live from the ticketing API">Workload</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Last Login</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Actions</th>
               </tr>
@@ -304,6 +335,15 @@ export default function TechniciansManagementPage() {
                     <span className="text-gray-300 text-sm">
                       {tech.assignedServices.includes('all') ? 'All Services' : `${tech.assignedServices.length} services`}
                     </span>
+                  </td>
+                  <td className="py-3 px-4">
+                    {tech.openTickets == null ? (
+                      <span className="text-[var(--ic-muted)] text-xs italic" title="Ticket data could not be loaded — no value is invented">unavailable</span>
+                    ) : (
+                      <span className="text-sm text-gray-300" title={isDemoMode() ? 'Open/P1 tickets assigned (demo ticket store)' : 'Open/P1 tickets assigned (live from /api/tickets)'}>
+                        {tech.openTickets} open{tech.p1Tickets ? <span className="ml-1 text-cyber-red font-semibold">· {tech.p1Tickets} P1</span> : null}
+                      </span>
+                    )}
                   </td>
                   <td className="py-3 px-4 text-gray-400 text-sm">
                     {tech.lastLogin ? new Date(tech.lastLogin).toLocaleString() : 'Never'}

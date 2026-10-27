@@ -282,12 +282,23 @@ approvalsByUid[tickets[0].uid] = [{
 const ticketsByAlertUid: Record<string, string> = {};
 demoTicketSeeds.forEach(s => { if (s.alertUid) ticketsByAlertUid[s.alertUid] = s.uid; });
 
-const alerts: any[] = demoAlertSeeds.map((s, i) => ({
-  id: i + 1, uid: s.uid, org_id: s.orgId, title: s.title, severity: s.severity, source: s.source,
-  resource: s.hostname, correlated_count: s.correlated, storm_suppressed: s.correlated > 10,
-  acked_by: null, acked_at: null, ticket_uid: ticketsByAlertUid[s.uid] ?? null,
-  created_at: iso(s.minutesAgo), description: s.description,
-}));
+const alerts: any[] = demoAlertSeeds.map((s, i) => {
+  // Geo fixtures mirror the real ingest path (merge_geo_payload): src_geo /
+  // dst_geo / classification live inside raw_payload — used ONLY by the demo
+  // attack-map handler below. Seeds without geo stay geo-less, exactly like
+  // production alerts, so they never appear on the map.
+  const raw: Record<string, any> = {};
+  if (s.srcGeo) raw.src_geo = { lat: s.srcGeo.lat, lon: s.srcGeo.lon, country: s.srcGeo.country, confidence: s.srcGeo.confidence };
+  if (s.dstGeo) raw.dst_geo = { lat: s.dstGeo.lat, lon: s.dstGeo.lon, country: s.dstGeo.country, confidence: s.dstGeo.confidence };
+  if (s.classification) raw.classification = s.classification;
+  return {
+    id: i + 1, uid: s.uid, org_id: s.orgId, title: s.title, severity: s.severity, source: s.source,
+    resource: s.hostname, correlated_count: s.correlated, storm_suppressed: s.correlated > 10,
+    acked_by: null, acked_at: null, ticket_uid: ticketsByAlertUid[s.uid] ?? null,
+    created_at: iso(s.minutesAgo), description: s.description,
+    raw_payload: Object.keys(raw).length ? raw : undefined,
+  };
+});
 alertSeq = demoAlertSeeds.length + 1;
 
 const rules: any[] = [
@@ -458,7 +469,7 @@ export const demoStore = {
     // ---- Alerts / notification rules / notifications ----
     if (root === 'alerts') {
       if (method === 'POST' && parts.length === 1) {
-        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, acked_by: null, acked_at: null, ticket_uid: null, created_at: iso(0) };
+        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, acked_by: null, acked_at: null, ticket_uid: null, created_at: iso(0), raw_payload: b.raw_payload ?? undefined };
         alerts.unshift(a);
         const pipeline: any = { notifications: [] as any[] };
         for (const r of rules.filter(x => x.enabled)) {
@@ -565,14 +576,51 @@ export const demoStore = {
         const s = { id: scanSeq++, org_id: b.org_id ?? 1, network_cidr: b.network_cidr ?? '10.0.0.0/24', status: 'completed', credential_ids: b.credential_ids ?? [], total_hosts: 254, discovered: 18, snmp_matched: 6, started_at: iso(1), finished_at: iso(0), created_by: 'demo@infracentra.io', created_at: iso(1) };
         scans.unshift(s);
         for (let i = 1; i <= 8; i++) {
-          discoveredDevices.push({ id: devSeq++, scan_id: s.id, org_id: s.org_id, ip: `10.0.0.${i * 7}`, mac: `aa:bb:cc:00:${String(i).padStart(2, '0')}:ff`, hostname: `demo-host-${i}`, os_guess: i % 3 === 0 ? 'Linux 6.x' : 'Windows Server 2022', device_type: i % 2 ? 'server' : 'network', open_ports: [22, 443].slice(0, (i % 2) + 1), snmp_match: i % 2 === 0, sys_desc: 'Demo simulated device', imported: false, created_at: iso(0) });
+          discoveredDevices.push({ id: devSeq++, scan_id: s.id, org_id: s.org_id, ip: `10.0.0.${i * 7}`, mac: `aa:bb:cc:00:${String(i).padStart(2, '0')}:ff`, hostname: `demo-host-${i}`, os_guess: i % 3 === 0 ? 'Linux 6.x' : 'Windows Server 2022', device_type: i % 2 ? 'server' : 'network', open_ports: [22, 443].slice(0, (i % 2) + 1), snmp_match: i % 2 === 0, sys_desc: 'Demo simulated device', imported: false, verified: i % 2 === 0, source: 'discovery' as const, last_seen: iso(0), created_at: iso(0) });
         }
         return delay(s as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'cancel') {
+        const sc = scans.find(x => x.id === Number(parts[1]));
+        if (!sc) throw new Error('Scan not found');
+        if (!['queued', 'running'].includes(sc.status)) throw new Error(`Scan already ${sc.status} — nothing to cancel`);
+        sc.status = 'cancelled'; sc.finished_at = iso(0);
+        return delay({ ...sc } as any) as unknown as T;
       }
       if (method === 'GET' && parts[2] === 'devices') return delay(discoveredDevices.filter(d => d.scan_id === Number(parts[1])) as any) as unknown as T;
       if (method === 'GET') return delay(scans.find(s => s.id === Number(parts[1])) as any) as unknown as T;
     }
     if (root === 'devices') {
+      if (method === 'GET' && parts.length === 2) {
+        // Device detail — mirrors backend GET /discovery/devices/{id}.
+        // Live status attaches ONLY from the matching demo probe/collector row;
+        // unmonitored hosts honestly report monitoring_unavailable.
+        const d = discoveredDevices.find(x => x.id === Number(parts[1]));
+        if (!d) throw new Error('Device not found');
+        // Monitoring match ONLY against the simulated probe fleet (same rule as
+        // GET /agents/probes: first ⌈n/3⌉ tenant devices run an agent).
+        const orgDev = demoDevices.filter(x => x.orgId === d.org_id);
+        const fleetSize = Math.max(2, Math.ceil(orgDev.length / 3));
+        const hostnames = new Set(orgDev.slice(0, fleetSize).map(x => x.hostname));
+        const dd = demoDevices.find(x => x.hostname === d.hostname && x.orgId === d.org_id);
+        const inFleet = !!dd && hostnames.has(dd.hostname);
+        const probe = inFleet && dd ? {
+          status: dd.status === 'offline' ? 'offline' : 'online',
+          last_seen: iso(dd.lastSeenMin || 1), os: dd.os,
+        } : null;
+        const openInc = alerts.filter(a => a.org_id === d.org_id && !a.acked_by &&
+          ((d.hostname && (a.resource || '').toLowerCase().includes(String(d.hostname).toLowerCase())) ||
+           (d.ip && (a.resource || '').includes(d.ip)))).length;
+        return delay({
+          id: d.id, monitored: !!probe, monitor_source: probe ? 'probe' : null,
+          status: probe ? probe.status : 'monitoring_unavailable',
+          last_seen: probe ? probe.last_seen : null,
+          os: probe ? (probe.os || d.os_guess) : d.os_guess,
+          hostname: d.hostname, ip: d.ip, mac: d.mac, device_type: d.device_type,
+          snmp_match: !!d.snmp_match, open_ports: d.open_ports || [],
+          location: d.location ?? null, related_incidents: openInc, org_id: d.org_id,
+        } as any) as unknown as T;
+      }
       if (method === 'GET') return delay(discoveredDevices as any) as unknown as T;
       if (method === 'POST' && parts[2] === 'import') { const d = discoveredDevices.find(x => x.id === Number(parts[1])); if (d) d.imported = true; return delay(d as any) as unknown as T; }
     }
@@ -710,6 +758,125 @@ export const demoStore = {
         const st = computeDemoStats();
         return delay({ ok: true, version: DEMO_WORLD_VERSION, engines: ['ticketing', 'notifications', 'playbooks', 'discovery', 'reports', 'partners'], stats: st } as any) as unknown as T;
       }
+    }
+
+    // ---- Worldwide Attack Map — mirrors routers/security_map.py ----------
+    // DEMO-ONLY branch: this code runs exclusively when isDemoMode() is true
+    // (api.ts routes every call through demoStore.handle in that case). In
+    // production the same URL hits the real FastAPI endpoint instead, so demo
+    // fixtures can never leak into the live product. Filtering rules are the
+    // ones of the backend router: geo-only events, severity/event_type/country
+    // filters, tenant scoping via callerOrgId(), honest empty state.
+    if (root === 'security' && parts[1] === 'attack-map') {
+      const org = callerOrgId();
+      let list = org == null ? [...alerts] : alerts.filter(a => a.org_id === org);
+      const startT = query.get('start_time'), endT = query.get('end_time');
+      if (startT) list = list.filter(a => a.created_at >= startT);
+      if (endT) list = list.filter(a => a.created_at < endT);
+      const sevSet = query.get('severity')?.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      const typeSet = query.get('event_type')?.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+      const srcC = query.get('source_country')?.toLowerCase();
+      const dstC = query.get('destination_country')?.toLowerCase();
+      const lastIngestion = list.length ? list.map(a => a.created_at).sort()[list.length - 1] : null;
+      const events: any[] = [];
+      for (const a of list) {
+        const raw = (a.raw_payload ?? {}) as Record<string, any>;
+        const src = raw.src_geo ?? null, dst = raw.dst_geo ?? null;
+        if (!src && !dst) continue; // geo-only — same honesty rule as the backend
+        if (sevSet?.length && !sevSet.includes(String(a.severity).toLowerCase())) continue;
+        if (typeSet?.length && !typeSet.includes(String(a.source).toLowerCase())) continue;
+        if (srcC && !(src && String(src.country).toLowerCase() === srcC)) continue;
+        if (dstC && !(dst && String(dst.country).toLowerCase() === dstC)) continue;
+        const confs = [src?.confidence, dst?.confidence].filter((x: any) => typeof x === 'number');
+        const cls = ['observed', 'malicious', 'confirmed'].includes(raw.classification)
+          ? raw.classification : 'observed'; // unverified telemetry is never an "attack"
+        events.push({
+          id: a.id, uid: a.uid, timestamp: a.created_at, event_type: a.source, title: a.title,
+          severity: String(a.severity).toLowerCase(), classification: cls,
+          src: src ? { lat: src.lat, lon: src.lon, country: src.country } : null,
+          dst: dst ? { lat: dst.lat, lon: dst.lon, country: dst.country } : null,
+          confidence: confs.length ? Math.min(...confs) : null,
+          count: Math.max(1, a.correlated_count ?? 1), resource: a.resource,
+        });
+      }
+      return delay({
+        events, total_events: events.reduce((n, e) => n + e.count, 0),
+        last_ingestion_at: lastIngestion, generated_at: new Date().toISOString(),
+        note: "DEMO MODE fixtures — approximate geolocation; 'observed' events are telemetry, not confirmed attacks.",
+      } as any) as unknown as T;
+    }
+
+    // ---- Organizational Infrastructure Topology — mirrors routers/org_topology.py ----
+    // DEMO-ONLY branch (isDemoMode() gates every call into demoStore.handle()).
+    // Built from the SAME demo world as everything else: demoTenants supplies
+    // the registered org hierarchy (orgType/parentOrgId/location), the probe
+    // fleet mirrors the /agents/probes simulation, and open-alert counts reuse
+    // the alerts array. Honesty rules identical to the backend: sites appear
+    // only when they exist as tenant records; an org with zero probes is
+    // "monitoring_unavailable", never "healthy"; device-to-device network
+    // links are NEVER drawn (network_topology_available stays false).
+    if (root === 'org-topology') {
+      const myOrg = callerOrgId();
+      const rootT = demoTenants.find(t => t.id === (myOrg ?? 1)) ?? demoTenants[0];
+      const children = demoTenants.filter(t => t.parentOrgId === rootT.id);
+      const orgs = [rootT, ...children];
+      const hqConfigured = orgs.some(t => t.orgType === 'HQ');
+      const openByOrg: Record<number, number> = {};
+      for (const a of alerts) {
+        const raw = (a.raw_payload ?? {}) as Record<string, any>;
+        if (raw.resolved || (a.ticket_uid && ['info', 'low'].includes(a.severity))) continue;
+        openByOrg[a.org_id] = (openByOrg[a.org_id] ?? 0) + 1;
+      }
+      const nodes: any[] = [];
+      const edges: any[] = [];
+      nodes.push({
+        id: `org:${rootT.id}`, kind: rootT.orgType === 'HQ' ? 'hq' : 'organization',
+        name: rootT.name, parent: null, org_ref: rootT.id, site_status: 'active',
+        org_type: rootT.orgType, country: rootT.country.toUpperCase(),
+        asset_count: demoDevices.filter(d => d.orgId === rootT.id).length,
+        related_incidents: openByOrg[rootT.id] ?? 0,
+      });
+      for (const c of children) {
+        nodes.push({
+          id: `org:${c.id}`, kind: c.orgType === 'HQ' ? 'hq' : 'site',
+          name: `${c.name} — ${c.location}`, parent: `org:${rootT.id}`, org_ref: c.id,
+          site_status: 'active', org_type: c.orgType, country: c.country.toUpperCase(),
+          asset_count: demoDevices.filter(d => d.orgId === c.id).length,
+          related_incidents: openByOrg[c.id] ?? 0,
+        });
+        edges.push({ source: `org:${rootT.id}`, target: `org:${c.id}`, type: 'organizational' });
+      }
+      for (const o of orgs) {
+        const plist = demoDevices.filter(d => d.orgId === o.id && d.isProbe);
+        if (!plist.length) {
+          nodes.push({ id: `monitoring:${o.id}`, kind: 'probe',
+            name: 'Monitoring unavailable at this site', parent: `org:${o.id}`,
+            org_ref: o.id, health: 'monitoring_unavailable', related_incidents: 0 });
+          edges.push({ source: `org:${o.id}`, target: `monitoring:${o.id}`, type: 'organizational' });
+          continue;
+        }
+        for (const d of plist) {
+          const offline = d.status === 'offline';
+          nodes.push({ id: `probe:${d.id}`, kind: 'probe', name: d.hostname,
+            parent: `org:${o.id}`, org_ref: o.id,
+            health: offline ? 'offline' : d.status === 'degraded' ? 'stale' : 'healthy',
+            last_seen: iso(offline ? 45 : d.lastSeenMin || 1), agent_version: '1.0.0',
+            os: d.os?.toLowerCase().includes('win') ? 'windows' : 'linux', ip: d.ip });
+          edges.push({ source: `org:${o.id}`, target: `probe:${d.id}`, type: 'organizational' });
+        }
+      }
+      const degraded = nodes.filter(n => n.health === 'offline' || n.health === 'stale').length;
+      const noteParts = [
+        'DEMO MODE fixtures — nodes come from the demo tenant registry and probe fleet only.',
+        hqConfigured ? '' : 'Headquarters is not configured for this organization.',
+        degraded ? `${degraded} collector(s) offline or stale — see health badges.` : '',
+        'Device-to-device network topology is unavailable: only organizational ownership links are drawn.',
+      ].filter(Boolean);
+      return delay({
+        nodes, edges, root_org_id: rootT.id, hq_configured: hqConfigured,
+        network_topology_available: false, note: noteParts.join(' '),
+        generated_at: new Date().toISOString(),
+      } as any) as unknown as T;
     }
 
     // ---- Value Engine (6 money-showing mechanics) — mirrors routers/value.py ----

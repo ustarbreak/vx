@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 from typing import Optional, List
 from datetime import datetime
 
@@ -360,6 +360,18 @@ class ApprovalResponse(BaseModel):
 # Notification & Event Intelligence schemas
 # ============================================================================
 
+class GeoPoint(BaseModel):
+    """Approximate geolocation attached to an inbound event.
+
+    IP geolocation is ALWAYS approximate; `confidence` documents the quality of
+    the fix (0..1). Coordinates are optional — a country-only lookup is valid.
+    """
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lon: Optional[float] = Field(None, ge=-180, le=180)
+    country: Optional[str] = Field(None, max_length=60)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
 class AlertIn(BaseModel):
     """Inbound event — this is what real integrations POST to /api/alerts."""
     title: str
@@ -369,6 +381,16 @@ class AlertIn(BaseModel):
     resource: Optional[str] = None
     org_id: Optional[int] = None         # required for platform-admin ingest
     raw_payload: dict = {}
+    # --- Worldwide attack map (additive, optional) ---------------------------
+    # When the collector/SIEM knows the geographic origin/target of the event
+    # it may send them here; the ingest path persists them into raw_payload
+    # (src_geo / dst_geo) so GET /api/security/attack-map can serve real data.
+    src_geo: Optional[GeoPoint] = None
+    dst_geo: Optional[GeoPoint] = None
+    classification: Optional[str] = Field(
+        None, pattern=r"^$|^(observed|malicious|confirmed)$",
+        description="observed = plain telemetry; malicious = classified by a "
+                    "detection source; confirmed = verified attack evidence.")
 
 
 class AlertResponse(BaseModel):
@@ -478,6 +500,9 @@ class SnmpCredentialResponse(SnmpCredentialCreate):
 
 class ScanCreate(BaseModel):
     network_cidr: str                    # e.g. 192.168.1.0/24
+    prefix: Optional[int] = Field(None, ge=8, le=32,
+        description="Optional explicit mask override; must be >= /22 to keep "
+                    "scans bounded (never larger than the engine's 1024-host cap).")
     credential_ids: List[int] = []
     org_id: Optional[int] = None
 
@@ -514,6 +539,24 @@ class DiscoveredDeviceResponse(BaseModel):
     sys_desc: Optional[str]
     imported: bool
     created_at: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def verified(self) -> Optional[bool]:
+        """Server-derived provenance: identity confirmed by a stored-credential SNMP walk."""
+        return bool(self.snmp_match)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def source(self) -> str:
+        """This table only stores scanner findings; manually configured assets live in the CMDB."""
+        return "discovery"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def last_seen(self) -> Optional[datetime]:
+        """Real observation timestamp of this finding - never synthesized."""
+        return self.created_at
 
     class Config:
         from_attributes = True

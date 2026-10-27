@@ -35,6 +35,27 @@ async def next_uid(db: AsyncSession, model, prefix: str) -> str:
     return f"{prefix}-{count + 1:06d}"
 
 
+def merge_geo_payload(body) -> dict:
+    """Persist optional geolocation from AlertIn into the alert raw_payload.
+
+    The worldwide attack map (GET /api/security/attack-map) reads src_geo /
+    dst_geo / classification straight out of raw_payload — no schema change is
+    needed and events without geo stay exactly as before. Coordinates are only
+    stored when the collector actually provided them; we never invent a fix.
+    """
+    payload = dict(body.raw_payload or {})
+    for field in ("src_geo", "dst_geo"):
+        gp = getattr(body, field, None)
+        if gp is not None:
+            d = gp.model_dump(exclude_none=True) if hasattr(gp, "model_dump") else dict(gp)
+            if d:
+                payload[field] = d
+    cls = getattr(body, "classification", None)
+    if cls:
+        payload["classification"] = cls
+    return payload
+
+
 # --------------------------------------------------------------------------
 # Correlation & storm protection
 # --------------------------------------------------------------------------

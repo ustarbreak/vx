@@ -22,6 +22,7 @@ import io
 import json
 import os
 import secrets
+from pathlib import Path as FsPath  # used by _PACK_STORE_PATH helpers below
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional

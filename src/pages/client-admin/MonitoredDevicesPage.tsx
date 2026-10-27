@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Monitor, Plus, Trash2, Play, RefreshCw, ShieldAlert, KeyRound, Download,
   CheckCircle, Radar, Server, Wifi, X, Search, Terminal, Clock, ChevronDown, Eye,
@@ -76,6 +76,7 @@ const Badge: React.FC<{ className?: string; children: React.ReactNode }> = ({ cl
 const scanStatusColor: Record<string, string> = {
   queued: 'bg-slate-600/40 text-[var(--ic-text)]', running: 'bg-cyan-500/20 text-cyan-300 animate-pulse',
   completed: 'bg-emerald-500/20 text-emerald-300', failed: 'bg-red-500/20 text-red-300',
+  cancelled: 'bg-slate-600/40 text-[var(--ic-muted)]',
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,9 @@ const CredModal: React.FC<{ onClose: () => void; onSave: (c: Omit<SnmpCredential
 
 const MonitoredDevicesPage: React.FC = () => {
   const { user } = useAuth();
+  // Deep-link support: Infrastructure Map / topology drill-downs pass ?q=<host>
+  // to pre-focus the search on a specific hostname/IP.
+  const [searchParams] = useSearchParams();
   const isPlatform = user?.role === 'platform_admin';
   const [tab, setTab] = useState<'devices' | 'scans' | 'credentials'>('devices');
   const [creds, setCreds] = useState<SnmpCredential[]>([]);
@@ -170,7 +174,13 @@ const MonitoredDevicesPage: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [expandedScan, setExpandedScan] = useState<number | null>(null);
   const [scanDevices, setScanDevices] = useState<DiscoveredDevice[]>([]);
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(searchParams.get('q') || '');
+
+  // Re-sync when the deep-link param changes while mounted (another drill-down).
+  useEffect(() => {
+    const nq = searchParams.get('q');
+    if (nq) setQ(nq);
+  }, [searchParams]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -278,10 +288,10 @@ const MonitoredDevicesPage: React.FC = () => {
               <thead><tr className="text-left text-xs uppercase text-[var(--ic-muted)] border-b border-[var(--ic-border)]">
                 <th className="px-4 py-3">IP</th><th className="px-4 py-3">Hostname</th><th className="px-4 py-3">MAC</th>
                 <th className="px-4 py-3">Type</th><th className="px-4 py-3">OS guess</th><th className="px-4 py-3">Open ports</th>
-                <th className="px-4 py-3">SNMP</th><th className="px-4 py-3">Imported</th></tr></thead>
+                <th className="px-4 py-3">SNMP</th><th className="px-4 py-3">Provenance</th><th className="px-4 py-3">Last seen</th><th className="px-4 py-3">Imported</th></tr></thead>
               <tbody>
                 {filtered.length === 0 && !loading && (
-                  <tr><td colSpan={8} className="px-4 py-10 text-center">
+                  <tr><td colSpan={10} className="px-4 py-10 text-center">
                     <Server className="mx-auto text-[var(--ic-muted)] mb-2" size={28} />
                     <p className="text-[var(--ic-muted)] mb-1">No devices discovered yet.</p>
                     <p className="text-xs text-[var(--ic-muted)]">Enter a CIDR above and press “Start Discovery Scan” — the server will run real TCP probes (and nmap SYN/UDP scanning when installed) plus SNMP walks with your credentials.</p>
@@ -296,6 +306,10 @@ const MonitoredDevicesPage: React.FC = () => {
                     <td className="px-4 py-3 text-[var(--ic-muted)]">{d.os_guess || '—'}</td>
                     <td className="px-4 py-3 font-mono text-xs text-[var(--ic-text)]">{d.open_ports.slice(0, 8).join(', ') || '—'}</td>
                     <td className="px-4 py-3">{d.snmp_match ? <Badge className="bg-emerald-500/20 text-emerald-300"><Wifi size={11} className="inline mr-1" />matched</Badge> : <span className="text-[var(--ic-muted)]">no</span>}</td>
+                    <td className="px-4 py-3">{d.snmp_match
+                      ? <Badge className="bg-emerald-500/20 text-emerald-300" title="Identity confirmed by an SNMP walk with a stored credential — verified asset">verified (SNMP)</Badge>
+                      : <Badge className="bg-slate-600/40 text-[var(--ic-text)]" title="Found by port/TCP discovery only — identity NOT verified">discovered</Badge>}</td>
+                    <td className="px-4 py-3 text-xs text-[var(--ic-muted)]" title={d.last_seen ? 'Real observation timestamp from the backend' : 'No observation recorded'}>{d.last_seen ? fmt(d.last_seen) : '—'}</td>
                     <td className="px-4 py-3">{d.imported ? <span className="text-emerald-400 text-xs flex items-center gap-1"><CheckCircle size={12} /> in CMDB</span>
                       : d.snmp_match
                         ? <button onClick={() => discoveryApi.importDevice(d.id).then(() => load(true))} title="SNMP credentials + OID matched — one click to start monitoring this device"
@@ -322,7 +336,12 @@ const MonitoredDevicesPage: React.FC = () => {
                 <span className="text-xs text-[var(--ic-muted)] ml-auto flex items-center gap-1"><Clock size={11} /> {fmt(s.started_at || s.created_at)} · by {s.created_by}</span>
                 <button onClick={() => expand(s.id)} className="flex items-center gap-1 px-2 py-1 rounded bg-[var(--ic-surface-2)] hover:bg-slate-600 text-xs text-[var(--ic-heading)]"><Terminal size={12} /> {expandedScan === s.id ? 'Hide' : 'Results'}</button>
               </div>
-              {s.status === 'running' && <div className="mt-2 h-1.5 rounded bg-[var(--ic-surface-2)] overflow-hidden"><div className="h-full bg-cyan-500 transition-all" style={{ width: `${s.total_hosts ? Math.round(100 * s.discovered / s.total_hosts) : 10}%` }} /></div>}
+              {(s.status === 'running' || s.status === 'queued') && (
+                <button onClick={() => discoveryApi.cancelScan(s.id).then(() => load(true))}
+                  className="ml-2 flex items-center gap-1 px-2 py-1 rounded bg-red-600/20 hover:bg-red-600/40 text-red-300 text-xs"><X size={11} /> Cancel</button>
+              )}
+              {s.status === 'running' && <div className="mt-2 h-1.5 rounded bg-[var(--ic-surface-2)] overflow-hidden"><div className="h-full bg-cyan-500 transition-all" style={{ width: `${s.total_hosts ? Math.round(100 * s.discovered / s.total_hosts) : 0}%` }} /><span className="sr-only">{s.discovered} of {s.total_hosts} hosts probed</span></div>}
+              {s.status === 'cancelled' && <p className="text-xs text-[var(--ic-muted)] mt-1">Cancelled by operator — partial results, if any, are kept for audit.</p>}
               {s.status === 'failed' && s.finished_at && <p className="text-xs text-red-400 mt-1">Scan failed — check the target network is reachable from the API host.</p>}
               {expandedScan === s.id && (
                 <div className="mt-3 bg-[var(--ic-surface)] rounded-lg overflow-x-auto">
@@ -429,7 +448,12 @@ export const ScanHistoryPage: React.FC = () => {
                 <span className="text-xs text-[var(--ic-muted)] ml-auto flex items-center gap-1"><Clock size={11} /> {fmt(s.started_at || s.created_at)} · by {s.created_by}</span>
                 <button onClick={() => expand(s.id)} className="flex items-center gap-1 px-2 py-1 rounded bg-[var(--ic-surface-2)] hover:bg-slate-600 text-xs text-[var(--ic-heading)]"><Terminal size={12} /> {expandedScan === s.id ? 'Hide' : 'Results'}</button>
               </div>
-              {s.status === 'running' && <div className="mt-2 h-1.5 rounded bg-[var(--ic-surface-2)] overflow-hidden"><div className="h-full bg-cyan-500 transition-all" style={{ width: `${s.total_hosts ? Math.round(100 * s.discovered / s.total_hosts) : 10}%` }} /></div>}
+              {(s.status === 'running' || s.status === 'queued') && (
+                <button onClick={() => discoveryApi.cancelScan(s.id).then(() => load(true))}
+                  className="ml-2 flex items-center gap-1 px-2 py-1 rounded bg-red-600/20 hover:bg-red-600/40 text-red-300 text-xs"><X size={11} /> Cancel</button>
+              )}
+              {s.status === 'running' && <div className="mt-2 h-1.5 rounded bg-[var(--ic-surface-2)] overflow-hidden"><div className="h-full bg-cyan-500 transition-all" style={{ width: `${s.total_hosts ? Math.round(100 * s.discovered / s.total_hosts) : 0}%` }} /><span className="sr-only">{s.discovered} of {s.total_hosts} hosts probed</span></div>}
+              {s.status === 'cancelled' && <p className="text-xs text-[var(--ic-muted)] mt-1">Cancelled by operator — partial results, if any, are kept for audit.</p>}
               {expandedScan === s.id && (
                 <div className="mt-3 bg-[var(--ic-surface)] rounded-lg overflow-x-auto">
                   <table className="w-full text-xs">

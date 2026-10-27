@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.database import init_db, AsyncSessionLocal
 from app.routers import auth, organizations, users, entitlements, integrations, audit
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
+from app.routers import security_map, org_topology
 from app.routers import value as value_router
 from app.routers import pricing_v2
 from app.routers import reports as reports_router
@@ -81,6 +82,8 @@ app.include_router(integrations.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
 app.include_router(tickets.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
+app.include_router(security_map.router, prefix="/api")
+app.include_router(org_topology.router, prefix="/api")
 app.include_router(discovery.router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(router_playbooks, prefix="/api")
