@@ -201,8 +201,9 @@ async def find_duplicate(db: AsyncSession, org_id: int, title: str, asset: Optio
 
 
 async def next_ticket_uid(db: AsyncSession) -> str:
-    count = len((await db.execute(select(Ticket.id))).scalars().all())
-    return f"TCK-{count + 1:06d}"
+    # STAGE 3: atomic counter claim (was COUNT+1, racy under parallel writers).
+    from app.services import notifications as nv
+    return await nv.allocate_uid(db, "tickets", "TCK")
 
 
 # --------------------------------------------------------------------------

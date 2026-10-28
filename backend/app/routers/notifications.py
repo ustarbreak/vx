@@ -27,17 +27,22 @@ from sqlalchemy.sql.expression import case as sql_case
 
 from app.database import get_db
 from app.core.security import get_current_user
+from fastapi import Request
 from app.models import (
     User, Alert, AlertNote, AlertEvent, NotificationRule, Notification,
-    Incident, Ticket,
+    Incident, Ticket, EventEvidence,
 )
 from app.schemas import (
     AlertIn, AlertResponse, RuleCreate, RuleUpdate, RuleResponse,
     NotificationResponse, AlertSummaryResponse, AlertUpdateIn,
     BulkAlertActionIn, AlertNoteIn, AlertNoteResponse, AlertEventResponse,
     AlertPageResponse, AlertDetailResponse, NotificationRetryResult,
+    EventEvidenceSummary, EventEvidenceDetail,
 )
 from app.services import notifications as nv
+from app.services import evidence as ev
+from app.services import pipeline
+from app.services.evidence import EvidenceTooLarge
 from app.services.ticketing import now_utc
 
 router = APIRouter(tags=["Notification Engine"])
@@ -67,33 +72,57 @@ def _require_write_role(user: User) -> None:
 @router.post("/alerts", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def ingest_alert(
     body: AlertIn,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Real ingest endpoint. Trigger an alert here and the engine will:
     correlate/dedup it, match notification rules, dispatch across channels and
-    AUTOMATICALLY create a ticket when a matched rule has create_ticket=true."""
+    AUTOMATICALLY create a ticket when a matched rule has create_ticket=true.
+
+    Stage 1 (event evidence): BEFORE any correlation decision, durable raw
+    payload + provenance are committed for this accepted event. A folded
+    duplicate no longer loses its unique payload even though the alert row
+    is discarded by the (unchanged) grouping logic. Payloads over the hard
+    size ceiling are rejected with 413 before anything is persisted.
+    """
     org = _scope_org(current_user, body.org_id)
     if org is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id required for platform-admin ingest")
-    alert = Alert(
-        uid=await nv.next_uid(db, Alert, "ALR"), org_id=org,
-        title=body.title, description=body.description or "",
-        severity=body.severity, source=body.source, resource=body.resource,
-        raw_payload=nv.merge_geo_payload(body), created_at=now_utc(),
+    # --- Tx A: durable per-event evidence (committed before processing) -----
+    try:
+        rec = await ev.store_event_evidence(
+            db,
+            org_id=org,
+            payload=nv.merge_geo_payload(body),
+            source_system=body.source or "api",
+            source_event_id=body.source_event_id,
+            provenance={
+                "actor": current_user.email,
+                "role": current_user.role,
+                "endpoint": "/api/alerts",
+                "client_ip": request.client.host if request.client else None,
+            },
+        )
+        await db.commit()
+    except EvidenceTooLarge as e:
+        await db.rollback()
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(e))
+    evidence_uid = rec.event_uid
+    # --- shared pipeline (Stage 2): the ONE canonical processing sequence ----
+    # identity fields + grouping + rule side effects now live in
+    # services/pipeline.py — agent/discovery paths call the same function.
+    # Response contract preserved exactly: {"alert": …, "pipeline": …}.
+    outcome = await pipeline.process_ingested_event(
+        db, org_id=org, evidence_uid=evidence_uid,
+        fields={
+            "title": body.title, "description": body.description or "",
+            "severity": body.severity, "source": body.source,
+            "resource": body.resource,
+            "raw_payload": nv.merge_geo_payload(body),
+        },
     )
-    db.add(alert)
-    await db.commit()
-    await db.refresh(alert)
-    effective = await nv.correlate(db, alert)
-    diagnostics = await nv.process_alert(db, effective)
-    refreshed = (await db.execute(select(Alert).where(Alert.id == alert.id))).scalars().first()
-    if refreshed is None:
-        # duplicate folded into an existing row — return the surviving record
-        refreshed = (await db.execute(
-            select(Alert).where(Alert.uid == effective.uid))).scalars().first()
-    return {"alert": AlertResponse.model_validate(refreshed).model_dump(),
-            "pipeline": diagnostics}
+    return {"alert": outcome["response"], "pipeline": outcome["pipeline"]}
 
 
 _SORTABLE = {
@@ -235,6 +264,11 @@ async def alert_detail(alert_id: int,
         for t in tks]
     detail.notes = [AlertNoteResponse.model_validate(n) for n in notes]
     detail.events = [AlertEventResponse.model_validate(e) for e in events]
+    # Stage 1 (additive): per-event evidence stubs — metadata only, NEVER the
+    # raw payload (that is served only by the role-gated evidence endpoints).
+    evs = await ev.list_evidence_for_alert(
+        db, org_id=alert.org_id, alert_uid=alert.uid)
+    detail.evidence = [EventEvidenceSummary.model_validate(x) for x in evs]
     return detail
 
 
@@ -328,6 +362,45 @@ async def list_events(alert_id: int, current_user: User = Depends(get_current_us
     return (await db.execute(
         select(AlertEvent).where(AlertEvent.alert_id == alert.id)
         .order_by(AlertEvent.created_at.desc()))).scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# Event evidence (Stage 1 — durable per-event raw payload + provenance).
+# Summary lists are tenant-scoped and open to any authenticated reader of the
+# alert; FULL raw payloads are write-role-gated (viewer/client_user excluded).
+# Cross-tenant lookups always 404 — existence is never leaked.
+# ---------------------------------------------------------------------------
+@router.get("/alerts/{alert_id}/evidence", response_model=list[EventEvidenceSummary])
+async def list_alert_evidence(alert_id: int,
+                              current_user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db)):
+    """Per-event evidence stubs for one alert GROUP (metadata only, no payload)."""
+    alert = await _get_alert_or_40x(db, alert_id, current_user)
+    rows = await ev.list_evidence_for_alert(
+        db, org_id=alert.org_id, alert_uid=alert.uid)
+    return [EventEvidenceSummary.model_validate(r) for r in rows]
+
+
+@router.get("/evidence/{event_uid}", response_model=EventEvidenceDetail)
+async def get_event_evidence(event_uid: str,
+                             org_id: int | None = None,
+                             current_user: User = Depends(get_current_user),
+                             db: AsyncSession = Depends(get_db)):
+    """Full evidence record INCLUDING the raw payload. Write-role gated."""
+    _require_write_role(current_user)
+    # Tenant scoping: every non-platform-admin is pinned to their own org_id at
+    # the query level. platform_admin may pass ?org_id= to narrow; without it,
+    # lookup spans tenants by design (same convention as other admin surfaces).
+    if current_user.role == "platform_admin":
+        org = _scope_org(current_user, org_id)
+    else:
+        org = _scope_org(current_user, org_id)   # 403 if org_id != user.org_id
+        org = org if org is not None else current_user.org_id
+    rec = await ev.get_evidence(
+        db, org_id=org, event_uid=event_uid)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "evidence not found")
+    return EventEvidenceDetail.model_validate(rec)
 
 
 # ---------------------------------------------------------------------------

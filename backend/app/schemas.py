@@ -391,6 +391,12 @@ class AlertIn(BaseModel):
         None, pattern=r"^$|^(observed|malicious|confirmed)$",
         description="observed = plain telemetry; malicious = classified by a "
                     "detection source; confirmed = verified attack evidence.")
+    # --- Event evidence (Stage 1, additive & optional) -----------------------
+    # The upstream detector's OWN identifier for this event, when it has one.
+    # Stored verbatim on the durable evidence row as provenance. It NEVER
+    # changes grouping/dedup behavior in this stage — identical payloads do
+    # not prove two events are the same, and we do not key anything off it.
+    source_event_id: Optional[str] = Field(None, max_length=255)
 
 
 class AlertResponse(BaseModel):
@@ -460,6 +466,7 @@ class AlertDetailResponse(AlertResponse):
     related_tickets: List[dict] = []       # real Ticket rows referencing this alert
     notes: List["AlertNoteResponse"] = []
     events: List["AlertEventResponse"] = []
+    evidence: List["EventEvidenceSummary"] = []   # additive (Stage 1): per-event stubs
 
 
 class AlertNoteIn(BaseModel):
@@ -487,6 +494,38 @@ class AlertEventResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------------------------------------------------------------------------
+# Event evidence (Stage 1 — durable per-event raw payload + provenance).
+# Summary view is additive on alert detail; the FULL payload is only served by
+# the dedicated, tenant-scoped, write-role-gated evidence endpoints.
+# ---------------------------------------------------------------------------
+class EventEvidenceSummary(BaseModel):
+    """Non-sensitive metadata about one accepted event's stored evidence.
+    Never includes the payload itself."""
+    event_uid: str
+    source_system: str
+    source_event_id: Optional[str] = None
+    received_at: datetime
+    source_occurred_at: Optional[datetime] = None
+    payload_bytes: int = 0
+    truncated: bool = False
+    payload_expired: bool = False
+    payload_sha256: str
+    expires_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EventEvidenceDetail(EventEvidenceSummary):
+    """Full evidence record — raw payload included. Access-controlled."""
+    raw_payload: Optional[dict] = None      # null after retention expiry
+    payload_excerpt: Optional[str] = None   # first bytes when truncation happened
+    provenance: dict = {}
+    normalization_version: str = "v1"
+    retention_policy_version: str = "v1"
 
 
 class NotificationRetryResult(BaseModel):
