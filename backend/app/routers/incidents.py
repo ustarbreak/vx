@@ -77,21 +77,21 @@ async def _cache_alert_uid(db: AsyncSession, i: Incident) -> None:
     i._alert_uid_cache = alert.uid if alert else None
 
 
-def _detach_snapshot(db: AsyncSession, obj) -> None:
-    """Eagerly load every column of `obj` and detach it from the session.
-
-    After this, reading attributes or committing can never trigger implicit
-    lazy-load IO (MissingGreenlet on async engines), even if another service
-    call flushed/expired the identity map in the meantime."""
-    for col in obj.__table__.columns:
-        inspect(obj).attrs[col.name].loaded_value
-    db.expunge(obj)
-
-
-def _snapshot_incident(db: AsyncSession, i: Incident) -> dict:
+async def _snapshot_incident(db: AsyncSession, i: Incident) -> dict:
     """Capture a plain-dict copy BEFORE commit so response building never
-    touches an expired ORM instance (avoids MissingGreenlet on async engines)."""
-    _detach_snapshot(db, i)
+    touches an expired ORM instance (avoids MissingGreenlet/DetachedInstanceError
+    on async engines).
+
+    A nested flush inside the ticketing/link services expires server-managed
+    columns (e.g. `updated_at`). Reading `.loaded_value` does NOT force a
+    reload, so we explicitly refresh only unloaded/expired columns while the
+    instance is still bound to the session, then build the dict from the
+    populated state. No IO happens after this point.
+    """
+    state = inspect(i)
+    expired = list(state.unloaded) or None  # keys not currently loaded/expired
+    if state.session is not None and expired:
+        await db.refresh(i, attribute_names=[k for k in expired])
     return _inc_out(i)
 
 
@@ -282,7 +282,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
             _audit(db, user, "incident_deduped", inc.uid,
                    f"Manual open matched existing incident from alert {alert.uid}")
             inc._alert_uid_cache = alert.uid
-            snap = _snapshot_incident(db, inc)
+            snap = await _snapshot_incident(db, inc)
             await db.commit()
             return {"reused": True, "incident": snap}
         # fall through: enrich the auto-created incident with manual fields
@@ -299,7 +299,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
         inc.updated_at = now_utc()
         _audit(db, user, "incident_created", inc.uid, f"'{inc.title}' from alert {alert.uid}")
         inc._alert_uid_cache = alert.uid
-        snap = _snapshot_incident(db, inc)
+        snap = await _snapshot_incident(db, inc)
         await db.commit()
         return {"reused": False, "incident": snap}
 
@@ -322,7 +322,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
     await db.flush()
     await append_activity(db, uid, user.email, "created", "Manually opened")
     _audit(db, user, "incident_created", uid, f"'{inc.title}'")
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return {"reused": False, "incident": snap}
 
@@ -427,7 +427,7 @@ async def change_status(uid: str, body: StatusChange,
                           body.note or f"Status moved {old} → {body.status}",
                           from_value=old, to_value=body.status)
     _audit(db, user, "incident_status_changed", uid, f"{old} → {body.status}")
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
 
@@ -451,7 +451,7 @@ async def assign_incident(uid: str, body: AssignIn,
     await append_activity(db, uid, user.email, "assigned",
                           "Ownership transferred", from_value=old, to_value=body.assignee)
     _audit(db, user, "incident_assigned", uid, f"{old} → {body.assignee}")
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
 
@@ -468,7 +468,7 @@ async def acknowledge_incident(uid: str, body: AckIn,
     inc.updated_at = now_utc()
     await append_activity(db, uid, user.email, "acked", "Acknowledged")
     _audit(db, user, "incident_acknowledged", uid, "")
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
 
@@ -500,12 +500,12 @@ async def update_incident(uid: str, body: IncidentUpdate,
                               from_value=old, to_value=body.severity)
         changed.append("severity")
     if not changed:
-        return _snapshot_incident(db, inc)   # idempotent no-op
+        return await _snapshot_incident(db, inc)   # idempotent no-op
     inc.updated_at = now_utc()
     await append_activity(db, uid, user.email, "updated",
                           "Updated fields: " + ", ".join(changed))
     _audit(db, user, "incident_updated", uid, ", ".join(changed))
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
 
@@ -577,7 +577,7 @@ async def link_ticket(uid: str, body: LinkTicketIn, user: User = Depends(get_cur
         raise HTTPException(403, "Cross-tenant access denied")
     await sync_ticket_link(db, inc, t, user.email)
     _audit(db, user, "incident_linked_ticket", uid, body.ticket_uid)
-    snap = _snapshot_incident(db, inc)
+    snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
 

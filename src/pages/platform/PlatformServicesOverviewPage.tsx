@@ -26,7 +26,7 @@ export default function PlatformServicesOverviewPage() {
       const [t, e, dlq] = await Promise.all([
         ticketsApi.list(orgId !== undefined ? { org_id: orgId } : {}),
         alertsApi.list(orgId),
-        alertsApi.notifications('dead_letter').catch(() => [] as any),
+        alertsApi.notifications({ status: 'dead_letter' }).catch(() => [] as any),
       ]);
       setTickets(t); setEvents(e.slice(0, 50)); setDlqCount(dlq.length);
       // delivery success rate from engine analytics (real aggregation)

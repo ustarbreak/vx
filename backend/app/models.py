@@ -380,9 +380,40 @@ class Alert(Base):
     dedup_key = Column(String, index=True, nullable=True)
     correlated_count = Column(Integer, default=1)  # alert correlation
     storm_suppressed = Column(Boolean, default=False)
+    status = Column(String, default="active", index=True)  # active|acked|resolved (derived from evidence below)
+    assignee = Column(String, nullable=True)               # user email — analyst assignment
     acked_by = Column(String, nullable=True)
     acked_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by = Column(String, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    version = Column(Integer, default=1, nullable=False)   # optimistic concurrency token
     ticket_uid = Column(String, nullable=True, index=True)  # auto-created ticket
+    incident_uid = Column(String, nullable=True, index=True)  # set by the IR pipeline (real link only)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class AlertNote(Base):
+    """Append-only investigation note on an alert (analyst-authored)."""
+    __tablename__ = "alert_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=False, index=True)
+    author = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AlertEvent(Base):
+    """Immutable lifecycle history for one alert (audit trail of transitions)."""
+    __tablename__ = "alert_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=False, index=True)
+    actor = Column(String, nullable=False)      # email or "system"
+    action = Column(String, nullable=False)     # created|correlated|acked|assigned|resolved|reopened|notified|delivery_failed
+    detail = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 

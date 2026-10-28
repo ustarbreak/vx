@@ -385,10 +385,102 @@ export interface AlertRow {
   resource?: string | null;
   correlated_count: number;
   storm_suppressed: boolean;
+  status: string;                 // active | acked | resolved (persisted lifecycle state)
+  assignee?: string | null;
   acked_by?: string | null;
   acked_at?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  version: number;                // optimistic-concurrency token (409 on stale writes)
   ticket_uid?: string | null;
+  incident_uid?: string | null;   // real IR link only — never fabricated
   created_at: string;
+}
+
+// ---- Phase 5 alert-management types (mirror backend/app/schemas.py) --------
+export interface AlertSummary {
+  total: number;
+  by_severity: Record<string, number>;
+  by_status: Record<string, number>;
+  unassigned_active: number;
+}
+
+export interface AlertPage {
+  items: AlertRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}
+
+export interface AlertNoteRow {
+  id: number;
+  alert_id: number;
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+export interface AlertEventRow {
+  id: number;
+  alert_id: number;
+  actor: string;
+  action: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface AlertDetail extends AlertRow {
+  related_incidents: { uid: string; title: string; severity: string; status: string }[];
+  related_tickets: { uid: string; title: string; status: string; priority: string }[];
+  notes: AlertNoteRow[];
+  events: AlertEventRow[];
+}
+
+export interface AlertUpdateIn {
+  status?: 'active' | 'acked' | 'resolved';
+  assignee?: string | null;
+  clear_assignee?: boolean;
+  expected_version?: number;
+  note?: string;
+}
+
+export interface BulkAlertResult {
+  results: { id: number; ok: boolean; changed?: boolean; reason?: string }[];
+  applied: number;
+}
+
+export interface NotificationRetryResult {
+  id: number;
+  status: string;
+  attempts: number;
+  last_error?: string | null;
+  sent_at?: string | null;
+}
+
+export interface AlertListParams {
+  q?: string;
+  severity?: string;      // csv
+  status?: string;        // csv
+  source?: string;        // csv
+  assignee?: string;      // email or '__unassigned__'
+  org_id?: number;
+  since?: string;         // ISO
+  until?: string;         // ISO
+  sort?: 'created_at' | 'severity' | 'status' | 'title' | 'source';
+  order?: 'asc' | 'desc';
+  page?: number;
+  page_size?: number;
+}
+
+function alertQs(p?: AlertListParams): string {
+  if (!p) return '';
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : '';
 }
 
 export interface NotifRule {
@@ -410,6 +502,7 @@ export interface NotificationRow {
   id: number;
   org_id: number;
   alert_id?: number | null;
+  alert_uid?: string | null;      // resolved server-side for drill-down links
   rule_id?: number | null;
   channel: string;
   recipient: string;
@@ -436,18 +529,33 @@ export const alertsApi = {
     raw_payload?: Record<string, any>;
   }) =>
     api.post<{ alert: AlertRow; pipeline: { notifications: any[]; ticket_created?: boolean; ticket_uid?: string | null } }>('/alerts', data),
-  list: (org_id?: number) =>
-    api.get<AlertRow[]>(`/alerts${org_id ? `?org_id=${org_id}` : ''}`),
+  /** Server-side search/filter/sort/pagination over persisted alerts. */
+  page: (p?: AlertListParams) => api.get<AlertPage>(`/alerts${alertQs(p)}`),
+  /** Flat list helper for widgets/banners (first 100 rows, newest first). */
+  list: async (org_id?: number): Promise<AlertRow[]> =>
+    (await api.get<AlertPage>(`/alerts${alertQs({ org_id, page_size: 100 })}`)).items,
+  /** Severity/status totals over the FULL filtered set (independent of page). */
+  summary: (p?: AlertListParams) => api.get<AlertSummary>(`/alerts/summary${alertQs(p)}`),
+  detail: (id: number) => api.get<AlertDetail>(`/alerts/${id}`),
+  /** Validated transition / assignment / atomic note. 409 on stale expected_version. */
+  update: (id: number, patch: AlertUpdateIn) => api.patch<AlertRow>(`/alerts/${id}`, patch),
   ack: (id: number) => api.post(`/alerts/${id}/ack`),
+  bulk: (ids: number[], action: 'ack' | 'resolve' | 'reopen' | 'assign', assignee?: string) =>
+    api.post<BulkAlertResult>('/alerts/bulk', { ids, action, assignee }),
+  notes: (id: number) => api.get<AlertNoteRow[]>(`/alerts/${id}/notes`),
+  addNote: (id: number, body: string) => api.post<AlertNoteRow>(`/alerts/${id}/notes`, { body }),
+  events: (id: number) => api.get<AlertEventRow[]>(`/alerts/${id}/events`),
   rules: () => api.get<NotifRule[]>('/notification-rules'),
   createRule: (rule: Omit<NotifRule, 'id' | 'created_at'>) =>
     api.post<NotifRule>('/notification-rules', rule),
   updateRule: (id: number, patch: Partial<NotifRule>) =>
     api.patch<NotifRule>(`/notification-rules/${id}`, patch),
   deleteRule: (id: number) => api.del(`/notification-rules/${id}`),
-  notifications: (statusF?: string) =>
-    api.get<NotificationRow[]>(`/notifications${statusF ? `?status=${statusF}` : ''}`),
+  notifications: (p?: { status?: string; channel?: string; q?: string; alert_uid?: string; limit?: number; page?: number }) =>
+    api.get<NotificationRow[]>(`/notifications${alertQs(p as any)}`),
   ackNotification: (id: number) => api.post(`/notifications/${id}/ack`),
+  /** Single dead-letter retry — response carries the backend-confirmed outcome. */
+  retryNotification: (id: number) => api.post<NotificationRetryResult>(`/notifications/${id}/retry`),
   retryDeadLetters: () => api.post<any>('/notifications/retry-dead-letters'),
   analytics: () => api.get<Record<string, any>>('/notifications/analytics'),
 };

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, Clock, User, Server, CheckCircle2, Shield, Zap, ArrowRight,
   RefreshCw, Search, X, ChevronLeft, ChevronRight, Plus, StickyNote, History,
@@ -487,7 +487,10 @@ function IncidentsContent() {
   const [pageSize] = useState(25);
   const [sort, setSort] = useState<'created_at' | 'updated_at' | 'severity' | 'status' | 'title'>('created_at');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
-  const [qInput, setQInput] = useState('');
+  const [qInput, setQInput] = useState(() => {
+    // Deep links from Analytics / Threat Intel (?q=<asset>) pre-fill the search.
+    try { return new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('q') ?? ''; } catch { return ''; }
+  });
   const [q, setQ] = useState('');
   const [fStatus, setFStatus] = useState<IncidentStatus | ''>('');
   const [fSeverity, setFSeverity] = useState<IncidentSeverity | ''>('');
