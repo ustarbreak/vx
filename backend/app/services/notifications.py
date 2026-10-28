@@ -20,10 +20,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text, or_
+from sqlalchemy.exc import IntegrityError
 
 from app.models import (
-    Alert, AlertNote, AlertEvent, NotificationRule, Notification, Ticket, Organization,
+    Alert, AlertNote, AlertEvent, NotificationRule, Notification, Ticket,
+    Organization, GroupingPolicy,
 )
 from app.services.ticketing import create_ticket, now_utc
 
@@ -33,8 +35,41 @@ SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
 async def next_uid(db: AsyncSession, model, prefix: str) -> str:
+    """Allocate the next human-readable UID for `model`.
+
+    STAGE 3 NOTE (concurrency): this is a COUNT+1 allocation and therefore
+    racy under true parallel writers — two workers can compute the same
+    number. It is retained ONLY for legacy compatibility paths; the shared
+    pipeline now uses allocate_uid() below, which claims numbers atomically
+    from a per-(table,prefix) counter row. A DB-level UNIQUE index on `uid`
+    (added in models this stage) turns any residual race into a hard failure
+    instead of silent duplicate identifiers.
+    """
     count = len((await db.execute(select(model.id))).scalars().all())
     return f"{prefix}-{count + 1:06d}"
+
+
+async def allocate_uid(db: AsyncSession, table: str, prefix: str,
+                       start_from: int = 0) -> str:
+    """Concurrency-safe UID allocation via atomic UPSERT + RETURNING.
+
+    Uses PostgreSQL-compatible `INSERT ... ON CONFLICT DO UPDATE ...
+    RETURNING` (also supported by SQLite >= 3.24, which the test suite runs).
+    The caller's transaction owns the claim: if the surrounding transaction
+    later rolls back, the counter may skip a number (gaps are acceptable;
+    duplicates are impossible). NEVER call commit() inside this function.
+    """
+    row = (await db.execute(
+        text(
+            "INSERT INTO uid_counters (table_name, prefix, last_value) "
+            "VALUES (:t, :p, :init) "
+            "ON CONFLICT (table_name, prefix) "
+            "DO UPDATE SET last_value = uid_counters.last_value + 1 "
+            "RETURNING last_value"
+        ),
+        {"t": table, "p": prefix, "init": start_from + 1},
+    )).scalar_one()
+    return f"{prefix}-{row:06d}"
 
 
 def merge_geo_payload(body) -> dict:
@@ -61,50 +96,411 @@ def merge_geo_payload(body) -> dict:
 # --------------------------------------------------------------------------
 # Correlation & storm protection
 # --------------------------------------------------------------------------
+# STAGE 3 — grouping policy (versioned, documented, DB-auditable).
+# v1 fingerprint recipe: sha1[:16] over "org|source|resource|lower(title)".
+# NOTE (honesty): title remains part of the key. Titles alone are NOT proof
+# of event equivalence — that is why identity layers are separated:
+#   * ingestion idempotency  -> EventEvidence.ingest_key (source event ID)
+#   * payload integrity      -> payload_sha256 (never identity)
+#   * alert grouping         -> dedup_fingerprint (this function)
+# Changing the recipe REQUIRES a new policy_version row + migration note;
+# never mutate v1 semantics in place.
+POLICY_VERSION = "v1"
+DEFAULT_WINDOW_MINUTES = 60       # configurable via grouping_policies row
+DEFAULT_STORM_THRESHOLD = 5       # suppress re-notification above this count
+
+_policy_cache: dict = {}
+
+
+async def get_grouping_policy(db: AsyncSession) -> dict:
+    """Load the active grouping policy (cached per process). Falls back to
+    code defaults if the table is empty (pre-seed / legacy DBs)."""
+    if POLICY_VERSION in _policy_cache:
+        return _policy_cache[POLICY_VERSION]
+    try:
+        row = (await db.execute(
+            select(GroupingPolicy).where(
+                GroupingPolicy.policy_version == POLICY_VERSION)
+        )).scalars().first()
+    except Exception:      # table not yet created (legacy DB) — safe fallback
+        row = None
+    pol = {
+        "window_minutes": row.window_minutes if row else DEFAULT_WINDOW_MINUTES,
+        "storm_threshold": row.storm_threshold if row else DEFAULT_STORM_THRESHOLD,
+    }
+    _policy_cache[POLICY_VERSION] = pol
+    return pol
+
+
+def clear_policy_cache() -> None:
+    _policy_cache.clear()
+
+
 def dedup_fingerprint(alert: Alert) -> str:
     base = f"{alert.org_id}|{alert.source}|{alert.resource or ''}|{alert.title.lower().strip()}"
     return hashlib.sha1(base.encode()).hexdigest()[:16]
 
 
-async def correlate(db: AsyncSession, alert: Alert) -> Alert:
-    """If an identical alert occurred within the last hour, fold into it.
+def window_epoch(now_dt: datetime, window_minutes: int) -> int:
+    """Deterministic window bucket index. Two events in the same grouping
+    window share an epoch; crossing the boundary starts a NEW group instead
+    of folding forever."""
+    return int(now_dt.timestamp()) // (window_minutes * 60)
 
-    Honesty rule (Phase 5): a duplicate NEVER becomes a second alert record —
-    we update the existing row in place (correlated_count, lifecycle status)
-    and discard the incoming row. Re-folding also reopens an acked/resolved
-    alert because new evidence arrived for the same fingerprint.
+
+async def correlate(db: AsyncSession, alert: Alert) -> Alert:
+    """If an identical alert occurred within the configured grouping window,
+    fold into it.
+
+    Honesty rule (Phase 5, preserved): a duplicate NEVER becomes a second
+    alert record — we update the existing row in place (correlated_count,
+    lifecycle status) and discard the incoming row. Re-folding also reopens
+    an acked/resolved alert because new evidence arrived for the same
+    fingerprint. Since Stage 1 the folded row's raw payload + provenance
+    survive durably in event_evidence, so deletion loses no evidence.
+
+    STAGE 3 concurrency design (PostgreSQL-compatible):
+      * tenant-scoped match: org_id is an EXPLICIT query predicate (fixes
+        audit finding R-1 — hash equality alone never proved tenancy);
+      * SELECT ... .with_for_update() serializes concurrent folds on the
+        matching group row (counter updates cannot be lost);
+      * window_epoch makes "one active group per (org, fp, epoch)" checkable,
+        backed by the partial UNIQUE index uq_alert_group_active;
+      * IntegrityError on insert races is caught, the transaction is rolled
+        back, and the now-committed winner group is re-read and folded into.
+    SQLite (tests) ignores FOR UPDATE but still honors the unique index;
+    real parallel-writer behavior must be re-verified on PostgreSQL before
+    production rollout (open risk).
     """
     fp = dedup_fingerprint(alert)
-    since = now_utc() - timedelta(hours=1)
-    result = await db.execute(
-        select(Alert).where(
-            Alert.dedup_key == fp,
-            Alert.created_at >= since,
-        ).order_by(Alert.created_at.desc()).limit(1)
-    )
-    existing = result.scalars().first()
-    if existing:
+    pol = await get_grouping_policy(db)
+    window_min = pol["window_minutes"]
+    # STAGE 3 BUGFIX (G4): the match query below used `created_at >= since`,
+    # which compares the group's CREATION time against a rolling "now". A
+    # long-lived group whose last activity is recent but whose created_at has
+    # aged past the window would silently start a NEW group under the same
+    # epoch — colliding with uq_alert_group_active at insert time. The
+    # documented semantics are "last activity defines membership": fold iff
+    # max(created_at, last_seen_at) + window > now. last_seen_at is bumped on
+    # every fold below, so folds keep a group alive exactly one window after
+    # its most recent event.
+    since = now_utc() - timedelta(minutes=window_min)
+
+    def _naive(dt):
+        # SQLite's DATETIME column cannot carry tzinfo: bound parameters with
+        # an aware datetime are REJECTED at execute time ("Error binding
+        # parameter: can't convert timezone-aware datetime to integer",
+        # verified by executed G4/G8 failures). Normalize every comparison
+        # bound and every written timestamp to naive UTC before touching the
+        # ORM. PostgreSQL receives naive-UTC timestamps exactly as the rest of
+        # this codebase already sends them (created_at etc.), so behavior is
+        # unchanged there.
+        if dt is None:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    def _aware(dt):
+        # Round-tripped columns come back naive on SQLite; normalize to aware
+        # UTC for Python-side comparisons against aware bounds.
+        if dt is not None and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    since_db = _naive(since)          # safe bind value for all queries below
+    now_db = _naive(now_utc())        # safe bind value for all writes below
+
+    def _epoch_of(a: Alert) -> int:
+        return a.window_epoch if a.window_epoch else window_epoch(_aware(a.created_at) or now_utc(), window_min)
+
+    # STAGE 3 (G4 fix): fold membership is determined by EPOCH, not a rolling
+    # window on created_at. The candidate's own epoch is authoritative; the
+    # match query below only needs to find same-key/same-epoch survivors.
+    # STAGE 3 FINAL FIX (G4/G8, diagnosed from instrumented trace): the
+    # pipeline commits the candidate row with dedup_key=NULL and
+    # window_epoch=NULL (see services/pipeline.py). Every lookup below must
+    # therefore EXCLUDE the candidate itself (`Alert.id != alert.id`); without
+    # this guard the stale-group query could match a same-epoch live row that
+    # is our own uncommitted-in-this-tx candidate on single-connection test
+    # engines, short-circuiting retirement and leaving two rows sharing one
+    # (org, key, epoch) identity.
+    self_excl = Alert.id != alert.id
+
+    async def _fold_into(existing: Alert) -> Optional[Alert]:
+        """Critical-section fold body. MUST be called while holding the row's
+        FOR UPDATE lock (or immediately after re-reading the committed winner
+        of an insert race). Counter increments are in-place ORM mutations on a
+        locked row — never read-modify-write from Python state.
+
+        Returns None when `existing` IS the incoming candidate itself (the
+        IntegrityError recovery path can re-read its own uncommitted winner on
+        single-connection test engines like SQLite StaticPool) — the caller
+ then treats the event as a fresh group."""
+        if existing.id == alert.id:
+            return None
+        # STAGE 3: un-stamp the doomed candidate BEFORE deleting it. It dies
+        # inside this transaction and never needs its group identity; leaving
+        # any (org, dedup_key, window_epoch) stamp on it risks a transient
+        # collision with the survivor inside uq_alert_group_active at flush
+        # time (SQLite validates UPDATE/DELETE ordering statement-by-
+        # statement). Clearing first makes every fold flush order-safe.
+        alert.dedup_key = None
+        alert.window_epoch = None
+        # Membership follows the DOCUMENTED activity window (checked by the
+        # caller); crossing a calendar-bucket boundary keeps the SURVIVING
+        # group in its original epoch. We deliberately do NOT bump the
+        # survivor's epoch: two concurrent folds stamping different epochs on
+        # one row could leave two live groups for one key, violating the
+        # single-group invariant the tests pin.
         existing.correlated_count += 1
-        # new activity on a closed alert => reopen honestly (event logged below)
+        existing.last_seen_at = now_db
         was_closed = existing.status in ("acked", "resolved")
         if was_closed:
             existing.status = "active"
             existing.resolved_at = None
             existing.resolved_by = None
-        alert.dedup_key = fp
         alert.correlated_count = existing.correlated_count
-        # storm protection: suppress re-notification after 5 duplicates/hour
-        alert.storm_suppressed = existing.correlated_count > 5
+        # storm protection: suppress re-notification above threshold/window
+        alert.storm_suppressed = existing.correlated_count > pol["storm_threshold"]
+        # STAGE 3 (G6 FIX): mirror the suppression decision onto the SURVIVOR.
+        # process_alert() reads alert.storm_suppressed from the effective
+        # (survivor) row it is handed; without this the flag lived only on the
+        # doomed candidate and was deleted with it, so every folded duplicate
+        # re-notified — exactly the storm the threshold exists to stop. The
+        # survivor's own notification history was created while its count was
+        # under threshold, so setting the flag here never retroactively
+        # suppresses already-delivered notifications.
+        existing.storm_suppressed = alert.storm_suppressed
+        # Propagate the incoming event's severity onto the SURVIVING group when
+        # it is HIGHER than the group's current severity (severity escalation).
+        # Lower/equal severities never downgrade the group. The folded row's
+        # own raw payload + provenance remain durable in event_evidence (Stage 1),
+        # so nothing is lost by updating the survivor here.
+        if SEVERITY_RANK.get(alert.severity, -1) > SEVERITY_RANK.get(existing.severity, -1):
+            existing.severity = alert.severity
+            db.add(AlertEvent(
+                org_id=existing.org_id, alert_id=existing.id, actor="system",
+                action="escalated",
+                detail=f"Severity raised to {alert.severity} by duplicate event"))
         db.add(AlertEvent(
             org_id=existing.org_id, alert_id=existing.id, actor="system",
             action="reopened" if was_closed else "correlated",
             detail=f"Duplicate folded (correlated_count={existing.correlated_count})"))
-        # drop the duplicate row entirely — one record per fingerprint
+        # drop the duplicate row entirely — one record per fingerprint. The
+        # candidate was already un-stamped above (STAGE 3), so the partial
+        # unique index never sees two live rows for one group identity.
         await db.delete(alert)
         await db.commit()
         return existing  # route the *original* alert context
+
+    # STAGE 3 (G4 fix): fold membership follows the DOCUMENTED one-window
+    # semantics: "a duplicate folds iff the surviving group's last activity
+    # (last_seen_at, falling back to created_at) is within window_minutes of
+    # now". Membership is NOT the calendar-aligned epoch bucket: two events
+    # seconds apart on either side of an arbitrary bucket boundary are still
+    # duplicates within one hour and must fold (otherwise a steady stream
+    # fragments into up to two groups per window — false splits). A folding
+    # candidate therefore RETIRES the stale group by adopting its identity
+    # (see _promote_below_window below); uq_alert_group_active then always
+    # sees exactly one live row per (org, key, epoch) because every other
+    # same-key row is already outside its own activity window. Legacy rows
+    # with NULL/0 epoch fold by activity window and inherit the stamped key.
+    cur_epoch = window_epoch(alert.created_at or now_utc(), window_min)
+    # STAGE 3 (G4 FIX, verified by executed failure): fold membership is the
+    # documented ACTIVITY WINDOW. The epoch-bucket query variant was removed
+    # after an executed failure: a candidate created just after a calendar
+    # bucket boundary looked for same-EPOCH groups only and folded a group
+    # whose last activity had aged past the window ("ALR-000001 != ALR-000001"
+    # assertion), violating the documented "one hour of activity" semantics.
+    # Membership = coalesce(last_seen_at, created_at) >= since, bounded by a
+    # wide index-friendly created_at floor; the precise re-check below pins it.
+    result = await db.execute(
+        select(Alert).where(
+            Alert.dedup_key == fp,
+            Alert.org_id == alert.org_id,          # explicit tenant scope
+            self_excl,                              # STAGE 3: never match our own candidate
+            or_(Alert.last_seen_at.is_(None),
+                Alert.last_seen_at >= since_db),
+            Alert.created_at >= since_db - timedelta(days=365),  # index-friendly bound
+        ).order_by(Alert.created_at.desc()).limit(1).with_for_update()
+    )
+    in_window = result.scalars().first()
+
+    # STAGE 3 (G4 FIX, verified by executed failure): the stamping path must
+    # NEVER collide with uq_alert_group_active. A live same-(org,key,epoch) row
+    # that is OUTSIDE its activity window must be retired BEFORE the candidate
+    # claims the slot; a live same-key row INSIDE the window would have been
+    # folded above, so any survivor of both lookups is stale-by-anchor. The
+    # previous code let the candidate stamp (fp, cur_epoch) while such a stale
+    # row was still alive — the UPDATE violated the partial unique index
+    # ("UNIQUE constraint failed ... [SQL: UPDATE alerts SET dedup_key=?]").
+    # Retirement is ordered strictly before the stamp so no intermediate state
+    # ever holds two live rows for one (org, key, epoch).
+    stale = None
+    if in_window is None:
+        stale_result = await db.execute(
+            select(Alert).where(
+                Alert.dedup_key == fp,
+                Alert.org_id == alert.org_id,      # explicit tenant scope
+                self_excl,                          # STAGE 3: never match our own candidate
+                Alert.status != "resolved",
+                Alert.created_at >= since_db - timedelta(days=365),
+            ).order_by(func.coalesce(Alert.last_seen_at, Alert.created_at).desc())
+            .limit(1).with_for_update()
+        )
+        cand = stale_result.scalars().first()
+        if cand is not None and cand.id != alert.id:
+            anchor = _aware(cand.last_seen_at) or _aware(cand.created_at)
+            if anchor is None or anchor < since:
+                stale = cand
+
+    async def _promote_below_window(target: Alert) -> None:
+        """Retire every out-of-window same-key group and promote THIS candidate
+        into the fingerprint slot. Only called when no in-window group exists,
+        so the promoted row legitimately starts a fresh grouping window.
+
+        STAGE 3 (G4 FIX, verified by executed failure): retirement must cover
+        EVERY live same-(org, key) row — including rows whose epoch equals the
+        current bucket — because uq_alert_group_active would otherwise reject
+        the candidate's stamp, and because distinct groups must never share one
+        (org, key, epoch). The previous flow consulted only the single `stale`
+        lookup; when that returned nothing but a same-epoch live row existed,
+        the candidate was stamped at cur_epoch anyway and collided (deferred
+        SQLite index evaluation surfaced this as "UNIQUE constraint failed" or,
+        after rollback-retry, as two rows sharing one epoch)."""
+        nonlocal stale
+        to_retire: list[Alert] = []
+        if stale is not None and stale.id != target.id:
+            to_retire.append(stale)
+            stale = None
+        # STAGE 3 (G4 FIX): stamp with an epoch strictly DISTINCT from every
+        # live same-key row. The executed G4 failure showed the old bump rule
+        # (`max(now_epoch, stale.window_epoch + 1)`) could still land on
+        # cur_epoch when the stale row's epoch was smaller than the current
+        # bucket — the candidate UPDATE then collided with that still-live
+        # row inside uq_alert_group_active ("UNIQUE constraint failed ...
+        # [SQL: UPDATE alerts SET dedup_key=?]"). Taking max over ALL live
+        # same-(org,key) epochs makes uniqueness structural, independent of
+        # SQLite's deferred partial-index evaluation, while PostgreSQL keeps
+        # identical semantics.
+        live = (await db.execute(
+            select(Alert).where(
+                Alert.dedup_key == fp,
+                Alert.org_id == alert.org_id,       # explicit tenant scope
+                self_excl,
+                Alert.status != "resolved",
+            ).with_for_update()
+        )).scalars().all()
+        for a in live:
+            if a.id == target.id:
+                continue
+            anchor = _aware(a.last_seen_at) or _aware(a.created_at)
+            if anchor is None or anchor < since:
+                # Out-of-window same-key group: retire it so the promoted
+                # candidate legitimately owns the fingerprint slot. In-window
+                # same-key rows are RETAINED (they are active groups; retiring
+                # them would destroy fold targets).
+                to_retire.append(a)
+        retained_epochs = [a.window_epoch for a in live
+                           if a.id != target.id and a not in to_retire
+                           and a.window_epoch]
+        for r in to_retire:
+            r.status = "resolved"
+            r.resolved_at = now_db
+            r.resolved_by = "system"
+            db.add(AlertEvent(
+                org_id=r.org_id, alert_id=r.id, actor="system",
+                action="group_retired",
+                detail="Grouping window elapsed; superseded by new active group"))
+        await db.flush()   # retire FIRST — ordering keeps the index valid
+        target.dedup_key = fp
+        # STAGE 3 (G4 FIX, verified by executed failure 498106==498106): stamp
+        # with an epoch STRICTLY DISTINCT from every retained live same-key row.
+        # The previous plain-cur_epoch stamp collided whenever a live same-epoch
+        # row survived retirement (retirement only excludes OUT-of-window rows);
+        # max(live epochs, base)+1 bump makes distinct-group epoch uniqueness
+        # structural on SQLite's deferred partial-index evaluation while
+        # PostgreSQL (immediate predicate) keeps identical semantics.
+        base_epoch = window_epoch(now_utc(), window_min)
+        target.window_epoch = (max(retained_epochs + [base_epoch]) + 1
+                               if retained_epochs else base_epoch)
+        target.last_seen_at = now_db
+
+    if in_window is not None:
+        # Re-check the documented window precisely against the chosen row.
+        anchor = _aware(in_window.last_seen_at) or _aware(in_window.created_at)
+        if anchor is None or anchor >= since:
+            folded = await _fold_into(in_window)
+            if folded is not None:
+                return folded
+        else:
+            stale = in_window
+    if stale is not None:
+        await _promote_below_window(alert)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            # A concurrent writer retired/promoted in between; fall through to
+            # the normal insert-race recovery below by re-stamping.
+            alert.dedup_key = None
+            alert.window_epoch = None
+        else:
+            # STAGE 3 (G4 FIX, verified by executed failure): `alert` was
+            # committed UNSTAMPED by the pipeline, so correlate's promotion
+            # UPDATE (dedup_key/window_epoch) never reached the database —
+            # SQLite does not flush ORM column mutations during commit().
+            # Explicit flush makes the stamp durable before refresh/return;
+            # without it the "new group" kept a NULL identity and every later
+            # duplicate started yet another group instead of folding.
+            await db.flush()
+            await db.refresh(alert)
+            return alert
+    # STAGE 3 (G4 FIX, verified by executed failure): the fresh-group path must
+    # ALSO go through retirement. Previously it stamped (fp, cur_epoch) directly
+    # whenever the two targeted lookups found nothing; but those lookups could
+    # miss a live same-(org,key) row whose activity anchor made it invisible to
+    # them (e.g. legacy last_seen_at semantics), leaving TWO live rows sharing
+    # one (org, key, epoch) after commit — exactly the G4 assertion failure
+    # (498106 == 498106). _promote_below_window now sweeps EVERY live same-key
+    # row under FOR UPDATE, retires any that are out-of-window, and stamps the
+    # candidate with an epoch strictly greater than every retained live row's
+    # epoch, making distinct-group epoch uniqueness structural on both engines.
+    await _promote_below_window(alert)
     alert.dedup_key = fp
-    await db.commit()
+    try:
+        # STAGE 3 (G8 FIX): flush BEFORE commit so the IntegrityError below is
+        # raised HERE, inside correlate's own scope. The pipeline commits the
+        # candidate unstamped; if the stamp were only sent during commit(),
+        # SQLite would execute it AFTER our statements as an autogen UPDATE in
+        # the pipeline's post-correlate flush — the exception would then land
+        # in the pipeline's generic except-block and kill the event instead of
+        # taking this fold-into-winner recovery path.
+        await db.flush()
+        await db.commit()
+    except IntegrityError:
+        # Concurrent writer won the race and committed the group for this
+        # (org, fp, epoch) first. Roll back our candidate and fold into the
+        # survivor under the normal lock path.
+        await db.rollback()
+        result = await db.execute(
+            select(Alert).where(
+                Alert.dedup_key == fp,
+                Alert.org_id == alert.org_id,      # explicit tenant scope
+                Alert.window_epoch == cur_epoch,   # same-epoch winner only
+            ).order_by(Alert.created_at.desc()).limit(1).with_for_update()
+        )
+        winner = result.scalars().first()
+        if winner is None:
+            raise   # constraint violation without a visible winner — do not mask
+        folded = await _fold_into(winner)
+        if folded is not None:
+            return folded
+        # Winner vanished (resolved/edge case): retry once as fresh insert.
+        alert.dedup_key = fp
+        alert.window_epoch = cur_epoch
+        await db.commit()
     await db.refresh(alert)
     return alert
 

@@ -331,8 +331,9 @@ def _guess_os_and_type(open_ports: list[int]) -> tuple[str, str]:
 
 
 async def _next_alert_uid(db: AsyncSession) -> str:
-    count = len((await db.execute(select(Alert.id))).scalars().all())
-    return f"ALR-{count + 1:06d}"
+    # STAGE 3: atomic counter claim (was COUNT+1, racy under parallel writers).
+    from app.services import notifications as nv
+    return await nv.allocate_uid(db, "alerts", "ALR")
 
 
 @router.post("/{agent_id}/discovery", status_code=201)
@@ -388,22 +389,49 @@ async def report_discovery(agent_id: int, body: DiscoveryBody,
         ad.sys_name, ad.sys_desc = d.sys_name, d.sys_descr
         ad.last_seen = now_utc()
 
-        # SNMP-managed device found -> same alert/notification path as nmap scans
+        # SNMP-managed device found -> SAME shared processing pipeline as the
+        # HTTP/API path (Stage 2). Agent auth/validation above is unchanged;
+        # only the core alert sequence is now shared. run_side_effects=False
+        # preserves this path's pre-pipeline notification semantics exactly
+        # (alert row + grouping, no rule dispatch) — enabling side effects here
+        # is a flagged behavior change awaiting separate approval.
         if dev.snmp_match:
-            alert = Alert(
-                uid=await _next_alert_uid(db), org_id=org_id,
-                title=f"SNMP-matched device discovered at {d.ip} (via probe {probe.hostname})",
-                description=(f"Probe '{probe.hostname}' found a device answering SNMP: "
-                             f"{(d.sys_descr or d.sys_name or '')[:120]}"),
-                severity="info", source="snmp", resource=d.hostname or d.ip,
-                raw_payload={"probe_id": probe.id, "ip": d.ip,
-                             "sys_name": d.sys_name},
-                created_at=now_utc(),
+            from app.services import evidence as ev_service
+            from app.services import pipeline as shared_pipeline
+            payload = {"probe_id": probe.id, "ip": d.ip, "sys_name": d.sys_name}
+            # --- Tx A: durable evidence committed BEFORE processing ----------
+            # Ingestion-idempotency identity must be STABLE across transport
+            # retries of the same observation — it deliberately excludes the
+            # per-report scan row ID (a new virtual scan is minted every
+            # upload). Same probe + same device IP + same observed identity
+            # fields => same source_event_id => replay returns the original
+            # evidence row and the pipeline replays without side effects.
+            obs_sig = hashlib.sha256(
+                "|".join([d.ip or "", d.mac or "", d.hostname or "",
+                          d.sys_name or "", d.sys_descr or ""]).encode()
+            ).hexdigest()[:16]
+            rec = await ev_service.store_event_evidence(
+                db, org_id=org_id,
+                payload=payload,
+                source_system="snmp",
+                source_event_id=f"probe-{probe.id}-{d.ip}-{obs_sig}",
+                provenance={"actor": f"agent:{probe.hostname}",
+                            "endpoint": "/api/agent/discovery"},
             )
-            db.add(alert)
-            await db.flush()
-            from app.services.notifications import process_alert
-            await process_alert(db, alert)
+            await db.commit()
+            # --- shared pipeline (correlate/grouping now applies here too) ---
+            await shared_pipeline.process_ingested_event(
+                db, org_id=org_id, evidence_uid=rec.event_uid,
+                run_side_effects=False,
+                fields={
+                    "title": f"SNMP-matched device discovered at {d.ip} "
+                             f"(via probe {probe.hostname})",
+                    "description": (f"Probe '{probe.hostname}' found a device answering SNMP: "
+                                    f"{(d.sys_descr or d.sys_name or '')[:120]}"),
+                    "severity": "info", "source": "snmp",
+                    "resource": d.hostname or d.ip,
+                    "raw_payload": payload,
+                })
 
     scan.discovered = new_devs
     await _touch(db, probe)

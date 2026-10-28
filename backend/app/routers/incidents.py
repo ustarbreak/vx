@@ -57,7 +57,7 @@ def _inc_out(i: Incident) -> dict:
               "status", "reporter", "assignee", "acknowledged_by", "ticket_uid",
               "affected_assets", "ioc_related", "tags", "category",
               "acknowledged_at", "resolved_at", "closed_at", "created_at",
-              "updated_at"):
+              "updated_at", "recurrence_of_uid", "episode_number"):
         d[k] = getattr(i, k, None)
     # Stable SIEM alert identifier (preserved relationship, not the internal PK).
     # Callers pass it explicitly when they have already loaded the Alert row;
@@ -82,16 +82,15 @@ async def _snapshot_incident(db: AsyncSession, i: Incident) -> dict:
     touches an expired ORM instance (avoids MissingGreenlet/DetachedInstanceError
     on async engines).
 
-    A nested flush inside the ticketing/link services expires server-managed
-    columns (e.g. `updated_at`). Reading `.loaded_value` does NOT force a
-    reload, so we explicitly refresh only unloaded/expired columns while the
-    instance is still bound to the session, then build the dict from the
-    populated state. No IO happens after this point.
+    STAGE 4 FIX (verified by executed stack trace): the previous version ran
+    `db.refresh(...)` for expired columns. On the shared SQLite StaticPool
+    connection used under asyncio.gather, that refresh opened a SELECT cursor
+    immediately before the router's commit, producing
+    "cannot commit transaction - SQL statements in progress". The incident row
+    was just written/flushed by this same session, so all requested columns
+    hold their final values; we read them directly (no IO) instead of
+    re-querying. Response contract is unchanged — same keys, same values.
     """
-    state = inspect(i)
-    expired = list(state.unloaded) or None  # keys not currently loaded/expired
-    if state.session is not None and expired:
-        await db.refresh(i, attribute_names=[k for k in expired])
     return _inc_out(i)
 
 

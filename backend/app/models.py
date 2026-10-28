@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -367,6 +367,16 @@ class Alert(Base):
     """Inbound security/monitoring event. Triggers notification rules and,
     when configured, automatically creates tickets."""
     __tablename__ = "alerts"
+    # STAGE 3: grouping-window epoch for the ACTIVE group of a fingerprint.
+    # One (org_id, dedup_key, window_epoch) may exist at most once — enforced
+    # by the partial unique index below (PostgreSQL-compatible; SQLite honors
+    # partial indexes too). Folded duplicates are deleted, so their (possibly
+    # bumped) epoch never conflicts.
+    window_epoch = Column(Integer, default=0, nullable=False)
+    # STAGE 3: last activity time for the grouping window. Bumped on every
+    # fold; drives documented "fold iff last activity within window" semantics
+    # (see correlate()). Nullable so legacy rows fall back to created_at.
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
     id = Column(Integer, primary_key=True, index=True)
     uid = Column(String, unique=True, index=True, nullable=False)   # ALR-000123
@@ -391,6 +401,31 @@ class Alert(Base):
     incident_uid = Column(String, nullable=True, index=True)  # set by the IR pipeline (real link only)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
+    __table_args__ = (
+        # STAGE 3 — concurrency-safe grouping backstop. At most ONE ACTIVE
+        # group per (tenant, fingerprint, window epoch). The correlate() fold
+        # deletes duplicate rows inside a SELECT ... FOR UPDATE critical
+        # section; this index is the hard DB-level guarantee that even a race
+        # cannot leave two live groups for the same key in the same window.
+        #
+        # STAGE 3 FIX (G4/G8): the predicate now also EXCLUDES transient
+        # pipeline candidates (dedup_key IS NULL until correlate() stamps the
+        # survivor path). Without it, the legacy "persist candidate before
+        # correlate" contract meant two concurrent identical submissions
+        # collided on this index at CANDIDATE INSERT time — before correlation
+        # ever ran — raising IntegrityError instead of converging on one group.
+        # With it, un-stamped candidates are invisible to the index and only
+        # committed GROUP rows participate in uniqueness. Folded duplicates are
+        # deleted, so their (possibly bumped) epoch never conflicts.
+        Index(
+            "uq_alert_group_active",
+            "org_id", "dedup_key", "window_epoch",
+            unique=True,
+            postgresql_where=text("status != 'resolved' AND dedup_key IS NOT NULL"),
+            sqlite_where=text("status != 'resolved' AND dedup_key IS NOT NULL"),
+        ),
+    )
+
 
 class AlertNote(Base):
     """Append-only investigation note on an alert (analyst-authored)."""
@@ -414,6 +449,109 @@ class AlertEvent(Base):
     actor = Column(String, nullable=False)      # email or "system"
     action = Column(String, nullable=False)     # created|correlated|acked|assigned|resolved|reopened|notified|delivery_failed
     detail = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class EventEvidence(Base):
+    """Durable per-EVENT evidence row (Stage 1: event evidence).
+
+    One row is stored for EVERY accepted ingestion event — including duplicates
+    that the correlation layer folds into an existing alert. This closes the
+    Phase-5 honesty gap where a folded duplicate's unique raw payload and
+    metadata were deleted with its alert row.
+
+    Identity notes (deliberate separation, never conflated):
+      * `event_uid` identifies THIS accepted ingestion event (transport-level).
+      * `source_event_id` is the upstream detector's own ID when it provides
+        one; identical payloads do NOT prove two events are the same, so we
+        never derive identity from payload content alone.
+      * `payload_sha256` is integrity metadata (detects corruption / proves
+        byte equality), not an identity key.
+      * The alert GROUP identity remains `alerts.dedup_key` — unchanged here.
+
+    Retention: `raw_payload`/`payload_excerpt` are nulled by the expiry job
+    after `expires_at`; the row itself survives as an intelligible stub
+    (provenance + hash + sizes + `payload_expired` flag) so alert/incident
+    history stays explainable after payload deletion.
+
+    Access: payloads are served only through tenant-scoped, write-role-gated
+    endpoints (see routers/notifications.py evidence routes).
+    """
+    __tablename__ = "event_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_uid = Column(String(36), unique=True, index=True, nullable=False)  # uuid4
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    source_system = Column(String, default="api")   # ingest path: api|agent|discovery|seed...
+    source_event_id = Column(String, nullable=True)  # upstream detector's own ID (if any)
+    # Grouping provenance ONLY — this stage does not change grouping logic.
+    dedup_fingerprint = Column(String, nullable=True, index=True)
+
+    # --- original payload + integrity metadata -----------------------------
+    raw_payload = Column(JSON, nullable=True)       # null after retention expiry
+    payload_sha256 = Column(String(64), nullable=False)
+    payload_bytes = Column(Integer, default=0)      # true serialized size
+    truncated = Column(Boolean, default=False)      # inline copy cut to size cap
+    payload_excerpt = Column(Text, nullable=True)   # first N bytes when truncated
+    payload_expired = Column(Boolean, default=False)
+
+    # --- provenance ---------------------------------------------------------
+    provenance = Column(JSON, default=dict)  # {actor, endpoint, request_ip, ...}
+
+    # --- timekeeping --------------------------------------------------------
+    source_occurred_at = Column(DateTime(timezone=True), nullable=True)  # if collector says
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    # --- processing / policy versions ----------------------------------------
+    normalization_version = Column(String, default="v1")
+    retention_policy_version = Column(String, default="v1")
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    # --- linkage (nullable: survives even if the alert row is folded away) --
+    alert_db_id = Column(Integer, nullable=True)     # alerts.id at ingest time
+    alert_uid = Column(String, nullable=True, index=True)  # surviving group uid after fold
+
+    # --- ingestion idempotency & recovery (Stage 2: shared pipeline) -------
+    # Deliberately SEPARATE from payload_sha256 (integrity only) and from
+    # dedup_fingerprint (alert grouping). None of the three prove the others.
+    ingest_key = Column(String(128), nullable=True, unique=True, index=True)
+    #   sha256(org|source_system|source_event_id) — present ONLY when the
+    #   upstream collector supplied a source_event_id; identical payloads
+    #   without a source ID are NOT treated as the same event.
+    processing_status = Column(String, default="pending")
+    #   pending -> processed | failed (permanent failure keeps evidence intact)
+    processing_error = Column(Text, nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class UidCounter(Base):
+    """STAGE 3 — atomic per-(table,prefix) UID sequence.
+
+    Replaces the racy COUNT(rows)+1 allocation for pipeline paths. Claimed
+    with INSERT ... ON CONFLICT DO UPDATE ... RETURNING (PostgreSQL and
+    SQLite >= 3.24 compatible). Rollbacks may skip numbers; duplicates are
+    impossible."""
+    __tablename__ = "uid_counters"
+
+    table_name = Column(String(64), primary_key=True)
+    prefix = Column(String(16), primary_key=True)
+    last_value = Column(Integer, nullable=False, default=0)
+
+
+class GroupingPolicy(Base):
+    """STAGE 3 — documented, versioned grouping policy.
+
+    One row per policy_version. Makes the fingerprint recipe and window
+    auditable at runtime instead of living only in code comments. Seeded at
+    startup if absent (create_all convention — no Alembic revision needed)."""
+    __tablename__ = "grouping_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_version = Column(String(16), unique=True, nullable=False)  # v1|v2...
+    fingerprint_fields = Column(JSON, default=list)   # ordered field list
+    window_minutes = Column(Integer, default=60, nullable=False)
+    storm_threshold = Column(Integer, default=5, nullable=False)
+    notes = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -790,8 +928,33 @@ class Incident(Base):
     ticket_uid = Column(String, nullable=True, index=True)          # linked TCK-xxxx
     category = Column(String, default="other")      # malware|phishing|intrusion|data_exfiltration|policy_violation|other
     dedup_key = Column(String, nullable=True, index=True)
+    # ---- STAGE 4: incident episodes -------------------------------------
+    # Recurrence lineage. An incident that matches a RESOLVED/CLOSED episode's
+    # dedup key starts a NEW episode rather than mutating history:
+    #   recurrence_of_uid -> uid of the previous episode in the chain
+    #   episode_number    -> 1-based position within the chain
+    # Historical resolved/closed rows are never auto-reopened or mutated by
+    # evidence arrival; only explicit analyst action (existing transition API)
+    # may reopen them, which is recorded in IncidentActivity as before.
+    recurrence_of_uid = Column(String, nullable=True, index=True)
+    episode_number = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        # Concurrency backstop: at most one ACTIVE episode per tenant+dedup key.
+        # The service layer uses SELECT ... FOR UPDATE + re-check; this partial
+        # unique index is the last-resort guard against duplicate active
+        # episodes created by racing requests. Resolved/closed episodes do not
+        # block new ones — that is exactly what enables recurrence episodes.
+        Index(
+            "uq_incident_active_episode",
+            "org_id", "dedup_key",
+            unique=True,
+            postgresql_where=text("status NOT IN ('resolved','closed') AND dedup_key IS NOT NULL"),
+            sqlite_where=text("status NOT IN ('resolved','closed') AND dedup_key IS NOT NULL"),
+        ),
+    )
 
 
 class IncidentNote(Base):

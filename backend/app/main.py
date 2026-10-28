@@ -27,6 +27,7 @@ from app.services.mfa import router as mfa_router
 from app.services.invitations import router as invitations_router
 from app.services.seed import ensure_platform_admin, ensure_demo_accounts
 from app.services.ticketing import run_escalations
+from app.services.evidence import run_retention_expiry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("infracentra")
@@ -45,6 +46,21 @@ async def _escalation_loop():
         await asyncio.sleep(60)
 
 
+async def _evidence_retention_loop():
+    """Stage 1 (event evidence): hourly retention pass. Nulls expired payloads
+    per settings.EVIDENCE_RETENTION_DAYS; rows survive as intelligible stubs.
+    Never deletes rows and never touches alert/incident data."""
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                n = await run_retention_expiry(db)
+                if n:
+                    logger.info("evidence retention pass: %s payload(s) expired", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("evidence retention pass failed: %s", e)
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: create schema, guarantee a platform admin exists, seed demo
@@ -52,14 +68,22 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as db:
         await ensure_platform_admin(db)
+        # STAGE 3: grouping policy v1 row + atomic UID counter bootstrap.
+        # Must run before any ingestion so correlate() reads the documented
+        # policy and allocate_uid() never collides with legacy COUNT+1 uids.
+        from app.services.seed import ensure_grouping_policy, ensure_uid_counters
+        await ensure_grouping_policy(db)
+        await ensure_uid_counters(db)
         try:
             await ensure_demo_accounts(db)
         except Exception as e:  # noqa: BLE001 — demo seeding must never block startup
             logger.warning("demo account seeding skipped: %s", e)
     task = asyncio.get_event_loop().create_task(_escalation_loop())
+    ev_task = asyncio.get_event_loop().create_task(_evidence_retention_loop())
     yield
     # Shutdown
     task.cancel()
+    ev_task.cancel()
 
 app = FastAPI(
     title=settings.APP_NAME,

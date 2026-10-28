@@ -18,13 +18,74 @@ Mode" toggle stays fully client-side and never calls these accounts.
 import os
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.security import get_password_hash
 from app.models import (
     User, Organization, NotificationRule, Entitlement,
     Alert, Ticket, DiscoveryScan, DiscoveredDevice,
+    GroupingPolicy, UidCounter,
 )
+
+# ---------------------------------------------------------------------------
+# STAGE 3 — grouping policy v1 seed + UID counter bootstrap.
+# Idempotent; runs at startup BEFORE any ingestion can occur. Uses the
+# create_all convention already in place (no Alembic revision).
+# ---------------------------------------------------------------------------
+
+async def ensure_grouping_policy(db: AsyncSession) -> None:
+    """Seed the documented v1 grouping policy row if absent.
+
+    Makes the fingerprint recipe / window / storm threshold auditable at
+    runtime (services.notifications.get_grouping_policy reads this table).
+    Never overwrites an existing version row — policies are immutable once
+    published; a behavior change means inserting v2 and bumping POLICY_VERSION.
+    """
+    exists = (await db.execute(
+        select(GroupingPolicy).where(GroupingPolicy.policy_version == "v1")
+    )).scalars().first()
+    if exists is None:
+        db.add(GroupingPolicy(
+            policy_version="v1",
+            fingerprint_fields=["org_id", "source", "resource",
+                                "title_lower_trimmed"],
+            window_minutes=60,
+            storm_threshold=5,
+            notes="Stage 3 baseline. Identical to the historical hardcoded "
+                  "behavior: sha1[:16] over org|source|resource|"
+                  "lower(title); 60-minute fold window; re-notification "
+                  "suppressed above 5 folds per group.",
+        ))
+        await db.commit()
+
+
+async def ensure_uid_counters(db: AsyncSession) -> None:
+    """Bootstrap uid_counters from legacy COUNT+1-numbered rows.
+
+    The shared pipeline allocates ALR/TCK uids atomically from
+    uid_counters(table,prefix). Existing rows were numbered by counting, so
+    the counter must start at MAX(existing numeric suffix) or the first
+    atomic claim would collide with a legacy uid's UNIQUE index. Gaps are
+    acceptable; duplicates are not.
+    """
+    for table, prefix, model in (("alerts", "ALR", Alert),
+                                 ("tickets", "TCK", Ticket)):
+        uids = (await db.execute(select(model.uid))).scalars().all()
+        max_n = 0
+        for u in uids:
+            try:
+                max_n = max(max_n, int(str(u).rsplit("-", 1)[-1]))
+            except (ValueError, AttributeError):
+                continue
+        await db.execute(
+            text(
+                "INSERT INTO uid_counters (table_name, prefix, last_value) "
+                "VALUES (:t, :p, :v) "
+                "ON CONFLICT (table_name, prefix) DO NOTHING"
+            ),
+            {"t": table, "p": prefix, "v": max_n},
+        )
+    await db.commit()
 
 # ---------------------------------------------------------------------------
 # DEMO WORLD MIRROR — keep these constants byte-identical with the frontend

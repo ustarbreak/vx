@@ -21,6 +21,20 @@ class Settings(BaseSettings):
     
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+
+    # Event evidence retention (Stage 1 — durable per-event raw payloads).
+    # Days an accepted event's raw payload is kept before the nightly expiry
+    # job nulls it (row + integrity metadata survive; see services/evidence.py).
+    EVIDENCE_RETENTION_DAYS: int = 90
+    # Hard cap for inline payload bytes. Over-size => stored truncated with a
+    # full-body sha256 retained; over hard ceiling => ingest rejected (413).
+    EVIDENCE_MAX_INLINE_BYTES: int = 262144          # 256 KB stored inline
+    EVIDENCE_HARD_LIMIT_BYTES: int = 1048576         # 1 MB absolute ingest cap
+
+    # Shared pipeline side-effect idempotency window (Stage 2). A retried
+    # submission of an event already processed within this window replays the
+    # recorded outcome instead of re-running tickets/notifications.
+    PIPELINE_SIDE_EFFECT_WINDOW_MINUTES: int = 60
     
     # Wazuh Integration
     WAZUH_URL: Optional[str] = None
