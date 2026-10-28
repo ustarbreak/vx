@@ -93,6 +93,10 @@ async def create_ticket(
         assignee=body.assignee, reporter=current_user.email,
         tags=body.tags, asset=body.asset, vulnerability_ref=body.vulnerability_ref,
     )
+    # STAGE 4: create_ticket() no longer commits mid-request (savepoint-style
+    # contract — callers own the commit). Commit here so POST /tickets keeps
+    # its previous durability semantics for external callers.
+    await db.commit()
     return _ticket_out(t)
 
 

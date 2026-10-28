@@ -86,8 +86,8 @@ async def _get_playbook(db: AsyncSession, pb_id: int, user: User) -> Playbook:
     return p
 
 
-def _plat_audit(db: AsyncSession, user: User, action: str, resource: str,
-                resource_id: str, details: str, outcome: str = "success") -> None:
+async def _plat_audit(db: AsyncSession, user: User, action: str, resource: str,
+                      resource_id: str, details: str, outcome: str = "success") -> None:
     db.add(AuditLog(actor_id=user.id, actor_name=user.email, actor_role=user.role,
                     org_id=user.org_id, action=action, resource=resource,
                     resource_id=resource_id, details=details, outcome=outcome))
@@ -184,7 +184,7 @@ async def create_playbook(body: PlaybookIn, current_user: User = Depends(get_cur
                  created_at=now_utc())
     db.add(p)
     await db.flush()
-    _plat_audit(db, current_user, "playbook_created", "soar_playbook", str(p.id),
+    await _plat_audit(db, current_user, "playbook_created", "soar_playbook", str(p.id),
                 f"'{p.name}' ({len(steps)} steps)")
     await db.commit()
     return _pb_out(p)
@@ -206,7 +206,7 @@ async def update_playbook(pb_id: int, body: PlaybookIn,
     p.name, p.description, p.category = body.name, body.description, body.category
     p.steps, p.triggers, p.enabled = steps, body.triggers, body.enabled
     p.updated_at = now_utc()
-    _plat_audit(db, current_user, "playbook_updated", "soar_playbook", str(p.id),
+    await _plat_audit(db, current_user, "playbook_updated", "soar_playbook", str(p.id),
                 f"'{p.name}' ({len(steps)} steps)")
     await db.commit()
     return _pb_out(p)
@@ -227,7 +227,7 @@ async def delete_playbook(pb_id: int, current_user: User = Depends(get_current_u
     )).scalar() or 0
     if active:
         raise HTTPException(409, "Playbook has executions in progress; cancel them first")
-    _plat_audit(db, current_user, "playbook_deleted", "soar_playbook", str(p.id), f"'{p.name}'")
+    await _plat_audit(db, current_user, "playbook_deleted", "soar_playbook", str(p.id), f"'{p.name}'")
     await db.delete(p)
     await db.commit()
 
@@ -437,9 +437,16 @@ async def run_playbook(pb_id: int, body: RunRequest,
         await append_activity(db, inc_obj.uid, current_user.email, "playbook_run",
                               f"Executed playbook '{p.name}' ({run.uid}) → {run.status}")
 
-    _plat_audit(db, current_user, f"playbook_{body.mode}", "soar_playbook_run", run.uid,
+    await _plat_audit(db, current_user, f"playbook_{body.mode}", "soar_playbook_run", run.uid,
                 f"'{p.name}' status={run.status} steps ok/fail/skip={completed}/{failed}/{skipped}",
                 outcome="success" if run.status == "completed" else "failure")
+    # STAGE 4 FIX: _plat_audit() used to be a bare db.add(); the INSERT then
+    # fired implicitly while building the f-string above (attribute access on
+    # `p`/`run` triggered an autoflush in a sync context -> MissingGreenlet),
+    # or at commit time inside response serialization. Flush explicitly now,
+    # keeping the StaticPool cursor-drain constraint (statement completes
+    # within this await; no refresh() anywhere on this path).
+    await db.flush()
     await db.commit()
     return {"replayed": False, "run": _run_out(run)}
 
@@ -508,7 +515,7 @@ async def cancel_run(run_uid: str, current_user: User = Depends(get_current_user
     r.cancel_requested = True
     r.status = "cancelled"
     r.finished_at = now_utc()
-    _plat_audit(db, current_user, "playbook_run_cancelled", "soar_playbook_run", r.uid, "")
+    await _plat_audit(db, current_user, "playbook_run_cancelled", "soar_playbook_run", r.uid, "")
     await db.commit()
     return _run_out(r)
 

@@ -957,6 +957,45 @@ class Incident(Base):
     )
 
 
+
+# ============================================================================
+# STAGE 5 — Rules-based triage (deterministic scoring, no ML/LLM)
+# ============================================================================
+class TriagePolicy(Base):
+    """Versioned scoring policy. One row per policy_version; changing any
+    weight/band means inserting a NEW version (v2, v3...) — old rows are never
+    edited so historical evaluations stay reproducible."""
+    __tablename__ = "triage_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_version = Column(String(16), unique=True, nullable=False)   # v1|v2...
+    weights = Column(JSON, default=dict)                # declarative point weights
+    bands = Column(JSON, default=list)                  # [{min_score, priority}...]
+    confidence_weights = Column(JSON, default=dict)     # data-quality axis weights
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TriageEvaluation(Base):
+    """Immutable audit history of triage runs. One row per evaluation; the
+    full reason-code breakdown is frozen in `breakdown`. Analyst overrides are
+    appended into the stored breakdown's `override` field (the score itself is
+    never rewritten silently)."""
+    __tablename__ = "triage_evaluations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    incident_uid = Column(String, nullable=False, index=True)
+    policy_version = Column(String(16), nullable=False)
+    score = Column(Integer, nullable=False)             # bounded 0..100
+    priority = Column(String(4), nullable=False)        # p1|p2|p3|p4 (calculated)
+    confidence = Column(Integer, default=0, nullable=False)
+    corroboration = Column(Integer, default=0, nullable=False)
+    reason_codes = Column(JSON, default=list)
+    breakdown = Column(JSON, default=dict)              # full payload incl. override
+    evaluator = Column(String, nullable=False)          # analyst email or 'system'
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class IncidentNote(Base):
     """Investigation note attached to an incident (append-only)."""
     __tablename__ = "incident_notes"

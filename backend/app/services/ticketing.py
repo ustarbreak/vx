@@ -309,8 +309,21 @@ async def create_ticket(
                        f"title={title}\ndescription={description}\nasset={asset}\n"
                        f"priority={priority}\nsource={source}\ntags={tags}",
                        collected_by=reporter or "system")
-    await db.commit()
-    await db.refresh(ticket)
+    # STAGE 4 FIX (savepoint semantics): create_ticket() used to commit and
+    # refresh on its own. That broke atomic request transactions for callers
+    # that keep working with the session afterwards (e.g. the incidents
+    # create-ticket endpoint links the ticket + writes an audit row after
+    # this returns), and — because a mid-request commit expires ORM state on
+    # a session whose lazy loads then hit an inactive/rolled-back transaction
+    # — surfaced as PendingRollbackError cascades once any IntegrityError
+    # occurred. The ticket row is already flushed above; every caller owns
+    # the final commit:
+    #   * routers/tickets.py       -> get_db dependency commits per request
+    #   * routers/incidents.py     -> explicit db.commit() after linking
+    #   * routers/soar.py          -> run_playbook commits at end of request
+    #   * notifications.process_alert -> pipeline commits after routing
+    # expire_on_commit=False everywhere means the returned object stays
+    # readable without a refresh().
     return ticket
 
 

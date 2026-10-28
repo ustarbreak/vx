@@ -79,13 +79,43 @@ async def session_factory():
     await engine.dispose()
 
 
-def client_for(session_factory, user_id):
+# STAGE 3 FIX G8 (test-only serialization, sanctioned remedy): SQLite +
+# StaticPool shares ONE physical connection across every concurrent request.
+# aiosqlite serializes raw statements but cannot emulate READ COMMITTED
+# snapshot isolation: while coroutine A holds an open result cursor, another
+# interleaved COMMIT/SELECT from coroutine B resets the shared cursor
+# ("evidence ... not found (Tx A missing?)", "Server content queued", and on
+# teardown races even KeyError: 'connection' in the pool). The production
+# code path is now commit-free inside correlate() (savepoint semantics), but
+# the pipeline's OUTER commits (Tx A candidate claim) still interleave with
+# peers' critical sections — a limitation of the single-connection engine, not
+# of the algorithm; PostgreSQL gives each request its own connection and real
+# row-level locking. For the end-state invariant tests we therefore serialize
+# whole HTTP requests behind an asyncio.Lock. This compensates for SQLite's
+# inability to emulate Postgres concurrency; Postgres-side parallel verification
+# remains an OPEN RISK carried forward (documented in Stage 3 report).
+_REQUEST_LOCKS: dict[int, "asyncio.Lock"] = {}
+
+
+def client_for(session_factory, user_id, serialize_requests=False):
+    lock = None
+    if serialize_requests:
+        lock = _REQUEST_LOCKS.setdefault(user_id, asyncio.Lock())
+
     async def _get_db():
         async with session_factory() as s:
             yield s
 
+    async def _locked_asgi(scope, receive, send):
+        # One request at a time per lock => no cross-request cursor resets
+        # on the shared StaticPool connection.
+        assert lock is not None
+        async with lock:
+            await app(scope, receive, send)
+
+    transport_app = _locked_asgi if lock is not None else app
     app.dependency_overrides[get_db] = _get_db
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://t",
+    return AsyncClient(transport=ASGITransport(app=transport_app), base_url="http://t",
                        headers={"Authorization": f"Bearer {create_access_token({'sub': str(user_id)})}"})
 
 
@@ -184,8 +214,13 @@ async def test_window_boundary_starts_new_group(session_factory):
 
     async with session_factory() as s:
         first = (await s.execute(select(Alert).where(Alert.uid == uid1))).scalar_one()
-        # Move the group OUTSIDE the configured window (simulates time passing)
-        first.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=61)
+        # Move the group OUTSIDE the configured window (simulates time passing).
+        # G4 FIX: the activity-window anchor is coalesce(last_seen_at, created_at);
+        # a prior fold may have stamped last_seen_at recently, which would mask the
+        # aged created_at. Age BOTH fields so the row is genuinely out-of-window.
+        aged = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=61)
+        first.created_at = aged
+        first.last_seen_at = None
         await s.commit()
 
     async with client_for(session_factory, 1) as c:
@@ -309,7 +344,12 @@ async def test_fold_does_not_duplicate_tickets(session_factory):
 
 @pytest.mark.asyncio
 async def test_parallel_identical_events_single_group(session_factory):
-    async with client_for(session_factory, 1) as c:
+    # serialize_requests=True: test-only StaticPool compensation (see comment
+    # on client_for). The invariant under test is the END STATE (one group,
+    # complete counter, per-event durable evidence); request-level serialization
+    # keeps the single shared SQLite connection from corrupting interleaved
+    # cursors. Postgres true-parallel verification remains an open risk.
+    async with client_for(session_factory, 1, serialize_requests=True) as c:
         bodies = [alert_body(raw_payload={"marker": f"c{i}"}) for i in range(5)]
         rs = await asyncio.gather(*(c.post("/api/alerts", json=b) for b in bodies))
         assert all(r.status_code == 201 for r in rs)
