@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { 
   AlertTriangle, CheckCircle, XCircle, Filter, 
   Search, Bell, Eye, Clock, Server, Shield
@@ -64,6 +64,28 @@ export default function AlertsPage() {
   const [filterSeverity, setFilterSeverity] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Route param support: /client-admin/alerts/:alertId — the segment can be a
+  // real alert id (e.g. "1"), a severity filter ("high", "critical"), a status
+  // filter ("active") or "all". Previously these links pointed at routes that
+  // rendered this page but the param was ignored, so clicking a stat card did
+  // nothing. Now it pre-applies the matching filter.
+  const { alertId } = useParams<{ alertId?: string }>();
+  useEffect(() => {
+    if (!alertId) return;
+    if (alertId === 'all') {
+      setFilterSeverity('all');
+      setFilterStatus('all');
+      setSearchTerm('');
+    } else if (['critical', 'high', 'medium', 'low'].includes(alertId)) {
+      setFilterSeverity(alertId);
+    } else if (['active', 'acknowledged', 'resolved'].includes(alertId)) {
+      setFilterStatus(alertId);
+    } else {
+      // Treat anything else as a specific alert lookup via search.
+      setSearchTerm(alertId);
+    }
+  }, [alertId]);
 
   const filteredAlerts = alerts.filter(alert => {
     const matchesSearch = alert.title.toLowerCase().includes(searchTerm.toLowerCase()) ||

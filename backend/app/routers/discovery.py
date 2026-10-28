@@ -8,6 +8,8 @@ Notification Engine (which can auto-create a ticket via rules).
 import ipaddress
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -200,16 +202,111 @@ async def scan_devices(scan_id: int, current_user: User = Depends(get_current_us
     return (await db.execute(stmt.order_by(DiscoveredDevice.ip))).scalars().all()
 
 
-@router.get("/devices", response_model=list[DiscoveredDeviceResponse])
+# --- monitoring-state derivation thresholds (single source of truth, shared
+# with the frontend Monitored Devices page): a device is offline when its
+# matched collector probe has been silent > OFFLINE_AFTER seconds; stale when
+# silent > STALE_AFTER seconds. No probe / no heartbeat => never "online".
+OFFLINE_AFTER = 600   # >10 min silence = offline
+STALE_AFTER = 900     # >1 sweep cycle without fresh data = stale
+
+
+def derive_monitoring_state(has_probe: bool, last_seen) -> str:
+    """Pure function: monitoring state from backend evidence only."""
+    if not has_probe:
+        return "enrolled"          # in inventory, no collector heartbeat record
+    if last_seen is None:
+        return "unknown"           # probe exists but never reported a timestamp
+    now = datetime.now(timezone.utc)
+    ls = last_seen if last_seen.tzinfo else last_seen.replace(tzinfo=timezone.utc)
+    age = (now - ls).total_seconds()
+    if age > OFFLINE_AFTER:
+        return "offline"
+    if age > STALE_AFTER:
+        return "stale"
+    return "monitored"
+
+
+class DeviceListResponse(BaseModel):
+    items: list[dict]
+    total: int
+    offset: int
+    limit: int
+
+
+@router.get("/devices")
 async def all_devices(current_user: User = Depends(get_current_user),
                       db: AsyncSession = Depends(get_db),
-                      snmp_only: bool = Query(False)):
-    stmt = select(DiscoveredDevice).order_by(DiscoveredDevice.created_at.desc()).limit(1000)
+                      snmp_only: bool = Query(False),
+                      q: str | None = Query(None, max_length=200),
+                      type: str | None = Query(None, alias="type", max_length=40),
+                      state: str | None = Query(None, max_length=20),
+                      offset: int = Query(0, ge=0),
+                      limit: int = Query(50, ge=1, le=200)):
+    """Inventory listing with search / filter / pagination and server-derived
+    monitoring state.
+
+    State semantics (backend evidence only — a DB row alone is never 'online'):
+      enrolled  : imported/inventory row with no matching collector probe
+      monitored : probe heartbeat fresher than OFFLINE_AFTER
+      offline   : probe silent > OFFLINE_AFTER
+      unknown   : probe exists but has never reported last_seen
+    ('stale' sits between monitored/offline per STALE_AFTER; see thresholds.)
+    """
+    stmt = select(DiscoveredDevice).order_by(DiscoveredDevice.created_at.desc())
+    count_stmt = select(DiscoveredDevice)
     if current_user.role != "platform_admin":
         stmt = stmt.where(DiscoveredDevice.org_id == current_user.org_id)
+        count_stmt = count_stmt.where(DiscoveredDevice.org_id == current_user.org_id)
     if snmp_only:
         stmt = stmt.where(DiscoveredDevice.snmp_match.is_(True))
-    return (await db.execute(stmt)).scalars().all()
+        count_stmt = count_stmt.where(DiscoveredDevice.snmp_match.is_(True))
+    if type:
+        stmt = stmt.where(DiscoveredDevice.device_type == type)
+        count_stmt = count_stmt.where(DiscoveredDevice.device_type == type)
+    if q:
+        like = f"%{q}%"
+        cond = or_(DiscoveredDevice.ip.like(like), DiscoveredDevice.hostname.like(like),
+                   DiscoveredDevice.mac.like(like), DiscoveredDevice.os_guess.like(like))
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
+
+    rows = (await db.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    org_ids = {d.org_id for d in rows}
+    probes = []
+    if org_ids:
+        probes = (await db.execute(
+            select(AgentProbe).where(AgentProbe.org_id.in_(org_ids))
+        )).scalars().all()
+
+    def _match(dev):
+        for p in probes:
+            if dev.ip and p.ip == dev.ip:
+                return p
+        if dev.hostname:
+            for p in probes:
+                if p.hostname and p.hostname.lower() == dev.hostname.lower():
+                    return p
+        return None
+
+    items = []
+    for d in rows:
+        p = _match(d)
+        st = derive_monitoring_state(p is not None, p.last_seen if p else None)
+        items.append({
+            **DiscoveredDeviceResponse.model_validate(d).model_dump(),
+            "monitoring_state": st,
+            "last_seen": (p.last_seen.isoformat() if p and p.last_seen else None),
+            "collector": {"id": p.id, "hostname": p.hostname} if p else None,
+        })
+    if state:
+        items = [i for i in items if i["monitoring_state"] == state]
+
+    all_rows = (await db.execute(count_stmt.limit(1000))).scalars().all()
+    total = len(all_rows) if not state else sum(
+        1 for d in all_rows
+        if derive_monitoring_state(_match(d) is not None, _match(d).last_seen if _match(d) else None) == state
+    )
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @router.get("/devices/{device_id}")

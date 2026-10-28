@@ -17,6 +17,7 @@ from app.routers import soar as soar_router
 from app.routers import value as value_router
 from app.routers import pricing_v2
 from app.routers import reports as reports_router
+from app.routers import analytics as analytics_router
 # Phase 4 — Tenant Manager avancé + Partner Program management
 from app.routers import tenant_manager, partners_admin
 from app.routers import agent as agent_router
@@ -96,6 +97,7 @@ app.include_router(router_playbooks, prefix="/api")
 app.include_router(incidents_router.router, prefix="/api")
 app.include_router(soar_router.router, prefix="/api")
 app.include_router(threat_intel.router, prefix="/api")
+app.include_router(analytics_router.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(value_router.router, prefix="/api")

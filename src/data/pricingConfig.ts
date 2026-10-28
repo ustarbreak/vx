@@ -208,3 +208,75 @@ export function fmtMad(n: number): string {
   const s = n.toLocaleString('fr-FR', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 });
   return `${s}\u202fMAD`;
 }
+
+// ---------------------------------------------------------------------------
+// Partner (wholesale) view of the catalog — used by the /pricing?view=partner
+// tier page reached from "Simuler ma marge" on the MSSP program page.
+// Rules come from cfg.partner only: automatic tier discount on every per-unit
+// line, deal-registration bonus (+points for `months`), total-discount cap,
+// volume discount NOT applied to partners, onboarding billed 0 (partner does
+// it). No extra business rules are invented here.
+// ---------------------------------------------------------------------------
+export type PartnerMode = 'resell' | 'managed';
+
+/** Effective wholesale discount for a tier id (+ optional deal registration),
+ *  capped at cfg.partner.totalDiscountCap. */
+export function partnerDiscountFor(cfg: PricingConfigV2, tierId: string, dealRegistered = false): number {
+  const t = cfg.partner.tiers.find(x => x.id === tierId) ?? cfg.partner.tiers[0];
+  const raw = t.discount + (dealRegistered ? cfg.partner.dealRegistrationBonus.points : 0);
+  return Math.min(raw, cfg.partner.totalDiscountCap);
+}
+
+/** Wholesale price of a standard pack at a given partner tier. */
+export function partnerPackPrice(cfg: PricingConfigV2, packId: PackId, tierId: string, dealRegistered = false): number {
+  const d = partnerDiscountFor(cfg, tierId, dealRegistered);
+  return Math.round(cfg.packs[packId].price * (1 - d));
+}
+
+/** Compose a predefined partner bundle ("compositeur de packs") from catalog
+ *  service ids. Price = socle plateforme + sum of paid per-unit services
+ *  (free-pool picks cost 0 list price), then the wholesale discount applies.
+ *  floor/retention/backup quota follow the closest standard pack so the
+ *  bundle stays consistent with the published rules. */
+export interface PartnerBundleDef {
+  id: string; name: string; tagline: string;
+  services: string[]; freePicks: string[];
+  minUnits: number; maxUnits: number | null;
+  retentionDays: number; backupQuotaGbPerUnit: number; support: string;
+}
+
+export function composePartnerBundle(cfg: PricingConfigV2, services: string[], freePicks: string[]) {
+  const paid = cfg.services.filter(s => services.includes(s.id));
+  const free = cfg.freePool.filter(f => freePicks.includes(f.id));
+  const listPerUnit = cfg.custom.platformBase + paid.reduce((a, s) => a + s.price, 0);
+  const slots = cfg.custom.unlockThresholds.length;
+  const grantedFree = free.slice(0, slots); // unlocked-slot logic mirrors customSlotsInfo()
+  return {
+    paidServices: paid,
+    freeServices: free,
+    grantedFreeIds: grantedFree.map(f => f.id),
+    billedExtraFreeIds: free.filter(f => !grantedFree.includes(f)).map(f => f.id),
+    listPerUnit,
+  };
+}
+
+/** The three predefined partner bundles shipped with the program. */
+export function defaultPartnerBundles(cfg: PricingConfigV2): Record<string, PartnerBundleDef> {
+  const mk = (id: string, name: string, tagline: string, base: PackId, extraPaid: string[], extraFree: string[]): PartnerBundleDef => {
+    const p = cfg.packs[base];
+    const d = DEFAULT_PACK_DETAILS[base];
+    return {
+      id, name, tagline,
+      services: [...d.services, ...extraPaid],
+      freePicks: [...d.freePicks, ...extraFree],
+      minUnits: p.minUnits, maxUnits: p.maxUnits,
+      retentionDays: p.retentionDays, backupQuotaGbPerUnit: p.backupQuotaGbPerUnit,
+      support: base === 'souverain' ? '24/7 inclus' : base === 'pro' ? '8x5 · 24/7 optionnel' : '8x5',
+    };
+  };
+  return {
+    'partner-starter': mk('partner-starter', 'Pack Partenaire Découverte', 'Le Starter en prix de gros — idéal premiers clients MSP', 'starter', [], []),
+    'partner-growth':  mk('partner-growth', 'Pack Partenaire Croissance', 'Pro + messagerie et SOAR pour la revente différenciante', 'pro', ['soar'], []),
+    'partner-max':     mk('partner-max', 'Pack Partenaire Maximale', 'Souverain complet — votre offre haut de gamme white-label', 'souverain', [], []),
+  };
+}

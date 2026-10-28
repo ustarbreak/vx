@@ -6,15 +6,16 @@
 // selection equivalent to Souverain also hides every price → Contact sales.
 // ---------------------------------------------------------------------------
 import React, { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Check, ShieldCheck, Star, ArrowRight, Lock, Info } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Check, ShieldCheck, Star, ArrowRight, Lock, Info, Gift } from 'lucide-react';
 import Navigation from '../landing/Navigation';
 import Footer from '../landing/Footer';
+import PartnerPricingView from './PartnerPricingView';
 import {
-  PRICING_CONFIG_V2, PACK_SERVICES, ASSET_CLASS_LABELS_FR,
+  PRICING_CONFIG_V2, PACK_SERVICES, ASSET_CLASS_LABELS_FR, SERVICE_LABELS_FR,
   fmtMad, type PackId,
 } from '../../data/pricingConfig';
-import { quote, billableUnits, type AssetInput } from '../../services/pricingEngine';
+import { quote, billableUnits, customSlotsInfo, isSouverainEquivalent, type AssetInput } from '../../services/pricingEngine';
 
 const CFG = PRICING_CONFIG_V2;
 const HEAVY = Object.entries(CFG.assetClasses).filter(([, w]) => w === 1);
@@ -22,15 +23,25 @@ const LIGHT = Object.entries(CFG.assetClasses).filter(([, w]) => w === 0.5);
 const PACK_IDS: PackId[] = ['starter', 'pro', 'souverain'];
 
 export default function PricingPage() {
+  // /pricing?view=partner → wholesale tier page (reached from "Simuler ma
+  // marge" on the MSSP program page). Everything else keeps the public grid.
+  const [params] = useSearchParams();
+  const isPartner = params.get('view') === 'partner';
   return (
     <div className="min-h-screen ic-page ic-heading">
       <Navigation />
       <main className="pt-16">
-        <Hero />
-        <PackCards />
-        <AssetExplainer />
-        <Estimator />
-        <CustomCard />
+        {isPartner ? (
+          <div className="px-4 sm:px-6 lg:px-8 py-12"><PartnerPricingView /></div>
+        ) : (
+          <>
+            <Hero />
+            <PackCards />
+            <AssetExplainer />
+            <Estimator />
+            <CustomCard />
+          </>
+        )}
         <Footer />
       </main>
     </div>
@@ -159,6 +170,14 @@ function Estimator() {
   const [backup, setBackup] = useState<number | ''>('');
   const [contract, setContract] = useState<0 | 12 | 24 | 36>(0);
   const [support247, setSupport247] = useState(false);
+  // Custom (plan sur mesure) selection — services + bonus offerts. The price
+  // ladder follows PRICING_CONFIG_V2.custom.unlockThresholds: cumulative list
+  // price ≥ 369 MAD → 1 bonus offert, ≥ 479 → 2, ≥ 589 → 3 (+ ticketing).
+  const [customServices, setCustomServices] = useState<string[]>([]);
+  const [freePicks, setFreePicks] = useState<string[]>([]);
+
+  const toggleIn = (arr: string[], id: string) =>
+    arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
 
   const assets: AssetInput[] = useMemo(
     () => Object.entries(qty).filter(([, q]) => q > 0).map(([c, q]) => ({ class: c, qty: q })),
@@ -173,6 +192,17 @@ function Estimator() {
       return { pack, q };
     });
   }, [assets, units, siem, retention, backup, contract, support247]);
+
+  // Custom plan quote — only when at least one paid service is selected.
+  const customQ = useMemo(() => {
+    if (units === 0 || customServices.length === 0) return null;
+    return quote({ mode: 'custom', assets, customServices, freePicks, siemGbDay: siem, retentionDays: retention, backupVolumeGb: backup === '' ? undefined : Number(backup), contractMonths: contract, support247 });
+  }, [assets, units, customServices, freePicks, siem, retention, backup, contract, support247]);
+  const slotsInfo = useMemo(
+    () => (units > 0 && customServices.length > 0 ? customSlotsInfo({ mode: 'custom', assets, customServices, freePicks }) : null),
+    [assets, units, customServices, freePicks],
+  );
+  const customEquivalent = isSouverainEquivalent(customServices);
 
   const best = quotes ? [...quotes].filter(x => x.q.eligible).sort((a, b) => a.q.totals.monthly_excl_vat_mad - b.q.totals.monthly_excl_vat_mad)[0] : undefined;
 
@@ -222,6 +252,62 @@ function Estimator() {
           <label className="flex items-center gap-2 text-sm ic-heading cursor-pointer">
             <input type="checkbox" checked={support247} onChange={(e) => setSupport247(e.target.checked)} /> Astreinte 24/7 (option Pro uniquement)
           </label>
+
+          {/* ---- plan sur mesure : services payants --------------------- */}
+          <fieldset>
+            <legend className="text-sm font-semibold ic-heading mb-1">Plan sur mesure — vos services</legend>
+            <p className="text-xs ic-muted mb-2">Optionnel&nbsp;: composez un plan personnalisé. Le socle plateforme (99&nbsp;MAD) s’ajoute au cumul des prix liste.</p>
+            <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
+              {CFG.services.map((s) => (
+                <label key={s.id} className="flex items-center justify-between gap-2 text-sm cursor-pointer ic-heading">
+                  <span className="flex items-center gap-2">
+                    <input type="checkbox" checked={customServices.includes(s.id)}
+                      onChange={() => setCustomServices(toggleIn(customServices, s.id))} />
+                    <span className="ic-muted">{SERVICE_LABELS_FR[s.id] ?? s.id}</span>
+                  </span>
+                  <span className="font-mono text-xs ic-muted shrink-0">{s.price} MAD</span>
+                </label>
+              ))}
+            </div>
+            {slotsInfo && (
+              <p className="mt-2 text-xs ic-heading">
+                Cumul&nbsp;: <strong>{fmtMad(Math.round(slotsInfo.cumulative))}</strong> / actif →{' '}
+                <strong style={{ color: 'var(--ic-primary)' }}>
+                  {slotsInfo.slots === 0 ? 'aucun bonus débloqué' : `${slotsInfo.slots} service${slotsInfo.slots > 1 ? 's' : ''} offert${slotsInfo.slots > 1 ? 's' : ''}`}
+                </strong>
+                {' '}
+                <span className="ic-muted">
+                  (paliers&nbsp;: ≥{CFG.custom.unlockThresholds[0]} → 1&nbsp;· ≥{CFG.custom.unlockThresholds[1]} → 2&nbsp;· ≥{CFG.custom.unlockThresholds[2]} → 3 + ticketing)
+                </span>
+              </p>
+            )}
+          </fieldset>
+
+          {/* ---- bonus (pool offert) ----------------------------------- */}
+          {customServices.length > 0 && (
+            <fieldset>
+              <legend className="text-sm font-semibold ic-heading mb-1 flex items-center gap-1.5"><Gift className="w-4 h-4" style={{ color: 'var(--ic-primary)' }} /> Bonus — services offerts</legend>
+              <p className="text-xs ic-muted mb-2">Les plus valorisés remplissent les emplacements débloqués&nbsp;; les autres restent facturés au prix liste.</p>
+              <div className="space-y-1">
+                {CFG.freePool.map((f) => {
+                  const locked = !!f.topTierOnly && (slotsInfo?.slots ?? 0) < 3;
+                  const billed = slotsInfo?.billedFree.includes(f.id) ?? false;
+                  return (
+                    <label key={f.id} className={`flex items-center justify-between gap-2 text-sm ${locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer ic-heading'}`}>
+                      <span className="flex items-center gap-2">
+                        <input type="checkbox" disabled={locked} checked={freePicks.includes(f.id)}
+                          onChange={() => setFreePicks(toggleIn(freePicks, f.id))} />
+                        <span className="ic-muted">{SERVICE_LABELS_FR[f.id] ?? f.id}</span>
+                      </span>
+                      <span className="text-xs font-mono shrink-0" style={{ color: locked ? undefined : billed ? 'var(--ic-muted, inherit)' : 'var(--ic-primary)' }}>
+                        {locked ? `offert dès ${fmtMad(CFG.custom.unlockThresholds[2])}` : billed ? `${f.listPrice} MAD` : 'offert'}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+          )}
         </div>
 
         {/* results */}
@@ -267,6 +353,45 @@ function Estimator() {
               </div>
             );
           })}
+
+          {/* ---- custom plan result ------------------------------------ */}
+          {customQ && (
+            <div className="ic-card p-5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <h3 className="font-bold ic-heading flex items-center gap-2">Plan sur mesure
+                  {slotsInfo && <span className="text-xs px-2 py-0.5 rounded-full border" style={{ borderColor: 'var(--ic-border)' }}>{slotsInfo.slots} bonus offert{slotsInfo.slots > 1 ? 's' : ''}</span>}
+                </h3>
+                {!customQ.eligible && <span className="text-xs ic-muted flex items-center gap-1"><Info className="w-3.5 h-3.5" /> non éligible</span>}
+              </div>
+              {!customQ.eligible ? (
+                <p className="mt-2 text-sm" style={{ color: 'var(--ic-danger, #b91c1c)' }}>{customQ.reason}</p>
+              ) : customEquivalent ? (
+                <div className="mt-3 text-sm ic-muted">
+                  Périmètre équivalent au plan Souverain&nbsp;: tarif communiqué par notre équipe commerciale après qualification du besoin.
+                  <div className="mt-3"><Link to="/demo-request?intent=custom" className="ic-btn-primary px-4 py-2 text-sm inline-block">Contacter sales</Link></div>
+                </div>
+              ) : (
+                <>
+                  <table className="mt-3 w-full text-sm">
+                    <tbody>
+                      {customQ.lines.filter(l => l.kind !== 'vat' && l.kind !== 'info').map(l => (
+                        <tr key={l.key} className="border-b" style={{ borderColor: 'var(--ic-border)' }}>
+                          <td className="py-1.5 ic-muted">{l.label_fr}{l.note ? ` (${l.note})` : ''}</td>
+                          <td className="py-1.5 text-right font-mono ic-heading">{l.amount_mad < 0 ? '−' : ''}{fmtMad(Math.abs(l.amount_mad))}</td>
+                        </tr>
+                      ))}
+                      <tr><td className="py-1.5 font-semibold ic-heading">Mensuel HT</td><td className="py-1.5 text-right font-mono font-semibold ic-heading">{fmtMad(customQ.totals.monthly_excl_vat_mad)}</td></tr>
+                      <tr><td className="py-1.5 ic-muted">TVA 20 %</td><td className="py-1.5 text-right font-mono ic-muted">{fmtMad(customQ.totals.vat_mad)}</td></tr>
+                      <tr><td className="py-1.5 font-semibold ic-heading">Mensuel TTC</td><td className="py-1.5 text-right font-mono font-semibold ic-heading">{fmtMad(customQ.totals.monthly_incl_vat_mad)}</td></tr>
+                      {customQ.totals.onboarding_mad > 0 && <tr><td className="py-1.5 ic-muted">Mise en service (unique)</td><td className="py-1.5 text-right font-mono ic-muted">{fmtMad(customQ.totals.onboarding_mad)}</td></tr>}
+                    </tbody>
+                  </table>
+                  {customQ.upsell_notes.length > 0 && <p className="mt-2 text-xs ic-muted">{customQ.upsell_notes[0]}</p>}
+                  <div className="mt-3"><Link to="/demo-request?intent=custom" className="ic-btn-outline px-4 py-2 text-sm inline-block">Finaliser ce plan avec un conseiller</Link></div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </section>

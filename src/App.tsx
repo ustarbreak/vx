@@ -9,6 +9,12 @@ import LandingPage from './pages/LandingPage';
 import PricingPage from './pages/pricing/PricingPage';
 import PartnerProgramPage from './pages/partner/PartnerProgramPage';
 import DemoRequestPage from './pages/pricing/DemoRequestPage';
+import HealthCheckPage from './pages/pricing/HealthCheckPage';
+import AboutPage from './pages/company/AboutPage';
+import RecognitionPage from './pages/company/RecognitionPage';
+import CustomerStoriesPage from './pages/company/CustomerStoriesPage';
+import FindPartnerPage from './pages/company/FindPartnerPage';
+import ComparePage from './pages/company/ComparePage';
 import LoginPage from './pages/LoginPage';
 import ServiceDetailPage from './pages/ServiceDetailPage';
 import ComingSoonPage from './pages/ComingSoonPage';
@@ -53,7 +59,7 @@ import StatisticsPage from './pages/client-admin/StatisticsPage';
 import NetworkStatistics from './pages/client-admin/NetworkStatistics';
 import DeviceStatistics from './pages/client-admin/DeviceStatistics';
 import PerformanceStatistics from './pages/client-admin/PerformanceStatistics';
-import DeviceDetails from './pages/client-admin/DeviceDetails';
+import DeviceDetailsPage from './pages/client-admin/DeviceDetailsPage';
 import EmailSecurityPage from './pages/client-admin/EmailSecurityPage';
 import EndpointProtectionPage from './pages/client-admin/EndpointProtectionPage';
 import CloudSecurityPage from './pages/client-admin/CloudSecurityPage';
@@ -130,6 +136,16 @@ function AppRoutes() {
       <Route path="/pricing" element={<PricingPage />} />
       <Route path="/mssp" element={<PartnerProgramPage />} />
       <Route path="/demo-request" element={<DemoRequestPage />} />
+      {/* Free security health check — real page (was falling through the
+          catch-all → home when clicked from the pricing hero). */}
+      <Route path="/health-check" element={<HealthCheckPage />} />
+
+      {/* Company / "Why Infracentra" pages */}
+      <Route path="/about" element={<AboutPage />} />
+      <Route path="/recognition" element={<RecognitionPage />} />
+      <Route path="/customer-stories" element={<CustomerStoriesPage />} />
+      <Route path="/find-a-partner" element={<FindPartnerPage />} />
+      <Route path="/compare/:rival" element={<ComparePage />} />
       {/* Fast access: /demo goes straight in with the simulated demo session
           (guarded — never touches the real backend). */}
       <Route path="/demo" element={<DemoAutoEnter />} />
@@ -182,6 +198,10 @@ function AppRoutes() {
         {/* Client admin views */}
         <Route path="client-admin/dashboard" element={<ClientAdminDashboardPage />} />
         <Route path="client-admin/monitored-devices" element={<MonitoredDevicesPage />} />
+        {/* Alias: some views (e.g. IncidentsPage device chips) link to
+            /client-admin/devices — keep it on the real monitored-devices page
+            instead of falling through the catch-all back to home. */}
+        <Route path="client-admin/devices" element={<Navigate to="/client-admin/monitored-devices" replace />} />
         <Route path="client-admin/scan-history" element={<ScanHistoryPage />} />
         <Route path="client-admin/asset-inventory" element={<MonitoredAssetsPage />} />
         <Route path="client-admin/agents" element={<AgentsPage />} />
@@ -196,7 +216,7 @@ function AppRoutes() {
         <Route path="client-admin/statistics/network" element={<NetworkStatistics />} />
         <Route path="client-admin/statistics/devices" element={<DeviceStatistics />} />
         <Route path="client-admin/statistics/performance" element={<PerformanceStatistics />} />
-        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetails />} />
+        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetailsPage />} />
         <Route path="client-admin/tickets" element={<Navigate to="/client-admin/advanced-tickets" replace />} />
         
         {/* Service-specific pages */}

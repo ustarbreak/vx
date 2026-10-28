@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------------------
-// PLATFORM ARCHITECTURE — Centre.png (1983×793 central-hub artwork) rendered
-// with object-fit: contain inside a framed panel so the full emblem, rings and
-// connections stay visible (its dark background matches --lx-bg). Below it an
-// SVG-connected component map uses only real platform layers.
+// PLATFORM ARCHITECTURE — Flow.jpg (1024×1024 flow artwork) rendered with
+// object-fit: contain inside a square-ish framed panel sized to the image so
+// the full diagram stays visible without cropping (its dark background matches
+// --lx-bg). Below it an SVG-connected component map uses only real platform
+// layers.
 // ---------------------------------------------------------------------------
 import React from 'react';
 import { Reveal, SectionHeading } from './lxPrimitives';
@@ -23,13 +24,22 @@ export default function PlatformArchitecture() {
           subtitle="All integrated services feed a central correlation hub, so detection, response and infrastructure operations share one context."
         />
 
-        {/* Full diagram preserved with contain rendering */}
-        <Reveal className="ic-lx-frame ic-lx-img-contain mb-14">
-          <img
-            src="/Centre.png"
-            alt="Infracentra central security hub connecting distributed infrastructure nodes"
-            width={1983} height={793} loading="lazy" decoding="async"
-          />
+        {/* Full diagram preserved with contain rendering — container resized
+            to a square aspect ratio to fit Flow.jpg (1024×1024) */}
+        <Reveal delay={50}>
+          <div className="flex justify-center mb-14">
+            <div className="ic-lx-frame ic-lx-img-contain w-full max-w-[640px]">
+              <div style={{ aspectRatio: '1 / 1' }}>
+                <img
+                  src="/Flow.jpg"
+                  alt="Infracentra security data flow architecture"
+                  width={1024} height={1024} loading="lazy" decoding="async"
+                  className="w-full h-full"
+                  style={{ objectFit: 'contain', display: 'block' }}
+                />
+              </div>
+            </div>
+          </div>
         </Reveal>
 
         {/* Connected component map — SVG connectors on desktop */}

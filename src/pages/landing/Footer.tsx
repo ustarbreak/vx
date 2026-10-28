@@ -4,6 +4,7 @@
 // ---------------------------------------------------------------------------
 import React from 'react';
 import { Link } from 'react-router-dom';
+import SmartLink from './SmartLink';
 import { Zap } from 'lucide-react';
 
 const COLUMNS: { title: string; links: { label: string; to: string }[] }[] = [
@@ -66,7 +67,9 @@ export default function Footer() {
               <ul className="space-y-2.5 list-none">
                 {col.links.map((l) => (
                   <li key={l.label}>
-                    <Link to={l.to} className="text-sm ic-lx-muted hover:underline transition-colors">{l.label}</Link>
+                    {/* SmartLink: "/#workflow"-style section anchors scroll on
+                        the landing page instead of doing a router miss. */}
+                    <SmartLink href={l.to} className="text-sm ic-lx-muted hover:underline transition-colors">{l.label}</SmartLink>
                   </li>
                 ))}
               </ul>

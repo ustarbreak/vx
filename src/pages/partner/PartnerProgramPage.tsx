@@ -53,9 +53,9 @@ function Hero() {
         <Link to="/demo-request?intent=partner" className="ic-btn-primary px-6 py-3 text-base inline-flex items-center gap-2">
           Devenir partenaire <ArrowRight className="w-5 h-5" />
         </Link>
-        <a href="#simulateur" className="ic-btn-outline px-6 py-3 text-base inline-flex items-center gap-2">
+        <Link to="/pricing?view=partner" className="ic-btn-outline px-6 py-3 text-base inline-flex items-center gap-2">
           <TrendingUp className="w-5 h-5" /> Simuler ma marge
-        </a>
+        </Link>
       </div>
     </section>
   );

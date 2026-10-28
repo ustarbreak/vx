@@ -235,7 +235,7 @@ export default function LoginPage() {
               <div className="mt-6 pt-6 border-t border-[var(--ic-border)]">
                 <p className="text-xs text-[var(--ic-muted)] text-center">
                   Need a partner or super admin account?{' '}
-                  <a href="#" className="text-cyan-400 hover:text-cyan-300">Contact sales</a>
+                  <Link to="/demo-request" className="text-cyan-400 hover:text-cyan-300">Contact sales</Link>
                 </p>
               </div>
             </>
@@ -328,7 +328,7 @@ export default function LoginPage() {
               <div className="mt-6 pt-6 border-t border-[var(--ic-border)]">
                 <p className="text-xs text-[var(--ic-muted)] text-center">
                   Don't have an account?{' '}
-                  <a href="#" className="text-cyan-400 hover:text-cyan-300">Request access</a>
+                  <Link to="/demo-request" className="text-cyan-400 hover:text-cyan-300">Request access</Link>
                 </p>
               </div>
             </>

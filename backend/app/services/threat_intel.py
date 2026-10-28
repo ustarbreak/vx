@@ -76,7 +76,10 @@ async def fetch_alienvault_otx(ioc_value: str, timeout: float = 8.0) -> List[Dic
 
 
 async def fetch_misp(value: Optional[str] = None, limit: int = 50) -> List[Dict]:
-    """Query the configured MISP instance (Integration row named 'MISP')."""
+    """Query the configured MISP instance (Integration row named 'MISP').
+
+    With `value`: real per-IoC attribute search via MISPService.search_iocs
+    (results carry their event info + expiration). Without: recent events."""
     from app.database import AsyncSessionLocal
     from app.models import Integration
     from app.services.misp import MISPService
@@ -89,23 +92,59 @@ async def fetch_misp(value: Optional[str] = None, limit: int = 50) -> List[Dict]
     if not integ or not integ.api_endpoint or not integ.api_key:
         return []
 
-    def _query():
+    sev_map = {1: "high", 2: "medium", 3: "low", 4: "info"}
+
+    if value:
+        async def _ioc_search():
+            svc = MISPService(url=integ.api_endpoint, api_key=integ.api_key)
+            try:
+                return await svc.search_iocs(value=value)
+            finally:
+                await svc.close()
+        try:
+            attrs = await _ioc_search()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MISP IoC lookup failed: %s", exc)
+            return []
+        out = []
+        for a in attrs[:limit]:
+            ts = str(a.get("timestamp", "")) or None
+            exp = a.get("expiration_date")
+            out.append({
+                "source": "MISP",
+                "title": f"MISP attribute {a.get('type')} — {a.get('value')}",
+                "description": (a.get("comment") or "")[:300],
+                "severity": "info",
+                "confidence": 80,
+                "timestamp": ts,
+                "tags": [],
+                "references": [],
+                "detections": {},
+                "mitre_attack": [],
+                "first_seen": ts,
+                "last_updated": ts,
+                "expires": exp,
+                "analyst_comments": "",
+                "related_threats": [],
+                "iocs": [{"type": a.get("type", "unknown"),
+                           "value": a.get("value", value),
+                           "context": f"event #{a.get('event_id')}" if a.get("event_id") else ""}],
+            })
+        return out
+
+    async def _recent():
         svc = MISPService(url=integ.api_endpoint, api_key=integ.api_key)
         try:
-            events = svc.get_recent_events(hours=24 * 7)
-            if value:
-                events = [e for e in events]  # recent events; detailed IoC search below
-            return events
+            return await svc.get_recent_events(hours=24 * 7)
         finally:
-            pass
+            await svc.close()
 
     try:
-        events = await asyncio.to_thread(_query)
+        events = await _recent()
     except Exception as exc:  # noqa: BLE001
         logger.warning("MISP query failed: %s", exc)
         return []
 
-    sev_map = {1: "high", 2: "medium", 3: "low", 4: "info"}
     return [{
         "source": "MISP",
         "title": e.get("info", "MISP event"),

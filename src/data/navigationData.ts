@@ -91,30 +91,30 @@ export const navigationData: NavItem[] = [
       {
         category: 'Market',
         items: [
-          { label: 'About Us', desc: 'Moroccan cybersecurity experts — unified SecOps', icon: Building2, href: '/#about' },
-          { label: 'Industry Recognition', desc: 'Fortinet, Microsoft & CrowdStrike alliances', icon: Award, href: '/#partners' },
-          { label: 'Customer Stories', desc: 'Damanecash, Valoris System, Galenica…', icon: Users, href: '/#clients' },
-          { label: 'Find a Partner', desc: 'Join the MSP white-label program', icon: Link2, href: '/mssp' },
+          { label: 'About Us', desc: 'Moroccan cybersecurity experts — unified SecOps', icon: Building2, href: '/about' },
+          { label: 'Industry Recognition', desc: 'Fortinet, Microsoft & CrowdStrike alliances', icon: Award, href: '/recognition' },
+          { label: 'Customer Stories', desc: 'Damanecash, Valoris System, Galenica…', icon: Users, href: '/customer-stories' },
+          { label: 'Find a Partner', desc: 'Local MSP support or become one', icon: Link2, href: '/find-a-partner' },
         ]
       },
       {
         category: 'Industries',
         items: [
-          { label: 'Financial & Fintech', desc: 'Payment-grade monitoring (Damanecash, Vivalis Salaf)', icon: Building2, href: '/#clients' },
-          { label: 'Healthcare & Pharma', desc: 'Sensitive-data compliance (Galenica)', icon: Shield, href: '/#clients' },
-          { label: 'Industry & Utilities', desc: 'OT-safe supervision (HydroPlus, Amigraph)', icon: Server, href: '/#clients' },
-          { label: 'Technology & Editors', desc: 'Multi-tenant hosting posture (Valoris System)', icon: Cpu, href: '/#clients' },
+          { label: 'Financial & Fintech', desc: 'Payment-grade monitoring (Damanecash, Vivalis Salaf)', icon: Building2, href: '/customer-stories' },
+          { label: 'Healthcare & Pharma', desc: 'Sensitive-data compliance (Galenica)', icon: Shield, href: '/customer-stories' },
+          { label: 'Industry & Utilities', desc: 'OT-safe supervision (HydroPlus, Amigraph)', icon: Server, href: '/customer-stories' },
+          { label: 'Technology & Editors', desc: 'Multi-tenant hosting posture (Valoris System)', icon: Cpu, href: '/customer-stories' },
           { label: 'Public & Education', desc: 'NIS2-style governance packs', icon: BookOpen, href: '/pricing' },
         ]
       },
       {
         category: 'Compare',
         items: [
-          { label: 'Comparison Overview', desc: 'One platform vs. 6 point solutions', icon: BarChart3, href: '/pricing' },
-          { label: 'vs Splunk Enterprise', desc: 'Same SIEM value at ~1/5 of ingest cost', icon: Database, href: '/pricing' },
-          { label: 'vs Microsoft Sentinel', desc: 'Built-in SOAR + ticketing, no add-on graph', icon: Cpu, href: '/pricing' },
-          { label: 'vs CrowdStrike Falcon', desc: 'Bring-your-own-EDR, we orchestrate it', icon: Shield, href: '/pricing' },
-          { label: 'vs IBM QRadar', desc: 'Deployed in days, not months', icon: Server, href: '/pricing' },
+          { label: 'Comparison Overview', desc: 'One platform vs. 6 point solutions', icon: BarChart3, href: '/compare/splunk' },
+          { label: 'vs Splunk Enterprise', desc: 'Same SIEM value at ~1/5 of ingest cost', icon: Database, href: '/compare/splunk' },
+          { label: 'vs Microsoft Sentinel', desc: 'Built-in SOAR + ticketing, no add-on graph', icon: Cpu, href: '/compare/sentinel' },
+          { label: 'vs CrowdStrike Falcon', desc: 'Bring-your-own-EDR, we orchestrate it', icon: Shield, href: '/compare/crowdstrike' },
+          { label: 'vs IBM QRadar', desc: 'Deployed in days, not months', icon: Server, href: '/compare/qradar' },
         ]
       }
     ]
