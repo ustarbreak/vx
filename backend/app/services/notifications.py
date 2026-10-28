@@ -22,7 +22,9 @@ from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.models import Alert, NotificationRule, Notification, Ticket, Organization
+from app.models import (
+    Alert, AlertNote, AlertEvent, NotificationRule, Notification, Ticket, Organization,
+)
 from app.services.ticketing import create_ticket, now_utc
 
 DELIVERY_MODE = os.getenv("DELIVERY_MODE", "simulated")
@@ -65,7 +67,13 @@ def dedup_fingerprint(alert: Alert) -> str:
 
 
 async def correlate(db: AsyncSession, alert: Alert) -> Alert:
-    """If an identical alert occurred within the last hour, fold into it."""
+    """If an identical alert occurred within the last hour, fold into it.
+
+    Honesty rule (Phase 5): a duplicate NEVER becomes a second alert record —
+    we update the existing row in place (correlated_count, lifecycle status)
+    and discard the incoming row. Re-folding also reopens an acked/resolved
+    alert because new evidence arrived for the same fingerprint.
+    """
     fp = dedup_fingerprint(alert)
     since = now_utc() - timedelta(hours=1)
     result = await db.execute(
@@ -77,12 +85,23 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
     existing = result.scalars().first()
     if existing:
         existing.correlated_count += 1
+        # new activity on a closed alert => reopen honestly (event logged below)
+        was_closed = existing.status in ("acked", "resolved")
+        if was_closed:
+            existing.status = "active"
+            existing.resolved_at = None
+            existing.resolved_by = None
         alert.dedup_key = fp
         alert.correlated_count = existing.correlated_count
         # storm protection: suppress re-notification after 5 duplicates/hour
         alert.storm_suppressed = existing.correlated_count > 5
+        db.add(AlertEvent(
+            org_id=existing.org_id, alert_id=existing.id, actor="system",
+            action="reopened" if was_closed else "correlated",
+            detail=f"Duplicate folded (correlated_count={existing.correlated_count})"))
+        # drop the duplicate row entirely — one record per fingerprint
+        await db.delete(alert)
         await db.commit()
-        await db.refresh(alert)
         return existing  # route the *original* alert context
     alert.dedup_key = fp
     await db.commit()
@@ -292,20 +311,127 @@ async def process_alert(db: AsyncSession, alert: Alert) -> dict:
 
 
 async def ack_notification(db: AsyncSession, notif: Notification, actor: str) -> None:
-    notif.status = "acked" if notif.status == "sent" else notif.status
+    # Honesty rule: an analyst may only acknowledge a notification that was
+    # ACTUALLY delivered (status sent). Queued / dead_letter / suppressed rows
+    # keep their delivery status — we record who looked at them, never claim
+    # delivery that did not happen.
+    if notif.status == "sent":
+        notif.status = "acked"
     notif.acked_by = actor
     notif.acked_at = now_utc()
     if notif.alert_id:
         alert = (await db.execute(select(Alert).where(Alert.id == notif.alert_id))).scalars().first()
         if alert:
-            alert.acked_by = actor
-            alert.acked_at = now_utc()
+            _apply_alert_ack(alert, actor)
+            db.add(AlertEvent(org_id=alert.org_id, alert_id=alert.id, actor=actor,
+                              action="acked", detail="Acknowledged via notification ack"))
     await db.commit()
 
 
-async def retry_dead_letters(db: AsyncSession) -> int:
-    """Re-attempt everything parked in the dead-letter queue."""
-    result = await db.execute(select(Notification).where(Notification.status == "dead_letter"))
+def _apply_alert_ack(alert: Alert, actor: str) -> None:
+    if alert.status != "acked":
+        alert.status = "active" if alert.status == "resolved" else "acked"
+    alert.acked_by = actor
+    alert.acked_at = now_utc()
+
+
+async def transition_alert(
+    db: AsyncSession, alert: Alert, *, actor: str,
+    new_status: Optional[str] = None, assignee: Optional[str] = ...,
+    expected_version: Optional[int] = None, note: Optional[str] = None,
+) -> tuple[Alert, bool]:
+    """Validated lifecycle transition with optimistic concurrency + audit trail.
+
+    Returns (alert, changed). Raises HTTPException(409) on stale version.
+    Allowed transitions (server-enforced):
+      active   -> acked | resolved | (assignee change)
+      acked    -> resolved | active(reopen)
+      resolved -> active(reopen)          [re-open requires explicit 'active']
+    Idempotent: re-acknowledging an already-acked alert is a no-op (200,
+    changed=False) instead of a second history entry.
+    """
+    from fastapi import HTTPException
+    if expected_version is not None and alert.version != expected_version:
+        raise HTTPException(409, detail={
+            "error": "version_conflict",
+            "message": "Alert was modified by someone else; reload and retry.",
+            "current_version": alert.version})
+
+    changed = False
+    if new_status and new_status != alert.status:
+        allowed = {
+            "active": {"acked", "resolved"},        # reopen paths
+            "acked": {"active"},                    # fresh ack
+            "resolved": {"active", "acked"},        # resolve from either open state
+        }
+        if alert.status not in allowed.get(new_status, set()):
+            raise HTTPException(422, f"Illegal transition {alert.status} -> {new_status}")
+        if new_status == "acked":
+            _apply_alert_ack(alert, actor)
+        elif new_status == "resolved":
+            alert.status = "resolved"
+            alert.resolved_by = actor
+            alert.resolved_at = now_utc()
+        else:  # reopen
+            alert.status = "active"
+            alert.resolved_at = None
+            alert.resolved_by = None
+        db.add(AlertEvent(org_id=alert.org_id, alert_id=alert.id, actor=actor,
+                          action={"acked": "acked", "resolved": "resolved"}.get(new_status, "reopened"),
+                          detail=f"Status {new_status}"))
+        changed = True
+
+    if assignee is not ... and assignee != (alert.assignee or None):
+        alert.assignee = assignee
+        db.add(AlertEvent(org_id=alert.org_id, alert_id=alert.id, actor=actor,
+                          action="assigned", detail=f"Assignee: {assignee or '(unassigned)'}"))
+        changed = True
+
+    if note:
+        db.add(AlertNote(org_id=alert.org_id, alert_id=alert.id, author=actor,
+                         body=note, created_at=now_utc()))
+        db.add(AlertEvent(org_id=alert.org_id, alert_id=alert.id, actor=actor,
+                          action="noted", detail="Investigation note added"))
+        changed = True
+
+    if changed:
+        alert.version = (alert.version or 1) + 1
+        await db.commit()
+        await db.refresh(alert)
+    return alert, changed
+
+
+async def retry_notification(db: AsyncSession, notif: Notification, actor: str) -> Notification:
+    """Safe single-item retry — ONLY for dead-letter rows (backend-confirmed failures).
+
+    The returned row carries the *actual* post-retry outcome: `sent` means the
+    transport confirmed delivery this run; `dead_letter` means it failed again
+    (last_error updated); queued/suppressed are never produced here because
+    dispatch() runs to completion synchronously within MAX_ATTEMPTS.
+    """
+    from fastapi import HTTPException
+    if notif.status != "dead_letter":
+        raise HTTPException(409, f"Only dead-letter notifications can be retried (status={notif.status})")
+    notif.attempts = 0
+    notif.status = "queued"
+    await dispatch(db, notif)
+    db.add(AlertEvent(org_id=notif.org_id, alert_id=notif.alert_id or 0, actor=actor,
+                      action="retry",
+                      detail=f"Manual retry -> {notif.status}" + (f" ({notif.last_error})" if notif.last_error else ""))
+                 if notif.alert_id else AlertEvent(
+                     org_id=notif.org_id, alert_id=notif.id, actor=actor,
+                     action="retry", detail=f"Manual retry -> {notif.status}"))
+    await db.commit()
+    await db.refresh(notif)
+    return notif
+
+
+async def retry_dead_letters(db: AsyncSession, org_id: Optional[int] = None) -> int:
+    """Re-attempt everything parked in the dead-letter queue (optionally one tenant)."""
+    q = select(Notification).where(Notification.status == "dead_letter")
+    if org_id is not None:
+        q = q.where(Notification.org_id == org_id)
+    result = await db.execute(q)
     count = 0
     for n in result.scalars().all():
         n.attempts = 0

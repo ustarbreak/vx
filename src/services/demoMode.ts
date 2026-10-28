@@ -298,12 +298,23 @@ const alerts: any[] = demoAlertSeeds.map((s, i) => {
   return {
     id: i + 1, uid: s.uid, org_id: s.orgId, title: s.title, severity: s.severity, source: s.source,
     resource: s.hostname, correlated_count: s.correlated, storm_suppressed: s.correlated > 10,
-    acked_by: null, acked_at: null, ticket_uid: ticketsByAlertUid[s.uid] ?? null,
+    status: 'active', assignee: null, acked_by: null, acked_at: null,
+    resolved_by: null, resolved_at: null, version: 1, incident_uid: null,
+    ticket_uid: ticketsByAlertUid[s.uid] ?? null,
     created_at: iso(s.minutesAgo), description: s.description,
     raw_payload: Object.keys(raw).length ? raw : undefined,
   };
 });
 alertSeq = demoAlertSeeds.length + 1;
+// Per-alert immutable lifecycle history + append-only investigation notes
+// (mirror backend AlertEvent / AlertNote tables for Phase 5 endpoints).
+const alertEvents: any[] = [];
+const alertNotes: any[] = [];
+let alertNoteSeq = 1;
+alerts.forEach(a => alertEvents.push({
+  id: a.id, alert_id: a.id, actor: 'system', action: 'created',
+  detail: `Ingested from ${a.source}`, created_at: a.created_at,
+}));
 
 const rules: any[] = [
   { id: 1, name: 'P1 auto-escalation', org_id: null, enabled: true, conditions: { severity: ['critical'] }, channels: ['email', 'sms', 'webhook'], recipients: ['soc-leads@infracentra.io'], create_ticket: true, ticket_priority: 'p1', escalate_after_minutes: 15, quiet_hours: null, created_at: iso(9000) },
@@ -666,6 +677,12 @@ demoAlertSeeds
       internal: true, created_at: iso(Math.max(0, a.minutesAgo - 2)),
     });
   });
+// Backfill the real IR link on demo alerts (mirror of Alert.incident_uid —
+// only set when an incident row actually references the alert; never fabricated).
+incidents.forEach(inc => {
+  const al = alerts.find(x => x.uid === inc.alert_uid);
+  if (al) al.incident_uid = inc.uid;
+});
 
 // -- discovery / settings -------------------------------------------------------
 const snmpCredentials: any[] = [
@@ -908,16 +925,89 @@ export const demoStore = {
 
     // ---- Alerts / notification rules / notifications ----
     if (root === 'alerts') {
+      // Phase 5 mirror of backend/app/routers/notifications.py — identical
+      // filtering/sorting/pagination, transition matrix, version conflicts and
+      // per-row honest bulk results. Demo Mode only; production hits FastAPI.
+      const DEMO_ALERT_WRITE = ['platform_admin', 'client_admin', 'analyst', 'technician'];
+      const demoAlertWriteGuard = () => {
+        const role = demoSession().role ?? 'client_admin';
+        if (!DEMO_ALERT_WRITE.includes(role)) throw httpErr(403, `Role '${role}' cannot modify alerts`);
+      };
+      const ALERT_ALLOWED_TO: Record<string, string[]> = { active: ['acked', 'resolved'], acked: ['resolved', 'active'], resolved: ['active'] };
+      const demoAlertEvent = (a: any, action: string, detail: string) => alertEvents.push({
+        id: alertEvents.length + 1, alert_id: a.id, actor: demoSession().email ?? 'demo@infracentra.io',
+        action, detail, created_at: new Date().toISOString(),
+      });
+      const demoTransitionAlert = (a: any, opts: { status?: string; assignee?: string | null; expected_version?: number; note?: string }) => {
+        if (opts.expected_version != null && a.version !== opts.expected_version) {
+          throw Object.assign(new Error('Alert was modified by someone else; reload and retry.'), { demoStatus: 409, current_version: a.version });
+        }
+        let changed = false;
+        if (opts.status && opts.status !== a.status) {
+          if (!(ALERT_ALLOWED_TO[a.status] ?? []).includes(opts.status)) throw httpErr(422, `Illegal transition ${a.status} -> ${opts.status}`);
+          a.status = opts.status;
+          if (opts.status === 'acked') { a.acked_by = demoSession().email ?? 'demo@infracentra.io'; a.acked_at = new Date().toISOString(); }
+          else if (opts.status === 'resolved') { a.resolved_by = a.acked_by ?? demoSession().email ?? 'demo@infracentra.io'; a.resolved_at = new Date().toISOString(); }
+          else { a.resolved_at = null; a.resolved_by = null; }
+          demoAlertEvent(a, opts.status === 'acked' ? 'acked' : opts.status === 'resolved' ? 'resolved' : 'reopened', `Status ${opts.status}`);
+          changed = true;
+        }
+        if (opts.assignee !== undefined && opts.assignee !== (a.assignee || null)) {
+          a.assignee = opts.assignee;
+          demoAlertEvent(a, 'assigned', `Assignee: ${opts.assignee || '(unassigned)'}`);
+          changed = true;
+        }
+        if (opts.note) {
+          alertNotes.unshift({ id: alertNoteSeq++, alert_id: a.id, author: demoSession().email ?? 'demo@infracentra.io', body: opts.note, created_at: new Date().toISOString() });
+          demoAlertEvent(a, 'noted', 'Investigation note added');
+          changed = true;
+        }
+        if (changed) a.version = (a.version || 1) + 1;
+        return changed;
+      };
+      const demoAlertFilter = (query: URLSearchParams) => {
+        const org = callerOrgId();
+        let list = [...alerts];
+        if (org != null) list = list.filter(x => x.org_id === org);
+        else if (query.get('org_id')) list = list.filter(x => String(x.org_id) === query.get('org_id'));
+        const csv = (k: string) => query.get(k)?.split(',').map(s => s.trim()).filter(Boolean);
+        for (const [k, f] of [['severity', 'severity'], ['status', 'status'], ['source', 'source']] as const) {
+          const vals = csv(k);
+          if (vals?.length) list = list.filter(x => vals.includes(String(x[f])));
+        }
+        const asg = query.get('assignee');
+        if (asg === '__unassigned__') list = list.filter(x => !x.assignee);
+        else if (asg) list = list.filter(x => x.assignee === asg);
+        const q = query.get('q');
+        if (q) { const lq = q.toLowerCase(); list = list.filter(x => [x.title, x.description, x.resource, x.uid].some(v => String(v ?? '').toLowerCase().includes(lq))); }
+        const since = query.get('since'), until = query.get('until');
+        if (since) list = list.filter(x => x.created_at >= since);
+        if (until) list = list.filter(x => x.created_at <= until);
+        return list;
+      };
+      const demoAlertSort = (list: any[], query: URLSearchParams) => {
+        const sort = query.get('sort') ?? 'created_at';
+        const order = query.get('order') ?? 'desc';
+        const sevRank: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        const cmp = (x: any, z: any) => {
+          if (sort === 'severity') return (sevRank[x.severity] ?? 4) - (sevRank[z.severity] ?? 4);
+          const a = String(x[sort] ?? ''), b0 = String(z[sort] ?? '');
+          return a < b0 ? -1 : a > b0 ? 1 : 0;
+        };
+        const dir = order === 'asc' ? 1 : -1;
+        return list.sort((x, z) => (cmp(x, z) * dir) || (x.created_at < z.created_at ? 1 : -1));
+      };
       if (method === 'POST' && parts.length === 1) {
-        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, acked_by: null, acked_at: null, ticket_uid: null, created_at: iso(0), raw_payload: b.raw_payload ?? undefined };
+        const a = { id: alertSeq++, uid: `ALR-${String(alertSeq).padStart(4, '0')}`, org_id: b.org_id ?? 1, title: b.title ?? 'Untitled event', description: b.description ?? '', severity: b.severity ?? 'medium', source: b.source ?? 'api', resource: b.resource ?? null, correlated_count: 1, storm_suppressed: false, status: 'active', assignee: null, acked_by: null, acked_at: null, resolved_by: null, resolved_at: null, version: 1, incident_uid: null, ticket_uid: null, created_at: iso(0), raw_payload: b.raw_payload ?? undefined };
         alerts.unshift(a);
+        demoAlertEvent(a, 'created', `Ingested from ${a.source}`);
         const pipeline: any = { notifications: [] as any[] };
         for (const r of rules.filter(x => x.enabled)) {
           const sevOk = !r.conditions.severity || r.conditions.severity.includes(a.severity);
           const srcOk = !r.conditions.source || r.conditions.source.includes(a.source);
           if (!sevOk || !srcOk) continue;
           for (const ch of r.channels) {
-            const n = { id: notifSeq++, org_id: a.org_id, alert_id: a.id, rule_id: r.id, channel: ch, recipient: r.recipients[0] ?? 'ops@infracentra.io', subject: `[${a.severity.toUpperCase()}] ${a.title}`, body: a.description, severity: a.severity, status: 'sent', attempts: 1, last_error: null, sent_at: iso(0), acked_by: null, acked_at: null, created_at: iso(0) };
+            const n = { id: notifSeq++, org_id: a.org_id, alert_id: a.id, alert_uid: a.uid, rule_id: r.id, channel: ch, recipient: r.recipients[0] ?? 'ops@infracentra.io', subject: `[${a.severity.toUpperCase()}] ${a.title}`, body: a.description, severity: a.severity, status: 'sent', attempts: 1, last_error: null, sent_at: iso(0), acked_by: null, acked_at: null, created_at: iso(0) };
             notifications.unshift(n);
             pipeline.notifications.push(n);
           }
@@ -933,15 +1023,87 @@ export const demoStore = {
         }
         return delay({ alert: a, pipeline } as any) as unknown as T;
       }
+      if (method === 'GET' && parts.length === 1 && query.get('page_size')) {
+        const page = Math.max(1, Number(query.get('page') ?? 1));
+        const pageSize = Math.min(200, Math.max(1, Number(query.get('page_size') ?? 25)));
+        const all = demoAlertSort(demoAlertFilter(query), query);
+        const total = all.length;
+        return delay({ items: all.slice((page - 1) * pageSize, page * pageSize), total, page, page_size: pageSize, pages: Math.max(1, Math.ceil(total / pageSize)) } as any) as unknown as T;
+      }
+      if (method === 'GET' && parts[1] === 'summary') {
+        const list = demoAlertFilter(query);
+        const by_severity: Record<string, number> = {}, by_status: Record<string, number> = {};
+        list.forEach(x => { by_severity[x.severity] = (by_severity[x.severity] ?? 0) + 1; by_status[x.status] = (by_status[x.status] ?? 0) + 1; });
+        return delay({ total: list.length, by_severity, by_status, unassigned_active: list.filter(x => x.status === 'active' && !x.assignee).length } as any) as unknown as T;
+      }
       if (method === 'GET' && parts.length === 1) {
         let list = [...alerts].sort((a, z) => z.created_at.localeCompare(a.created_at));
         if (query.get('org_id')) list = list.filter(x => String(x.org_id) === query.get('org_id'));
         return delay(list as any) as unknown as T;
       }
-      if (method === 'POST' && parts[2] === 'ack') {
+      if (method === 'POST' && parts[2] === 'bulk') {
+        demoAlertWriteGuard();
+        const targetStatus: Record<string, string> = { ack: 'acked', resolve: 'resolved', reopen: 'active' };
+        if (b.action === 'assign' && !b.assignee) throw httpErr(422, 'assignee required for action=assign');
+        const org = callerOrgId();
+        const results: any[] = [];
+        for (const aid of (b.ids ?? []).slice(0, 200)) {
+          const a = alerts.find(x => x.id === aid);
+          if (!a || (org != null && a.org_id !== org)) { results.push({ id: aid, ok: false, reason: 'not_found_or_cross_tenant' }); continue; }
+          try {
+            const changed = demoTransitionAlert(a, { status: targetStatus[b.action], assignee: b.action === 'assign' ? b.assignee : undefined });
+            results.push({ id: aid, ok: true, changed });
+          } catch (e: any) { results.push({ id: aid, ok: false, reason: e.message }); }
+        }
+        return delay({ results, applied: results.filter(r => r.ok && r.changed).length } as any) as unknown as T;
+      }
+      if ((method === 'GET' || method === 'PATCH') && parts.length === 2) {
+        const org = callerOrgId();
         const a = alerts.find(x => x.id === Number(parts[1]));
-        if (a) { a.acked_by = 'demo@infracentra.io'; a.acked_at = iso(0); }
-        return delay(a as any) as unknown as T;
+        if (!a || (org != null && a.org_id !== org)) throw httpErr(a ? 403 : 404, a ? 'Cross-tenant access denied' : 'Alert not found');
+        if (method === 'PATCH') {
+          demoAlertWriteGuard();
+          const patch = { ...b };
+          if (patch.clear_assignee) { patch.assignee = null; delete patch.clear_assignee; }
+          const changed = demoTransitionAlert(a, patch);
+          void changed;
+          return delay(a as any) as unknown as T;
+        }
+        const detail: any = { ...a };
+        detail.related_incidents = a.incident_uid
+          ? incidents.filter(i => i.uid === a.incident_uid).map(i => ({ uid: i.uid, title: i.title, severity: i.severity, status: i.status })) : [];
+        detail.related_tickets = a.ticket_uid
+          ? tickets.filter(t => t.uid === a.ticket_uid).map(t => ({ uid: t.uid, title: t.title, status: t.status, priority: t.priority })) : [];
+        detail.notes = alertNotes.filter(n => n.alert_id === a.id);
+        detail.events = alertEvents.filter(e => e.alert_id === a.id).sort((x, z) => z.created_at.localeCompare(x.created_at));
+        return delay(detail as any) as unknown as T;
+      }
+      if (parts.length === 3 && parts[2] === 'notes') {
+        const org = callerOrgId();
+        const a = alerts.find(x => x.id === Number(parts[1]));
+        if (!a || (org != null && a.org_id !== org)) throw httpErr(a ? 403 : 404, a ? 'Cross-tenant access denied' : 'Alert not found');
+        if (method === 'POST') {
+          demoAlertWriteGuard();
+          const note = { id: alertNoteSeq++, alert_id: a.id, author: demoSession().email ?? 'demo@infracentra.io', body: String(b.body ?? '').trim(), created_at: new Date().toISOString() };
+          alertNotes.unshift(note);
+          demoAlertEvent(a, 'noted', 'Investigation note added');
+          a.version = (a.version || 1) + 1;
+          return delay(note as any) as unknown as T;
+        }
+        return delay(alertNotes.filter(n => n.alert_id === a.id) as any) as unknown as T;
+      }
+      if (method === 'GET' && parts.length === 3 && parts[2] === 'events') {
+        const a = alerts.find(x => x.id === Number(parts[1]));
+        if (!a) throw httpErr(404, 'Alert not found');
+        return delay(alertEvents.filter(e => e.alert_id === a.id).sort((x, z) => z.created_at.localeCompare(x.created_at)) as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'ack') {
+        demoAlertWriteGuard();
+        const a = alerts.find(x => x.id === Number(parts[1]));
+        if (!a) throw httpErr(404, 'Alert not found');
+        if (a.status === 'acked') return delay({ ok: true, changed: false, alert: a } as any) as unknown as T;
+        const changed = demoTransitionAlert(a, { status: 'acked' });
+        return delay({ ok: true, changed, alert: a } as any) as unknown as T;
       }
     }
     if (root === 'notification-rules') {
@@ -958,10 +1120,26 @@ export const demoStore = {
     }
     if (root === 'notifications') {
       if (method === 'GET' && parts.length === 1) {
+        // Phase 5 mirror of GET /api/notifications: tenant scoping + csv
+        // status/channel filters + q/alert_uid search, identical to FastAPI.
+        const org = callerOrgId();
         let list = [...notifications].sort((a, z) => z.created_at.localeCompare(a.created_at));
-        if (query.get('status')) list = list.filter(n => n.status === query.get('status'));
+        if (org != null) list = list.filter(n => n.org_id === org);
+        else if (query.get('org_id')) list = list.filter(n => String(n.org_id) === query.get('org_id'));
+        const csvHas = (k: string, v: string) => (query.get(k) ?? '').split(',').map(s => s.trim()).filter(Boolean).includes(v);
+        if (query.get('status')) list = list.filter(n => (query.get('status') ?? '').split(',').map(s => s.trim()).includes(String(n.status)));
+        if (query.get('channel')) list = list.filter(n => (query.get('channel') ?? '').split(',').map(s => s.trim()).includes(String(n.channel)));
+        void csvHas;
+        const q = query.get('q');
+        if (q) { const lq = q.toLowerCase(); list = list.filter(n => [n.subject, n.recipient].some(v => String(v ?? '').toLowerCase().includes(lq))); }
+        const au = query.get('alert_uid');
+        if (au) {
+          const arow = alerts.find(x => x.uid === au);
+          list = list.filter(n => n.alert_id === (arow?.id ?? -1));   // honest empty for unknown uid
+        }
         const lim = Number(query.get('limit') ?? 0);
-        if (lim > 0) list = list.slice(0, lim);
+        const pg = Number(query.get('page') ?? 1);
+        if (lim > 0) list = list.slice((pg - 1) * lim, (pg - 1) * lim + lim);
         // Bell component expects { items: [...] }; other pages expect the raw array.
         return delay(lim > 0 ? ({ items: list } as any) : (list as any)) as unknown as T;
       }
@@ -971,20 +1149,46 @@ export const demoStore = {
         return delay({ requeued: n } as any) as unknown as T;
       }
       if (method === 'GET' && parts[1] === 'analytics') {
+        const orgA = callerOrgId();
+        const scoped = orgA == null ? notifications : notifications.filter(n => n.org_id === orgA);
         const byStatus: Record<string, number> = {};
-        notifications.forEach(n => { byStatus[n.status] = (byStatus[n.status] ?? 0) + 1; });
+        scoped.forEach(n => { byStatus[n.status] = (byStatus[n.status] ?? 0) + 1; });
         const byChannel: Record<string, number> = {};
-        notifications.forEach(n => { byChannel[n.channel] = (byChannel[n.channel] ?? 0) + 1; });
-        return delay({ total: notifications.length, by_status: byStatus, by_channel: byChannel, avg_time_to_ack_minutes: 12, dead_letters: byStatus.dead_letter ?? 0 } as any) as unknown as T;
+        scoped.forEach(n => { byChannel[n.channel] = (byChannel[n.channel] ?? 0) + 1; });
+        return delay({ total: scoped.length, by_status: byStatus, by_channel: byChannel, avg_time_to_ack_minutes: 12, dead_letters: byStatus.dead_letter ?? 0 } as any) as unknown as T;
       }
       if (method === 'POST' && parts[1] === 'retry-dead-letters') {
+        // Bulk DLQ flush stays platform-admin-only (same rule as the backend).
+        if ((demoSession().role ?? '') !== 'platform_admin') throw httpErr(403, 'Platform admins only');
         let n = 0;
-        notifications.forEach(x => { if (x.status === 'dead_letter') { x.status = 'queued'; x.attempts += 0; x.last_error = null; n++; } });
-        return delay({ requeued: n } as any) as unknown as T;
+        notifications.forEach(x => { if (x.status === 'dead_letter') { x.status = 'sent'; x.attempts += 1; x.last_error = null; x.sent_at = iso(0); n++; } });
+        return delay({ retried: n } as any) as unknown as T;
+      }
+      if (method === 'POST' && parts[2] === 'retry') {
+        // Single dead-letter retry — backend-confirmed outcome only; anything
+        // that is not dead_letter -> 409, exactly like POST /{id}/retry.
+        const role = demoSession().role ?? 'client_admin';
+        if (!['platform_admin', 'client_admin', 'analyst', 'technician'].includes(role)) throw httpErr(403, `Role '${role}' cannot modify alerts`);
+        const nt = notifications.find(x => x.id === Number(parts[1]));
+        if (!nt) throw httpErr(404, 'Notification not found');
+        const orgR = callerOrgId();
+        if (orgR != null && nt.org_id !== orgR) throw httpErr(403, 'Cross-tenant access denied');
+        if (nt.status !== 'dead_letter') throw httpErr(409, `Only dead-letter notifications can be retried (status=${nt.status})`);
+        nt.attempts = 1;
+        nt.status = 'sent';           // simulated transport confirms delivery
+        nt.last_error = null;
+        nt.sent_at = iso(0);
+        return delay({ id: nt.id, status: nt.status, attempts: nt.attempts, last_error: nt.last_error, sent_at: nt.sent_at } as any) as unknown as T;
       }
       if (method === 'POST' && parts[2] === 'ack') {
         const nt = notifications.find(x => x.id === Number(parts[1]));
-        if (nt) { nt.status = 'acked'; nt.acked_by = 'demo@infracentra.io'; nt.acked_at = iso(0); }
+        if (nt) {
+          // Honesty rule from the backend: ack only flips rows the transport
+          // actually delivered; queued/dead_letter keep their delivery status.
+          if (nt.status === 'sent') nt.status = 'acked';
+          nt.acked_by = demoSession().email ?? 'demo@infracentra.io';
+          nt.acked_at = iso(0);
+        }
         return delay(nt as any) as unknown as T;
       }
     }

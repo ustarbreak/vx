@@ -404,13 +404,97 @@ class AlertResponse(BaseModel):
     resource: Optional[str]
     correlated_count: int = 1
     storm_suppressed: bool = False
+    status: str = "active"                 # active|acked|resolved — persisted lifecycle state
+    assignee: Optional[str] = None
     acked_by: Optional[str]
     acked_at: Optional[datetime]
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    version: int = 1                       # optimistic-concurrency token (409 on stale writes)
     ticket_uid: Optional[str]
+    incident_uid: Optional[str] = None     # real IR link only — never fabricated
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class AlertSummaryResponse(BaseModel):
+    """Server-computed severity/status totals over the FULL filtered set
+    (independent of pagination — so KPI cards are honest even on page 2)."""
+    total: int
+    by_severity: dict
+    by_status: dict
+    unassigned_active: int = 0
+
+
+class AlertUpdateIn(BaseModel):
+    """Status transitions / assignment. Every field is validated server-side."""
+    status: Optional[str] = Field(None, pattern=r"^(active|acked|resolved)$")
+    assignee: Optional[str] = None
+    clear_assignee: bool = False               # explicit unassign (distinguishes null from "unset")
+    expected_version: Optional[int] = None   # if sent and mismatched -> 409
+    note: Optional[str] = Field(None, max_length=4000)  # optional investigation note appended atomically
+
+
+class BulkAlertActionIn(BaseModel):
+    ids: List[int] = Field(..., min_length=1, max_length=200)
+    action: str = Field(..., pattern=r"^(ack|resolve|reopen|assign)$")
+    assignee: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {"example": {"ids": [1, 2], "action": "ack"}}
+
+
+class AlertPageResponse(BaseModel):
+    items: List[AlertResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
+class AlertDetailResponse(AlertResponse):
+    """Detail view: related detections/incidents/tickets + notes + history."""
+    related_incidents: List[dict] = []     # real Incident rows referencing this alert
+    related_tickets: List[dict] = []       # real Ticket rows referencing this alert
+    notes: List["AlertNoteResponse"] = []
+    events: List["AlertEventResponse"] = []
+
+
+class AlertNoteIn(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+
+
+class AlertNoteResponse(BaseModel):
+    id: int
+    alert_id: int
+    author: str
+    body: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertEventResponse(BaseModel):
+    id: int
+    alert_id: int
+    actor: str
+    action: str
+    detail: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationRetryResult(BaseModel):
+    id: int
+    status: str            # backend-confirmed outcome after retry: queued|sent|dead_letter|suppressed
+    attempts: int
+    last_error: Optional[str] = None
+    sent_at: Optional[datetime] = None
 
 
 class RuleCreate(BaseModel):
@@ -450,6 +534,7 @@ class NotificationResponse(BaseModel):
     id: int
     org_id: int
     alert_id: Optional[int]
+    alert_uid: Optional[str] = None      # resolved server-side for drill-down links
     rule_id: Optional[int]
     channel: str
     recipient: str
