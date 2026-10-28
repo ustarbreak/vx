@@ -46,6 +46,7 @@ from app.core.security import create_access_token, get_password_hash  # noqa: E4
 from app.models import (  # noqa: E402
     Organization, User, Alert, Ticket, Incident, Playbook, PlaybookRun, AuditLog,
 )
+from app.services.seed import ensure_uid_counters  # noqa: E402
 from app.main import app  # noqa: E402
 
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -88,6 +89,10 @@ async def _seed(factory):
                    status="new", priority="p3", created_at=NOW),
         ])
         await s.commit()
+        # STAGE 4 fix (TCK collision): bootstrap uid_counters from the seeded
+        # legacy rows so atomic allocate_uid() claims start above MAX(existing)
+        # (TCK max = 999999 -> next claim TCK-1000000; no UNIQUE collision).
+        await ensure_uid_counters(s)
 
 
 def client_for(session_factory, user_id=None):

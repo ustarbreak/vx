@@ -221,6 +221,31 @@ DEMO_PLATFORM_ADMIN_SPEC = {
 }
 
 
+
+async def ensure_triage_policy(db: AsyncSession) -> None:
+    """STAGE 5: seed the deterministic triage scoring policy v1 if absent.
+
+    Idempotent, same convention as ensure_grouping_policy: policies are
+    immutable once published — a weight/band change means inserting v2 and
+    bumping TRIAGE_POLICY_VERSION in services/triage.py. Values MUST stay
+    byte-identical to app.services.triage.DEFAULT_* (a test asserts parity).
+    """
+    from app.models import TriagePolicy
+    from app.services.triage import (DEFAULT_WEIGHTS, DEFAULT_BANDS,
+                                     DEFAULT_CONFIDENCE)
+    exists = (await db.execute(
+        select(TriagePolicy).where(TriagePolicy.policy_version == "v1")
+    )).scalars().first()
+    if exists is None:
+        db.add(TriagePolicy(
+            policy_version="v1",
+            weights=dict(DEFAULT_WEIGHTS),
+            bands=[dict(b) for b in DEFAULT_BANDS],
+            confidence_weights=dict(DEFAULT_CONFIDENCE),
+        ))
+        await db.commit()
+
+
 async def ensure_platform_admin(db: AsyncSession) -> None:
     existing = (await db.execute(
         select(User).where(User.role == "platform_admin").limit(1)

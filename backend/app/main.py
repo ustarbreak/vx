@@ -71,9 +71,12 @@ async def lifespan(app: FastAPI):
         # STAGE 3: grouping policy v1 row + atomic UID counter bootstrap.
         # Must run before any ingestion so correlate() reads the documented
         # policy and allocate_uid() never collides with legacy COUNT+1 uids.
-        from app.services.seed import ensure_grouping_policy, ensure_uid_counters
+        from app.services.seed import (ensure_grouping_policy, ensure_uid_counters,
+                                       ensure_triage_policy)
         await ensure_grouping_policy(db)
         await ensure_uid_counters(db)
+        # STAGE 5: deterministic triage policy v1 seed (idempotent).
+        await ensure_triage_policy(db)
         try:
             await ensure_demo_accounts(db)
         except Exception as e:  # noqa: BLE001 — demo seeding must never block startup
@@ -120,6 +123,8 @@ app.include_router(router_playbooks, prefix="/api")
 # Incident Response + SOAR Workflows (real backend for those two pages)
 app.include_router(incidents_router.router, prefix="/api")
 app.include_router(soar_router.router, prefix="/api")
+from app.routers import triage as triage_router  # STAGE 5
+app.include_router(triage_router.router, prefix="/api")
 app.include_router(threat_intel.router, prefix="/api")
 app.include_router(analytics_router.router, prefix="/api")
 app.include_router(services.router, prefix="/api")

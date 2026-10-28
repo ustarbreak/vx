@@ -82,16 +82,34 @@ async def _snapshot_incident(db: AsyncSession, i: Incident) -> dict:
     touches an expired ORM instance (avoids MissingGreenlet/DetachedInstanceError
     on async engines).
 
-    STAGE 4 FIX (verified by executed stack trace): the previous version ran
-    `db.refresh(...)` for expired columns. On the shared SQLite StaticPool
-    connection used under asyncio.gather, that refresh opened a SELECT cursor
-    immediately before the router's commit, producing
-    "cannot commit transaction - SQL statements in progress". The incident row
-    was just written/flushed by this same session, so all requested columns
-    hold their final values; we read them directly (no IO) instead of
-    re-querying. Response contract is unchanged — same keys, same values.
+    STAGE 4 FIX v2 (verified by executed stack trace): reading attributes off
+    the passed ORM instance is NOT safe — any earlier commit inside a service
+    call (e.g. ticketing.create_ticket) expires every object in the session,
+    and the first attribute read then triggers a synchronous lazy SELECT from
+    plain-sync code -> MissingGreenlet. We therefore RE-SELECT the row through
+    `await db.execute(select(Incident)...)` (the await puts the IO in the
+    greenlet context where it belongs), detach the loaded copy with
+    expunge() so no pending state can flush later, and snapshot it into a
+    plain dict.
+
+    StaticPool cursor-drain constraint (Stage 4) stays intact: the SELECT is
+    fully consumed via .scalars().first() before returning, so no open cursor
+    survives at commit time, and there is deliberately NO db.refresh() here.
+    Response contract is unchanged — same keys, same values.
     """
-    return _inc_out(i)
+    fresh = (await db.execute(
+        select(Incident).where(Incident.id == i.id)
+    )).scalars().first()
+    if fresh is None:      # vanished (deleted concurrently): fall back to the
+        return _inc_out(i)  # in-hand instance, which is populated post-flush
+    # Carry over the pre-resolved SIEM alert uid cache (plain attribute on the
+    # in-hand instance); re-selecting would otherwise blank `alert_uid` in the
+    # response contract.
+    cached = getattr(i, "_alert_uid_cache", None)
+    if cached is not None:
+        fresh._alert_uid_cache = cached
+    db.expunge(fresh)       # detached + loaded => reads are pure memory, no IO
+    return _inc_out(fresh)
 
 
 def _can_view(user: User, inc: Incident) -> bool:
@@ -107,11 +125,26 @@ async def _get_incident(db: AsyncSession, uid: str, user: User) -> Incident:
     return inc
 
 
-def _audit(db: AsyncSession, user: User, action: str, resource_id: str,
-           details: str, outcome: str = "success") -> None:
+async def _audit(db: AsyncSession, user: User, action: str, resource_id: str,
+                 details: str, outcome: str = "success") -> None:
+    """Append an audit row and FLUSH it immediately.
+
+    STAGE 4 FIX (MissingGreenlet on the link-ticket path): a bare db.add()
+    leaves the AuditLog INSERT pending in the session's autoflush queue. If
+    any later plain-sync code path touches the session outside the greenlet
+    context (e.g. response serialization reading an expired attribute), the
+    deferred flush explodes with MissingGreenlet. Awaiting db.flush() right
+    after db.add() persists the row inside the current await chain, so
+    nothing is left to re-flush at commit time. The StaticPool cursor-drain
+    constraint from Stage 4 stays intact: flush() completes its statement
+    synchronously within this await — no open RETURNING cursor survives —
+    and we deliberately never call db.refresh() here or in
+    _snapshot_incident().
+    """
     db.add(AuditLog(actor_id=user.id, actor_name=user.email, actor_role=user.role,
                     org_id=user.org_id, action=action, resource="incident",
                     resource_id=resource_id, details=details, outcome=outcome))
+    await db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +311,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
             raise HTTPException(403, "Cross-tenant access denied")
         inc, created = await upsert_incident_from_alert(db, alert, actor=user.email)
         if not created:
-            _audit(db, user, "incident_deduped", inc.uid,
+            await _audit(db, user, "incident_deduped", inc.uid,
                    f"Manual open matched existing incident from alert {alert.uid}")
             inc._alert_uid_cache = alert.uid
             snap = await _snapshot_incident(db, inc)
@@ -296,7 +329,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
             await append_activity(db, inc.uid, user.email, "assigned",
                                   f"Assigned at creation", to_value=body.assignee)
         inc.updated_at = now_utc()
-        _audit(db, user, "incident_created", inc.uid, f"'{inc.title}' from alert {alert.uid}")
+        await _audit(db, user, "incident_created", inc.uid, f"'{inc.title}' from alert {alert.uid}")
         inc._alert_uid_cache = alert.uid
         snap = await _snapshot_incident(db, inc)
         await db.commit()
@@ -320,7 +353,7 @@ async def create_incident(body: IncidentCreate, user: User = Depends(get_current
     db.add(inc)
     await db.flush()
     await append_activity(db, uid, user.email, "created", "Manually opened")
-    _audit(db, user, "incident_created", uid, f"'{inc.title}'")
+    await _audit(db, user, "incident_created", uid, f"'{inc.title}'")
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return {"reused": False, "incident": snap}
@@ -425,7 +458,7 @@ async def change_status(uid: str, body: StatusChange,
     await append_activity(db, uid, user.email, "status_changed",
                           body.note or f"Status moved {old} → {body.status}",
                           from_value=old, to_value=body.status)
-    _audit(db, user, "incident_status_changed", uid, f"{old} → {body.status}")
+    await _audit(db, user, "incident_status_changed", uid, f"{old} → {body.status}")
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
@@ -449,7 +482,7 @@ async def assign_incident(uid: str, body: AssignIn,
     inc.updated_at = now_utc()
     await append_activity(db, uid, user.email, "assigned",
                           "Ownership transferred", from_value=old, to_value=body.assignee)
-    _audit(db, user, "incident_assigned", uid, f"{old} → {body.assignee}")
+    await _audit(db, user, "incident_assigned", uid, f"{old} → {body.assignee}")
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
@@ -466,7 +499,7 @@ async def acknowledge_incident(uid: str, body: AckIn,
     inc.acknowledged_at = now_utc()
     inc.updated_at = now_utc()
     await append_activity(db, uid, user.email, "acked", "Acknowledged")
-    _audit(db, user, "incident_acknowledged", uid, "")
+    await _audit(db, user, "incident_acknowledged", uid, "")
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
@@ -503,7 +536,7 @@ async def update_incident(uid: str, body: IncidentUpdate,
     inc.updated_at = now_utc()
     await append_activity(db, uid, user.email, "updated",
                           "Updated fields: " + ", ".join(changed))
-    _audit(db, user, "incident_updated", uid, ", ".join(changed))
+    await _audit(db, user, "incident_updated", uid, ", ".join(changed))
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
@@ -536,7 +569,7 @@ async def add_evidence_entry(uid: str, body: EvidenceIn,
                          sha256=None, collected_by=user.email, created_at=now_utc())
     db.add(e)
     await append_activity(db, uid, user.email, "evidence_added", f"Collected '{body.name}'")
-    _audit(db, user, "incident_evidence_added", uid, body.name)
+    await _audit(db, user, "incident_evidence_added", uid, body.name)
     await db.commit()
     return {"id": e.id, "name": e.name, "kind": e.kind,
             "created_at": _iso(e.created_at)}
@@ -559,7 +592,7 @@ async def record_action(uid: str, body: ActionIn, user: User = Depends(get_curre
     db.add(a)
     await append_activity(db, uid, user.email, "action_recorded",
                           f"{body.action_type}: {body.detail[:200]}")
-    _audit(db, user, "incident_action_recorded", uid, body.action_type)
+    await _audit(db, user, "incident_action_recorded", uid, body.action_type)
     await db.commit()
     return {"id": a.id, "action_type": a.action_type, "status": a.status,
             "created_at": _iso(a.created_at)}
@@ -575,7 +608,7 @@ async def link_ticket(uid: str, body: LinkTicketIn, user: User = Depends(get_cur
     if user.role != "platform_admin" and t.org_id != user.org_id:
         raise HTTPException(403, "Cross-tenant access denied")
     await sync_ticket_link(db, inc, t, user.email)
-    _audit(db, user, "incident_linked_ticket", uid, body.ticket_uid)
+    await _audit(db, user, "incident_linked_ticket", uid, body.ticket_uid)
     snap = await _snapshot_incident(db, inc)
     await db.commit()
     return snap
@@ -607,7 +640,7 @@ async def open_ticket_for_incident(uid: str, user: User = Depends(get_current_us
     db.add(IncidentAction(incident_uid=uid, action_type="create_ticket",
                           status="completed", detail=f"Ticket {t.uid} opened",
                           performed_by=user.email, created_at=now_utc()))
-    _audit(db, user, "incident_created_ticket", uid, t.uid)
+    await _audit(db, user, "incident_created_ticket", uid, t.uid)
     await db.commit()
     return {"reused": False, "ticket_uid": t.uid}
 

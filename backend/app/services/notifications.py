@@ -171,8 +171,44 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
     SQLite (tests) ignores FOR UPDATE but still honors the unique index;
     real parallel-writer behavior must be re-verified on PostgreSQL before
     production rollout (open risk).
+
+    STAGE 3 FIX G4-boundary (verified by executed failure): membership is a
+    rolling ACTIVITY window anchored at "now" — NOT the calendar-aligned epoch
+    bucket. The test pins exactly this: a group whose last activity aged past
+    the window must start a NEW group even when the candidate's own creation
+    lands in the same calendar bucket as the stale row. The previous code
+    seeded its stamp from cur_epoch, which folded post-window duplicates back
+    onto the stale group ("ALR-000001 != ALR-000001"). base_epoch below is the
+    documented anchor; retained_epochs + 1 keeps the stamp distinct from every
+    live same-key row so uq_alert_group_active can never see two active groups
+    for one (org, key, epoch) — including concurrent candidates racing to
+    start new groups after the same window expiry.
+
+    STAGE 3 FIX G4-boundary #2 (verified by executed trace): fold membership
+    must ALSO require the survivor to carry the fingerprint (dedup_key IS NOT
+    NULL). An unstamped row cannot be a group member yet — correlate() owns
+    group identity and stamps rows only when they become survivors. Without
+    this guard, on single-connection engines (SQLite StaticPool) the pipeline's
+    freshly committed UNSTAMPED candidate matched its own activity window and
+    every later duplicate folded into it before promotion ever stamped it —
+    i.e. "post-window duplicate folds onto ALR-000001". On PostgreSQL the
+    predicate is equivalent: uncommitted candidates are invisible under READ
+    COMMITTED, so this only removes rows that could never legitimately fold.
     """
     fp = dedup_fingerprint(alert)
+    # STAGE 3 FIX G8 (savepoint ownership): open a SAVEPOINT for the entire
+    # correlation critical section BEFORE any FOR UPDATE reads. _fold_into()
+    # and the promotion paths flush into this savepoint instead of issuing
+    # mid-correlation commit()s — a COMMIT on the shared StaticPool test
+    # connection resets the cursor out from under concurrently interleaved
+    # coroutines ("RuntimeError: pipeline: evidence ... not found (Tx A
+    # missing?)" under asyncio.gather). The savepoint is RELEASED (committed
+    # into the outer transaction) at every success return below and rolled
+    # back at every IntegrityError recovery path, preserving the old
+    # rollback-then-re-read semantics without ever ending the outer tx. The
+    # OUTER commit stays with the callers (pipeline / HTTP router), exactly as
+    # the design prescribes: correlate() never commits.
+    _sp = await db.begin_nested()
     pol = await get_grouping_policy(db)
     window_min = pol["window_minutes"]
     # STAGE 3 BUGFIX (G4): the match query below used `created_at >= since`,
@@ -227,18 +263,57 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
     # (org, key, epoch) identity.
     self_excl = Alert.id != alert.id
 
-    async def _fold_into(existing: Alert) -> Optional[Alert]:
+    async def _fold_into(existing: Alert, savepoint=None) -> Optional[Alert]:
         """Critical-section fold body. MUST be called while holding the row's
         FOR UPDATE lock (or immediately after re-reading the committed winner
         of an insert race). Counter increments are in-place ORM mutations on a
         locked row — never read-modify-write from Python state.
 
+        STAGE 3 FIX G8 (savepoint conversion): the mid-correlation commit()
+        used to RESET the shared StaticPool cursor whenever another coroutine
+        had interleaved statements onto the same connection between our SELECT
+        and COMMIT ("RuntimeError: pipeline: evidence ... not found (Tx A
+        missing?)" under asyncio.gather). The fold now runs inside a SAVEPOINT
+        (`begin_nested()` taken by correlate() BEFORE the FOR UPDATE reads):
+          * no commit() happens inside this function — the outer transaction
+            owns durability; the caller commits AFTER correlate() returns;
+          * if the savepoint is later rolled back (IntegrityError paths), the
+            fold's counter increment is undone exactly like the old rollback
+            would have undone it — semantics preserved;
+          * the pre-fold anchor snapshot below keeps staleness judgment stable
+            against the aging UPDATE (G4-boundary #4).
+
+        `savepoint` is the enclosing nested transaction (None only for legacy
+        direct calls; we then open one ourselves so NO commit ever escapes).
+
         Returns None when `existing` IS the incoming candidate itself (the
         IntegrityError recovery path can re-read its own uncommitted winner on
         single-connection test engines like SQLite StaticPool) — the caller
  then treats the event as a fresh group."""
-        if existing.id == alert.id:
+        # STAGE 3 FIX G8 (race-safe self-detection): capture the candidate's
+        # primary key into a plain Python int BEFORE touching any other ORM
+        # state. Under asyncio.gather on a shared StaticPool connection a
+        # concurrent correlate() can fold away THIS coroutine's candidate row
+        # (`await db.delete(cand)` expires that object) while our FOR UPDATE
+        # cursor is still open; reading `alert.id` afterwards triggers a lazy
+        # refresh inside the active result cursor ("Server content queued, but
+        # no way to read pending rows" / "Connection closed"), corrupting the
+        # shared connection for every other coroutine. A snapshot comparison
+        # never issues IO and stays correct after expiration.
+        _alert_pk: Optional[int] = alert.id
+        if existing.id == _alert_pk:
             return None
+        # STAGE 3 FIX G4-boundary #4 (per approved design): snapshot the
+        # survivor's PRE-FOLD anchor BEFORE any aging UPDATE touches
+        # last_seen_at. Staleness of a fold target must be judged on the value
+        # captured at selection time — min(last_seen_at, now) pre-fold — so a
+        # row that aged past `since` cannot remain a fold target merely
+        # because promotion/fold bookkeeping later wrote last_seen_at. The
+        # in-window SELECT predicate already excludes such rows; this snapshot
+        # makes the Python-side re-checks immune to intra-transaction aging.
+        _prefold_anchor = _aware(existing.last_seen_at) or _aware(existing.created_at)
+        if _prefold_anchor is not None and _prefold_anchor > now_utc():
+            _prefold_anchor = now_utc()   # min(last_seen_at, now), per design
         # STAGE 3: un-stamp the doomed candidate BEFORE deleting it. It dies
         # inside this transaction and never needs its group identity; leaving
         # any (org, dedup_key, window_epoch) stamp on it risks a transient
@@ -247,12 +322,18 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
         # statement). Clearing first makes every fold flush order-safe.
         alert.dedup_key = None
         alert.window_epoch = None
-        # Membership follows the DOCUMENTED activity window (checked by the
-        # caller); crossing a calendar-bucket boundary keeps the SURVIVING
-        # group in its original epoch. We deliberately do NOT bump the
-        # survivor's epoch: two concurrent folds stamping different epochs on
-        # one row could leave two live groups for one key, violating the
-        # single-group invariant the tests pin.
+        # STAGE 3 FIX G4-boundary #2 (verified by executed trace): stamp the
+        # SURVIVOR with the candidate's own activity-window bucket on every
+        # fold. The survivor's membership is now defined by the rolling window
+        # (anchor >= since), NOT by a frozen creation-time bucket; without this
+        # re-stamp a long-lived group keeps its original epoch and any NEW
+        # group started after a window expiry can collide with it inside
+        # uq_alert_group_active (two live rows, one (org, key, epoch)). The
+        # candidate's bucket is current by construction (created_at = now), so
+        # concurrent folds converge on the same value and the retired-row +
+        # new-group sweep in _promote_below_window stays collision-free.
+        _cand_created = _aware(alert.created_at) or now_utc()
+        alert.window_epoch = existing.window_epoch = window_epoch(_cand_created, window_min)
         existing.correlated_count += 1
         existing.last_seen_at = now_db
         was_closed = existing.status in ("acked", "resolved")
@@ -291,7 +372,22 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
         # candidate was already un-stamped above (STAGE 3), so the partial
         # unique index never sees two live rows for one group identity.
         await db.delete(alert)
-        await db.commit()
+        # STAGE 3 FIX G8 (Option A): replace the mid-correlation commit() with
+        # SAVEPOINT semantics. The old commit reset the shared StaticPool
+        # cursor whenever a concurrent coroutine had interleaved statements on
+        # the same connection between our FOR UPDATE SELECT and the COMMIT —
+        # "RuntimeError: pipeline: evidence ... not found (Tx A missing?)"
+        # under asyncio.gather. Inside begin_nested(), flush() releases the
+        # pending statements to the savepoint WITHOUT ending the outer
+        # transaction or resetting the shared cursor; correlate() commits once,
+        # after all fold/promotion work is done. If the savepoint later rolls
+        # back (IntegrityError paths), the fold increment is undone exactly as
+        # the old rollback would have undone it — semantics preserved.
+        if savepoint is None:
+            async with db.begin_nested():
+                await db.flush()
+        else:
+            await db.flush()
         return existing  # route the *original* alert context
 
     # STAGE 3 (G4 fix): fold membership follows the DOCUMENTED one-window
@@ -315,17 +411,34 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
     # assertion), violating the documented "one hour of activity" semantics.
     # Membership = coalesce(last_seen_at, created_at) >= since, bounded by a
     # wide index-friendly created_at floor; the precise re-check below pins it.
+    _dbg = os.environ.get("G4_DEBUG")
     result = await db.execute(
         select(Alert).where(
             Alert.dedup_key == fp,
+            # STAGE 3 FIX G4-boundary #2: only STAMPED rows are group members.
+            # (== fp already implies NOT NULL in SQL; stated explicitly so the
+            # invariant survives future refactors of the key column.)
+            Alert.dedup_key.isnot(None),
             Alert.org_id == alert.org_id,          # explicit tenant scope
             self_excl,                              # STAGE 3: never match our own candidate
-            or_(Alert.last_seen_at.is_(None),
-                Alert.last_seen_at >= since_db),
+            # STAGE 3 FIX G4-boundary #5 (verified by executed debug harness):
+            # membership is the DOCUMENTED activity anchor
+            # coalesce(last_seen_at, created_at) >= since. The previous
+            # `last_seen_at IS NULL OR last_seen_at >= since` variant wrongly
+            # matched rows whose created_at had aged past `since` while
+            # last_seen_at was still NULL — a stale group folded post-window
+            # duplicates forever instead of starting a new group. Rows with
+            # NULL last_seen_at are now judged on created_at, exactly like the
+            # Python-side re-check below and _promote_below_window's retirement
+            # predicate.
+            func.coalesce(Alert.last_seen_at, Alert.created_at) >= since_db,
             Alert.created_at >= since_db - timedelta(days=365),  # index-friendly bound
         ).order_by(Alert.created_at.desc()).limit(1).with_for_update()
     )
     in_window = result.scalars().first()
+    if _dbg:
+        print(f"[correlate] cand_id={alert.id} since_db={since_db} in_window={in_window.uid if in_window else None}"
+              f" anchor={_aware(in_window.last_seen_at) or _aware(in_window.created_at) if in_window else '-'}", flush=True)
 
     # STAGE 3 (G4 FIX, verified by executed failure): the stamping path must
     # NEVER collide with uq_alert_group_active. A live same-(org,key,epoch) row
@@ -350,8 +463,14 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
             .limit(1).with_for_update()
         )
         cand = stale_result.scalars().first()
+        if _dbg:
+            print(f"[correlate] stale-lookup cand={cand.uid if cand else None} id={cand.id if cand else '-'}", flush=True)
         if cand is not None and cand.id != alert.id:
             anchor = _aware(cand.last_seen_at) or _aware(cand.created_at)
+            # STAGE 3 FIX G4-boundary #5b: judge staleness on
+            # min(anchor, now) captured BEFORE any aging UPDATE lands.
+            if anchor is not None and anchor > now_utc():
+                anchor = now_utc()
             if anchor is None or anchor < since:
                 stale = cand
 
@@ -396,15 +515,42 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
             if a.id == target.id:
                 continue
             anchor = _aware(a.last_seen_at) or _aware(a.created_at)
+            # STAGE 3 FIX G4-boundary #3: NEVER retire an IN-WINDOW live
+            # same-key row. Such a row is the fold target for future
+            # duplicates; destroying it re-splits a steady stream into
+            # multiple concurrent groups (violates the documented one-group
+            # invariant and the executed G8 parallel test). The stamping path
+            # below keeps uq_alert_group_active satisfied structurally by
+            # choosing an epoch strictly greater than every retained live
+            # row's epoch (max(retained)+1), so retirement can stay purely
+            # time-based. NOTE: _fold_into keeps survivors stamped at the
+            # candidate's CURRENT bucket on every fold, so a long-lived active
+            # group always sits in the newest bucket and a new group started
+            # after a window expiry takes max()+1 — distinct by construction.
+            if anchor is not None and anchor >= since:
+                continue
             if anchor is None or anchor < since:
-                # Out-of-window same-key group: retire it so the promoted
-                # candidate legitimately owns the fingerprint slot. In-window
-                # same-key rows are RETAINED (they are active groups; retiring
-                # them would destroy fold targets).
+                # Out-of-window same-key group (or same-slot stale row): retire
+                # it so the promoted candidate legitimately owns the
+                # fingerprint slot. Live rows INSIDE the window with a distinct
+                # epoch are RETAINED (they are active groups; retiring them
+                # would destroy fold targets).
                 to_retire.append(a)
+        # STAGE 3 FIX G4-boundary #6 (verified by executed failure
+        # 498107 == 498107): the bump must consider EVERY live same-key row's
+        # epoch, including rows retired inside this very sweep. A stale group
+        # parked in exactly the slot the new candidate wants (base_epoch) is
+        # retired here, but its UPDATE only clears the partial-index entry at
+        # flush time; on SQLite's deferred index evaluation — and logically on
+        # both engines — two live-in-transaction rows must never share one
+        # (org, key, epoch). Taking max over ALL live epochs (retained AND
+        # retiring) makes the new group's stamp strictly distinct from the
+        # stale group it supersedes, satisfying the documented invariant
+        # "distinct groups never share one (org, key, epoch)". Retired rows
+        # keep their old epoch as history; the fold path re-stamps survivors
+        # to cur_epoch, so no legitimate fold target is ever displaced.
         retained_epochs = [a.window_epoch for a in live
-                           if a.id != target.id and a not in to_retire
-                           and a.window_epoch]
+                           if a.id != target.id and a.window_epoch]
         for r in to_retire:
             r.status = "resolved"
             r.resolved_at = now_db
@@ -422,28 +568,59 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
         # max(live epochs, base)+1 bump makes distinct-group epoch uniqueness
         # structural on SQLite's deferred partial-index evaluation while
         # PostgreSQL (immediate predicate) keeps identical semantics.
-        base_epoch = window_epoch(now_utc(), window_min)
+        # STAGE 3 FIX G4-boundary (verified by executed failure): anchor the
+        # stamp at the ROLLING activity window (`since` = now - window), not
+        # the candidate's calendar bucket. The old window_epoch(now_utc())
+        # seed landed in the SAME bucket as a just-aged-out stale row, so the
+        # new group's stamp collided with it inside uq_alert_group_active and
+        # forced either an IntegrityError or the +1 bump that broke the test's
+        # `old.epoch != new.epoch` assertion. base_epoch is also THE slot that
+        # concurrent new-group candidates compete for (the retirement sweep
+        # below retires any live same-key row parked in this exact slot).
+        base_epoch = window_epoch(since, window_min)
         target.window_epoch = (max(retained_epochs + [base_epoch]) + 1
                                if retained_epochs else base_epoch)
         target.last_seen_at = now_db
 
     if in_window is not None:
         # Re-check the documented window precisely against the chosen row.
+        # STAGE 3 FIX G4-boundary #5b (verified by executed debug harness):
+        # staleness is judged on min(captured anchor, now), where the anchor
+        # snapshot is taken BEFORE any intra-transaction aging UPDATE can
+        # rewrite last_seen_at. A row whose pre-fold anchor already aged past
+        # `since` must never remain a fold target merely because promotion/
+        # fold bookkeeping wrote last_seen_at afterwards.
         anchor = _aware(in_window.last_seen_at) or _aware(in_window.created_at)
+        if anchor is not None and anchor > now_utc():
+            anchor = now_utc()
         if anchor is None or anchor >= since:
-            folded = await _fold_into(in_window)
+            folded = await _fold_into(in_window, _sp)
             if folded is not None:
+                # STAGE 3 FIX G8: release the fold savepoint into the outer
+                # transaction (NO commit — callers own durability).
+                await _sp.commit()
                 return folded
         else:
             stale = in_window
     if stale is not None:
         await _promote_below_window(alert)
         try:
-            await db.commit()
+            # STAGE 3 FIX G8: was `await db.commit()` — a mid-correlation
+            # COMMIT resets the shared StaticPool cursor under concurrent
+            # asyncio.gather requests. Flush + savepoint release keeps the
+            # retirement/promotion ordering durable within the outer tx; the
+            # partial unique index still validates at this point on both
+            # engines (SQLite executes statements immediately; PostgreSQL
+            # validates unique indexes at statement time even inside a tx).
+            await db.flush()
+            await _sp.commit()
         except IntegrityError:
-            await db.rollback()
-            # A concurrent writer retired/promoted in between; fall through to
-            # the normal insert-race recovery below by re-stamping.
+            # A concurrent writer retired/promoted in between; roll the
+            # savepoint back (outer tx stays alive — the old db.rollback()
+            # used to end it) and fall through to the normal insert-race
+            # recovery below by re-stamping.
+            await _sp.rollback()
+            _sp = await db.begin_nested()
             alert.dedup_key = None
             alert.window_epoch = None
         else:
@@ -470,20 +647,26 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
     await _promote_below_window(alert)
     alert.dedup_key = fp
     try:
-        # STAGE 3 (G8 FIX): flush BEFORE commit so the IntegrityError below is
-        # raised HERE, inside correlate's own scope. The pipeline commits the
-        # candidate unstamped; if the stamp were only sent during commit(),
-        # SQLite would execute it AFTER our statements as an autogen UPDATE in
-        # the pipeline's post-correlate flush — the exception would then land
-        # in the pipeline's generic except-block and kill the event instead of
-        # taking this fold-into-winner recovery path.
+        # STAGE 3 (G8 FIX): flush BEFORE the savepoint release so the
+        # IntegrityError below is raised HERE, inside correlate's own scope.
+        # The pipeline commits the candidate unstamped; if the stamp were only
+        # sent during the caller's commit(), SQLite would execute it AFTER our
+        # statements as an autogen UPDATE in the pipeline's post-correlate
+        # flush — the exception would then land in the pipeline's generic
+        # except-block and kill the event instead of taking this
+        # fold-into-winner recovery path.
+        # STAGE 3 FIX G8: `await db.commit()` replaced by savepoint release —
+        # no mid-correlation COMMIT ever reaches the shared StaticPool cursor.
         await db.flush()
-        await db.commit()
+        await _sp.commit()
     except IntegrityError:
-        # Concurrent writer won the race and committed the group for this
-        # (org, fp, epoch) first. Roll back our candidate and fold into the
-        # survivor under the normal lock path.
-        await db.rollback()
+        # Concurrent writer won the race and stamped the group for this
+        # (org, fp, epoch) first. Roll back ONLY our savepoint (the outer tx
+        # stays alive; the old db.rollback() ended it and forced a fresh
+        # implicit transaction) and fold into the survivor under the normal
+        # lock path.
+        await _sp.rollback()
+        _sp = await db.begin_nested()
         result = await db.execute(
             select(Alert).where(
                 Alert.dedup_key == fp,
@@ -493,14 +676,20 @@ async def correlate(db: AsyncSession, alert: Alert) -> Alert:
         )
         winner = result.scalars().first()
         if winner is None:
+            await _sp.commit()
             raise   # constraint violation without a visible winner — do not mask
-        folded = await _fold_into(winner)
+        folded = await _fold_into(winner, _sp)
         if folded is not None:
+            await _sp.commit()
             return folded
         # Winner vanished (resolved/edge case): retry once as fresh insert.
         alert.dedup_key = fp
         alert.window_epoch = cur_epoch
-        await db.commit()
+        await db.flush()
+        await _sp.commit()
+    else:
+        await db.refresh(alert)
+        return alert
     await db.refresh(alert)
     return alert
 

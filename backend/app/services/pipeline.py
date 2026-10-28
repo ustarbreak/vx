@@ -120,6 +120,14 @@ async def process_ingested_event(
                 "evidence_uid": rec.event_uid, "folded_into_existing": True,
                 "pipeline": diag}
 
+    # STAGE 3 FIX G8 (per approved design): initialize the compensation id at
+    # function top. If the failure happens BEFORE the candidate is committed
+    # (e.g. inside allocate_uid under concurrent StaticPool interleaving), the
+    # except-block previously raised UnboundLocalError on `candidate_db_id` and
+    # masked the original exception.
+    candidate_db_id: Optional[int] = None
+    rec_pk: Optional[int] = rec.id
+
     try:
         # --- persist candidate alert row (same contract as legacy HTTP path) --
         # STAGE 3: UID allocated atomically from uid_counters (no COUNT+1 race);
