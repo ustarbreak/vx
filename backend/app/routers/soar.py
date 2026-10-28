@@ -22,7 +22,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -47,8 +47,13 @@ router = APIRouter(prefix="/soar", tags=["SOAR Workflows"])
 def _scope_org(user: User, requested_org: int | None) -> int | None:
     if user.role == "platform_admin":
         return requested_org
+    # clients may only ever act on their own tenant. A missing org_id in the
+    # request means "my org" — never platform scope (server-side enforcement;
+    # an explicit org_id=null from a client must NOT create shared rows).
     if requested_org is not None and requested_org != user.org_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
+    if user.org_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User has no organization")
     return user.org_id
 
 
@@ -126,12 +131,16 @@ async def list_playbooks(current_user: User = Depends(get_current_user),
                         page_size: int = Query(50, ge=1, le=200)):
     stmt = select(Playbook)
     if current_user.role != "platform_admin":
-        # own tenant + platform-shared playbooks
-        stmt = stmt.where(Playbook.org_id.in_([current_user.org_id, None]))
+        # own tenant + platform-shared playbooks. NOTE: SQL IN never matches
+        # NULL, so the shared rows must be included via an explicit IS NULL
+        # predicate (org_id.in_([org, None]) silently hid platform playbooks).
+        stmt = stmt.where(or_(Playbook.org_id == current_user.org_id,
+                              Playbook.org_id.is_(None)))
     else:
         scope = _scope_org(current_user, org_id)
         if scope is not None:
-            stmt = stmt.where(Playbook.org_id.in_([scope, None]))
+            stmt = stmt.where(or_(Playbook.org_id == scope,
+                                  Playbook.org_id.is_(None)))
     if enabled is not None:
         stmt = stmt.where(Playbook.enabled == enabled)
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
@@ -276,15 +285,20 @@ async def _run_step(db: AsyncSession, run: PlaybookRun, step: dict, user: User,
             )
             return "completed", f"Ticket {t.uid} created via ticketing engine"
         if action == "notify":
+            # Redact the message BEFORE it is persisted to the notification
+            # row and before it can reach any log/echo surface — secrets must
+            # never be stored verbatim even transiently.
+            safe_message = str(redact(params.get("message", "")))
             n = Notification(org_id=run.org_id or user.org_id or 0,
                              subject=f"[SOAR] {run.uid}",
-                             body=str(redact(params.get("message", ""))),
+                             body=safe_message,
                              channel=params.get("channel", "in_app"),
                              recipient=str(params.get("recipient", user.email)),
                              severity="medium", status="queued", created_at=now_utc())
             db.add(n)
             await db.flush()
-            return "completed", f"Notification queued on channel '{n.channel}' (delivery via notification engine)"
+            return ("completed",
+                    f"Notification queued on channel '{n.channel}' with message: {safe_message}")
         if action == "add_evidence":
             ev_name = params.get("name", "soar-snapshot.txt")
             target_ticket = run.incident_uid and (

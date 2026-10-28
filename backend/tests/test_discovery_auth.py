@@ -6,6 +6,9 @@ Covers (no intrusive scanning is performed — scans stay queued; the background
 executor is never scheduled against real networks in tests):
   * authentication enforced on every discovery endpoint
   * cross-tenant access rejected (scan status / devices / cancel / import)
+  * scan creation requires explicit operator authorization (authorized=true;
+    403 otherwise — checked BEFORE input validation so an unauthorized caller
+    never learns which payloads would be valid)
   * scan creation validates CIDR, rejects unbounded prefixes (< /22), and
     rejects prefix overrides that WIDEN the requested scope
   * unknown credential ids for the tenant are rejected (422)
@@ -136,27 +139,62 @@ async def test_cross_tenant_scan_status_and_devices_rejected(session_factory):
 
 
 async def test_devices_list_never_leaks_other_tenant(session_factory):
+    """The devices endpoint returns a paginated envelope; a foreign tenant's
+    page must be empty even though org 1 has rows."""
     await _seed(session_factory)
     async with client_for(session_factory, 2) as c:
         r = await c.get("/api/discovery/devices")
-        assert r.status_code == 200 and r.json() == []
+        assert r.status_code == 200
+        body = r.json()
+        assert body["items"] == [] and body["total"] == 0
 
 
 # ---------------------------------------------------------------------------
 # Bounded, validated scan creation
 # ---------------------------------------------------------------------------
+async def test_scan_requires_explicit_authorization(session_factory):
+    """Intrusive action gate: authorized=false (the default) is refused with 403
+    before any other validation runs — even for an otherwise valid payload."""
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.post("/api/discovery/scans", json={"network_cidr": "10.0.0.0/24"})
+        assert r.status_code == 403
+        assert "authoriz" in r.text.lower()
+
+
 async def test_invalid_cidr_rejected(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, 1) as c:
-        r = await c.post("/api/discovery/scans", json={"network_cidr": "not-a-cidr"})
+        r = await c.post("/api/discovery/scans",
+                         json={"network_cidr": "not-a-cidr", "authorized": True})
         assert r.status_code == 422
 
 
 async def test_unbounded_prefix_override_rejected(session_factory):
-    """A /8 override would mean a ~16M-host scan — must be refused outright."""
+    """A /8 override on a /24 widens the scope AND is unbounded (< /22) — refuse.
+
+    The router checks "cannot widen" first; either rejection message proves the
+    request was refused with 422 before any scan was scheduled.
+    """
     await _seed(session_factory)
     async with client_for(session_factory, 1) as c:
-        r = await c.post("/api/discovery/scans", json={"network_cidr": "10.0.0.0/24", "prefix": 8})
+        r = await c.post("/api/discovery/scans",
+                         json={"network_cidr": "10.0.0.0/24", "prefix": 8, "authorized": True})
+        assert r.status_code == 422
+        text = r.text.lower()
+        assert "unbounded" in text or "/22" in text or "widen" in text
+        # no scan should have been created for the rejected payload
+        scans = (await c.get("/api/discovery/scans")).json()
+        assert all(s["network_cidr"] != "10.0.0.0/8" for s in scans)
+
+
+async def test_unbounded_prefix_same_mask_rejected(session_factory):
+    """prefix == the CIDR's own mask doesn't widen anything, but < /22 is still
+    an unbounded-scope policy violation -> 422 'unbounded'."""
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.post("/api/discovery/scans",
+                         json={"network_cidr": "10.0.0.0/16", "prefix": 16, "authorized": True})
         assert r.status_code == 422
         assert "unbounded" in r.text.lower() or "/22" in r.text
 
@@ -165,7 +203,8 @@ async def test_prefix_override_cannot_widen_scope(session_factory):
     """prefix smaller than the CIDR's own mask would ENLARGE the target — refuse."""
     await _seed(session_factory)
     async with client_for(session_factory, 1) as c:
-        r = await c.post("/api/discovery/scans", json={"network_cidr": "10.0.0.0/24", "prefix": 23})
+        r = await c.post("/api/discovery/scans",
+                         json={"network_cidr": "10.0.0.0/24", "prefix": 23, "authorized": True})
         assert r.status_code == 422
 
 
@@ -173,7 +212,8 @@ async def test_unknown_credential_id_rejected(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, 1) as c:
         r = await c.post("/api/discovery/scans",
-                         json={"network_cidr": "10.0.0.0/24", "credential_ids": [2]})
+                         json={"network_cidr": "10.0.0.0/24", "credential_ids": [2],
+                               "authorized": True})
         assert r.status_code == 422  # cred 2 belongs to another tenant
 
 
@@ -204,9 +244,17 @@ async def test_provenance_fields_server_derived(session_factory):
     async with client_for(session_factory, 1) as c:
         r = await c.get("/api/discovery/devices")
         assert r.status_code == 200
-        by_id = {d["id"]: d for d in r.json()}
+        body = r.json()
+        assert body["total"] == 2 and len(body["items"]) == 2
+        by_id = {d["id"]: d for d in body["items"]}
         snmp_dev, plain_dev = by_id[100], by_id[101]
         assert snmp_dev["verified"] is True and plain_dev["verified"] is False
         assert snmp_dev["source"] == "discovery"      # scanner finding, not manual CMDB
-        assert snmp_dev["last_seen"] is not None       # real observation timestamp
-        assert plain_dev["last_seen"] is not None
+        # last_seen is heartbeat-derived: no AgentProbe matches the seeded rows,
+        # so it must stay None — never synthesized from created_at.
+        assert snmp_dev["last_seen"] is None and plain_dev["last_seen"] is None
+        # ...and without a collector probe the honest state is 'enrolled',
+        # never 'monitored'/'online' just because a DB row exists.
+        assert snmp_dev["monitoring_state"] == "enrolled"
+        assert plain_dev["monitoring_state"] == "enrolled"
+        assert snmp_dev["collector"] is None and plain_dev["collector"] is None

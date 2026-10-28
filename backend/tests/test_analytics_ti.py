@@ -85,11 +85,11 @@ async def _seed(factory):
                      status="investigating", category="intrusion", alert_id=1,
                      affected_assets=["srv-01"], ioc_related=["185.220.101.7"],
                      created_at=NOW - timedelta(hours=2),
-                     acknowledged_at=NOW - timedelta(hours=2, minutes=14)),
+                     acknowledged_at=NOW - timedelta(hours=1, minutes=46)),
             Incident(id=2, uid="INC-2", org_id=1, title="Malware on srv-01", severity="critical",
                      status="resolved", category="malware",
                      affected_assets=["srv-01"], ioc_related=[],
-                     created_at=NOW - timedelta(hours=5), resolved_at=NOW - timedelta(hours=3, minutes=30)),
+                     created_at=NOW - timedelta(hours=5), resolved_at=NOW - timedelta(hours=2, minutes=30)),
             Incident(id=9, uid="INC-9", org_id=3, title="Foreign incident", severity="low",
                      status="open", category="other", affected_assets=["h"], ioc_related=["evil.example"],
                      created_at=NOW),
@@ -162,10 +162,14 @@ async def test_overview_metrics_correctness(session_factory):
 async def test_empty_dataset_and_no_fake_durations(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=3) as c:
-        # org 3 has data but only for "now"; query a past empty window
+        # org 3 has data but only for "now"; query a past empty window.
+        # Pass params as a dict so httpx percent-encodes the "+" in the UTC
+        # offset (raw isoformat() strings put "+00:00" in the URL, which
+        # form-decodes to a space and fails server-side datetime parsing).
         since = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
         until = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-        r = await c.get(f"/api/analytics/overview?since={since}&until={until}")
+        r = await c.get("/api/analytics/overview", params={"since": since, "until": until})
+        assert r.status_code == 200, r.text
         body = r.json()
         assert body["events"]["total"] == 0 and body["detections"]["total"] == 0
         assert body["detections"]["mttr_minutes"] is None      # no sample => null

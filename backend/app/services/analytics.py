@@ -99,37 +99,46 @@ async def _detection_stats(db: AsyncSession, org_id: int, since: datetime,
         total += int(cnt or 0)
 
     # MTTR / MTTD proxies (minutes). Empty samples -> None, never fake 0.
-    # Portable AVG over datetime columns: raw SQL with explicit UTC bounds.
-    # NOTE: storage stores naive-UTC datetimes; julianday() of a *naive* text
-    # is interpreted as UTC midnight-based days — multiply by 1440 for minutes.
-    s_iso = since.strftime("%Y-%m-%d %H:%M:%S")
-    u_iso = until.strftime("%Y-%m-%d %H:%M:%S")
-    dialect = db.bind.dialect.name if hasattr(db.bind, "dialect") else ""
-    if dialect == "sqlite":
-        diff = lambda a, b: f"(julianday({a}) - julianday({b})) * 1440.0"  # noqa: E731
-    elif dialect.startswith("mysql"):
-        diff = lambda a, b: f"TIMESTAMPDIFF(MINUTE, {b}, {a})"  # noqa: E731
-    else:  # postgres: timestamptz subtraction yields an interval in seconds
-        diff = lambda a, b: f"EXTRACT(EPOCH FROM ({a} - {b})) / 60.0"  # noqa: E731
+    # Computed portably in Python from the ORM's own DATETIME parsing, which
+    # keeps microseconds exact on every backend (SQLite's julianday() rounds
+    # fractional days and loses sub-second precision — verified drift up to
+    # ±60s per sample — so we avoid dialect-specific SQL date math here).
+    rows = (await db.execute(
+        select(Incident.created_at, Incident.resolved_at,
+               Incident.acknowledged_at).where(*conds))).all()
 
-    async def _avg(col: str) -> Optional[float]:
-        sql = text(
-            f"SELECT AVG({diff(col, 'created_at')}) FROM incidents "
-            "WHERE org_id=:o AND created_at>=:s AND created_at<=:u "
-            f"AND {col} IS NOT NULL")
-        val = (await db.execute(sql, {"o": org_id, "s": s_iso, "u": u_iso})).scalar()
-        return round(float(val), 1) if val is not None else None
+    def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+        """Normalize stored timestamps to naive UTC.
 
-    mttr = await _avg("resolved_at")
-    mttd = await _avg("acknowledged_at")
+        Postgres timestamptz columns come back timezone-aware while the seed
+        path stores naive-UTC datetimes; mixing the two raises TypeError on
+        subtraction. Naive values are interpreted as UTC by convention."""
+        if dt is None:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+
+    def _avg_minutes(pairs) -> Optional[float]:
+        vals = []
+        for a, b in pairs:
+            a, b = _to_utc(a), _to_utc(b)
+            if a is not None and b is not None:
+                vals.append((b - a).total_seconds() / 60.0)
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    # MTTR denominator: incidents that reached a terminal resolution stamp
+    # (resolved_at is set on both 'resolved' and 'closed' transitions).
+    mttr = _avg_minutes([(c, r) for c, r, _a in rows])
+    mttd = _avg_minutes([(c, a) for c, _r, a in rows])
 
     return {
         "total": total,
         "by_severity": by_sev,
         "by_category": by_cat,
         "by_status": by_status,
-        "mttd_minutes": round(mttd * 1440, 1) if mttd is not None else None,
-        "mttr_minutes": round(mttr * 1440, 1) if mttr is not None else None,
+        "mttd_minutes": mttd,
+        "mttr_minutes": mttr,
     }
 
 

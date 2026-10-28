@@ -411,17 +411,38 @@ async def test_run_history_cancel_and_tenant_scope(session_factory):
 
 async def test_platform_shared_playbook_readonly_for_clients(session_factory):
     await _seed(session_factory)
+    # Seed roles: user 1 = Acme client_admin (org 1), user 3 = platform_admin
+    # (org NULL), user 4 = Foreign client_admin (org 3).
+    async with client_for(session_factory, 1) as c:
+        # A CLIENT admin must NOT be able to forge a platform-shared playbook
+        # by passing org_id=null — the server forces their own tenant scope.
+        forced = await c.post("/api/soar/playbooks",
+                              json={**SAFE_PB, "name": "Sneaky null", "org_id": None})
+        assert forced.status_code == 201
+        assert forced.json()["org_id"] == 1   # coerced to own tenant, never NULL
+
     async with client_for(session_factory, 3) as c:
-        shared = await c.post("/api/soar/playbooks", json={**SAFE_PB, "name": "Shared flow", "org_id": None})
+        # Platform admin may create genuinely shared playbooks (org_id NULL).
+        shared = await c.post("/api/soar/playbooks",
+                              json={**SAFE_PB, "name": "Shared flow", "org_id": None})
         assert shared.status_code == 201
+        assert shared.json()["org_id"] is None
         pb_id = shared.json()["id"]
+
     async with client_for(session_factory, 1) as c:
         # visible to tenant via listing
         names = [p["name"] for p in (await c.get("/api/soar/playbooks")).json()["items"]]
         assert "Shared flow" in names
+        assert "Sneaky null" in names          # own-tenant row stays visible to owner
         # but read-only: PUT/DELETE forbidden
         assert (await c.put(f"/api/soar/playbooks/{pb_id}", json=SAFE_PB)).status_code == 403
         assert (await c.delete(f"/api/soar/playbooks/{pb_id}")).status_code == 403
+
+    async with client_for(session_factory, 4) as c:
+        # foreign tenant sees the shared playbook but not org 1's private rows
+        names = [p["name"] for p in (await c.get("/api/soar/playbooks")).json()["items"]]
+        assert "Shared flow" in names
+        assert "Sneaky null" not in names
 
 
 async def test_audit_records_written(session_factory):

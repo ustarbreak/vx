@@ -20,6 +20,10 @@ import {
 import { demoProjects } from '../data/demoProjects';
 import { partners, partnerProgramStats } from '../data/partnerWorld';
 import { demoRulesSeed, type DemoRule } from '../data/demoWorld';
+// Demo-only IoC enrichment fixtures for the Threat Intel pages. These are
+// EXPLICITLY simulated (never presented as live MISP/OTX data) and mirror the
+// normalized shape returned by backend/app/services/threat_intel.py aggregate().
+import { mockThreats } from '../data/mockData';
 
 // ---------------------------------------------------------------------------
 // Phase 4 stores — in-memory mirrors of backend/app/routers/tenant_manager.py
@@ -682,6 +686,98 @@ let devSeq = discoveredDevices.length + 1;
 // One completed baseline scan so the Scans tab is not empty on first visit.
 scans.push({ id: scanSeq++, org_id: 1, network_cidr: '10.0.0.0/16', status: 'completed', credential_ids: [1], total_hosts: 254, discovered: demoDevices.filter(d => d.orgId === 1).length, snmp_matched: demoDevices.filter(d => d.orgId === 1 && ['firewall', 'switch', 'router'].includes(d.type)).length, started_at: iso(10000), finished_at: iso(9990), created_by: 'demo@infracentra.io', created_at: iso(10000) });
 discoveredDevices.forEach(d => { if (d.orgId === 1) d.scan_id = 1; });
+
+// -- security analytics mirror (backend/app/services/analytics.py) ----------
+// Demo Mode only. Computes the SAME metrics from the in-memory alert/incident
+// stores that the FastAPI service computes from SQL rows: identical window
+// clamping, severity/category/status distributions, dedup policy (events are
+// raw stored Alert rows; detections are Incident rows — never mixed), MTTD/MTTR
+// averages in minutes with null for empty samples (never a fake 0), and UTC
+// hour/day trend buckets. Shapes match GET /api/analytics/overview exactly.
+const ANALYTICS_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'];
+const ANALYTICS_CATEGORIES = ['malware', 'phishing', 'intrusion', 'data_exfiltration', 'policy_violation', 'other'];
+
+function demoAnalyticsOverview(query: URLSearchParams): any {
+  // clamp_window(): naive treated as UTC, until defaults to now, since to
+  // until-24h, inverted swapped, span > 366d clamped.
+  let untilMs = query.get('until') ? Date.parse(query.get('until')!) : Date.now();
+  if (Number.isNaN(untilMs)) untilMs = Date.now();
+  let sinceMs = query.get('since') ? Date.parse(query.get('since')!) : untilMs - 24 * 3600_000;
+  if (Number.isNaN(sinceMs)) sinceMs = untilMs - 24 * 3600_000;
+  if (sinceMs > untilMs) [sinceMs, untilMs] = [untilMs, sinceMs];
+  const maxSpan = 366 * 24 * 3600_000;
+  if (untilMs - sinceMs > maxSpan) sinceMs = untilMs - maxSpan;
+  const bucket = query.get('bucket') === 'hour' ? 'hour' : 'day';
+  const fmtBucket = (isoStr: string) => bucket === 'hour' ? `${isoStr.slice(0, 13)}:00Z` : isoStr.slice(0, 10);
+
+  // Tenant scoping mirrors _scope_org: platform_admin must pass site_org_id,
+  // client users are pinned to their own org.
+  const scope = callerOrgIdSafe();
+  const requested = query.get('site_org_id');
+  const orgId = scope === null
+    ? (requested ? Number(requested) : NaN)
+    : (requested && Number(requested) !== scope ? -1 : scope);
+  if (Number.isNaN(orgId)) throw httpErr(400, 'org_id required for platform admins');
+  if (orgId === -1) throw httpErr(403, 'Cross-tenant access denied');
+
+  const inWin = (dt?: string | null) => {
+    if (!dt) return false;
+    const t = Date.parse(dt);
+    return !Number.isNaN(t) && t >= sinceMs && t <= untilMs;
+  };
+  const evAlerts = alerts.filter(a => a.org_id === orgId && inWin(a.created_at));
+  const detIncs = incidents.filter(i => i.org_id === orgId && inWin(i.created_at));
+
+  const bySevEv: Record<string, number> = Object.fromEntries(ANALYTICS_SEVERITIES.map(s => [s, 0]));
+  let weighted = 0;
+  for (const a of evAlerts) {
+    bySevEv[ANALYTICS_SEVERITIES.includes(a.severity) ? a.severity : 'info'] += 1;
+    weighted += a.correlated_count ?? 1; // correlated duplicates counted once per row, weighted sum reported separately
+  }
+
+  const bySevDet: Record<string, number> = Object.fromEntries(ANALYTICS_SEVERITIES.map(s => [s, 0]));
+  const byCat: Record<string, number> = Object.fromEntries(ANALYTICS_CATEGORIES.map(c => [c, 0]));
+  const byStatus: Record<string, number> = {};
+  for (const i of detIncs) {
+    bySevDet[ANALYTICS_SEVERITIES.includes(i.severity) ? i.severity : 'info'] += 1;
+    byCat[ANALYTICS_CATEGORIES.includes(i.category) ? i.category : 'other'] += 1;
+    byStatus[i.status || 'open'] = (byStatus[i.status || 'open'] ?? 0) + 1;
+  }
+
+  const avgMinutes = (pairs: [string | null, string | null][]): number | null => {
+    const vals = pairs
+      .filter(([a, b]) => a && b)
+      .map(([a, b]) => (Date.parse(b!) - Date.parse(a!)) / 60_000);
+    return vals.length ? Math.round((vals.reduce((x, y) => x + y, 0) / vals.length) * 10) / 10 : null;
+  };
+  const mttr = avgMinutes(detIncs.map(i => [i.created_at, i.resolved_at]));
+  const mttd = avgMinutes(detIncs.map(i => [i.created_at, i.acknowledged_at]));
+
+  const evMap: Record<string, number> = {};
+  const detMap: Record<string, number> = {};
+  for (const a of evAlerts) { const b = fmtBucket(a.created_at); evMap[b] = (evMap[b] ?? 0) + 1; }
+  for (const i of detIncs) { const b = fmtBucket(i.created_at); detMap[b] = (detMap[b] ?? 0) + 1; }
+  const trendSeries = [...new Set([...Object.keys(evMap), ...Object.keys(detMap)])].sort()
+    .map(b => ({ bucket: b, events: evMap[b] ?? 0, detections: detMap[b] ?? 0 }));
+
+  const assetCounts: Record<string, number> = {};
+  for (const a of evAlerts) if (a.resource) assetCounts[a.resource] = (assetCounts[a.resource] ?? 0) + 1;
+  const limitAssets = Math.min(50, Math.max(1, Number(query.get('limit_assets')) || 10));
+  const topAssets = Object.entries(assetCounts)
+    .sort((x, z) => z[1] - x[1]).slice(0, limitAssets)
+    .map(([resource, n]) => ({ resource, events: n }));
+
+  return {
+    org_id: orgId,
+    window: { since: new Date(sinceMs).toISOString(), until: new Date(untilMs).toISOString(), timezone: 'UTC', bucket },
+    generated_at: new Date().toISOString(),
+    events: { total: evAlerts.length, by_severity: bySevEv, raw_events_weighted: weighted },
+    detections: { total: detIncs.length, by_severity: bySevDet, by_category: byCat, by_status: byStatus, mttd_minutes: mttd, mttr_minutes: mttr },
+    trend: trendSeries,
+    top_assets: topAssets,
+    data_freshness: (evAlerts.length || detIncs.length) ? 'live' : 'empty',
+  };
+}
 
 const systemSettings = {
   auto_ticketing: true, sla_escalations: true, email_enabled: true, sms_enabled: true,
@@ -1955,6 +2051,82 @@ export const demoStore = {
         }
       }
     }
+
+    // ---- Security Analytics (mirrors GET /api/analytics/overview) ----------
+    if (root === 'analytics' && parts[1] === 'overview' && method === 'GET') {
+      return delay(demoAnalyticsOverview(query) as any) as unknown as T;
+    }
+
+    // ---- Threat Intelligence (mirrors backend/app/routers/threat_intel.py) --
+    // Same response shapes as the FastAPI endpoints, computed from the demo's
+    // OWN incident/alert stores. Nothing is fabricated: matches only include
+    // IoCs actually attached to demo incidents; the feed panel honestly
+    // reports "no MISP instance configured" (there is no Integration store in
+    // Demo Mode); lookup results are labelled simulated fixtures.
+    if (root === 'threat-intel') {
+      const scopeT = callerOrgIdSafe();
+      if (method === 'GET' && parts[1] === 'matches') {
+        const out: any[] = [];
+        for (const inc of incidents) {
+          if (scopeT !== null && inc.org_id !== scopeT) continue;
+          for (const ioc of (inc.ioc_related ?? [])) {
+            if (!ioc) continue;
+            const asset = (inc.affected_assets ?? [])[0] ?? null;
+            const relAlerts = alerts
+              .filter(a => (scopeT === null || a.org_id === inc.org_id) && a.resource === asset)
+              .slice(0, 5).map(a => a.uid);
+            out.push({
+              indicator: String(ioc), incident_uid: inc.uid, severity: inc.severity,
+              category: inc.category, status: inc.status,
+              assets: (inc.affected_assets ?? []).slice(0, 10),
+              related_alert_uids: relAlerts, observed_at: inc.created_at ?? null,
+            });
+          }
+        }
+        out.sort((x, z) => String(z.observed_at ?? '').localeCompare(String(x.observed_at ?? '')));
+        return delay({ matches: out.slice(0, 200), count: out.length } as any) as unknown as T;
+      }
+      if (method === 'GET' && parts[1] === 'feeds' && parts[2] === 'status') {
+        // No background sync job exists (in demo OR real mode): last_sync is
+        // never claimed here. MISP has no Integration rows in the demo world.
+        return delay({
+          feeds: [
+            { name: 'MISP', kind: 'instance', configured: false, statuses: [] },
+            { name: 'AlienVault OTX', kind: 'public-on-demand', configured: true,
+              note: 'Demo Mode: external lookups are NOT performed; enrichment uses local simulated fixtures.' },
+          ],
+          no_feed_data: false,
+        } as any) as unknown as T;
+      }
+      if (method === 'GET' && (parts[1] === 'threats' || parts[1] === 'lookup')) {
+        const qRaw = parts[1] === 'lookup' ? decodeURIComponent(parts[2] ?? '') : (query.get('q') ?? '');
+        const q = qRaw.toLowerCase();
+        // Enrichment pool: static fixtures + every IoC linked to this tenant's
+        // incidents (so drill-down always resolves real evidence links).
+        const pool: any[] = (mockThreats as any[]).map(t => ({ ...t, source: `${t.source ?? 'feed'} (simulated)` }));
+        const seenIocs = new Set(pool.map(p => String(p.ioc).toLowerCase()));
+        for (const inc of incidents) {
+          if (scopeT !== null && inc.org_id !== scopeT) continue;
+          for (const ioc of (inc.ioc_related ?? [])) {
+            if (!ioc || seenIocs.has(String(ioc).toLowerCase())) continue;
+            seenIocs.add(String(ioc).toLowerCase());
+            pool.unshift({
+              id: `INC-${inc.uid}`, type: 'indicator-link', severity: inc.severity,
+              title: `IoC observed in ${inc.title}`, description: `Indicator recorded on incident ${inc.uid} (${inc.status}).`,
+              source: 'internal', ioc: String(ioc), iocType: 'other', timestamp: inc.created_at,
+              confidence: 100, mitreAttack: [], affectedAssets: (inc.affected_assets ?? []).length, status: inc.status,
+            });
+          }
+        }
+        let list = pool;
+        if (q) list = pool.filter(t => String(t.ioc).toLowerCase().includes(q) || String(t.title).toLowerCase().includes(q));
+        const limitN = Math.min(200, Math.max(1, Number(query.get('limit')) || 50));
+        list = list.slice(0, limitN);
+        if (parts[1] === 'lookup') return delay({ ioc: qRaw, count: list.length, threats: list } as any) as unknown as T;
+        return delay({ query: qRaw || null, count: list.length, sources: ['Simulated fixtures'], threats: list } as any) as unknown as T;
+      }
+    }
+
 
     throw httpErr(404, `Demo mode: no simulated handler for ${method} /api${path}`);
   },
