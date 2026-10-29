@@ -996,6 +996,44 @@ class TriageEvaluation(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
+class OutcomeLabel(Base):
+    """STAGE 6A — Structured outcome labels for ML-readiness data collection.
+
+    Append-only, immutable history of analyst-labeled final dispositions per
+    incident episode. One row per labeling event; corrections append a NEW row
+    with `supersedes_id` pointing at the row they correct — prior rows are
+    NEVER edited or deleted, so the full labeling lineage stays auditable.
+
+    * disposition: true_positive|false_positive|benign_duplicate|unknown
+      -> was the alert/incident real? (TP/FP/dup ground truth)
+    * priority_correctness: correct|too_high|too_low|unknown
+      -> was the effective triage priority right? (compared against the
+        CURRENT latest TriageEvaluation incl. analyst override, frozen in
+        `priority_labeled_at`)
+    * rationale/reviewer are optional; reviewer defaults to the authenticated
+      actor (`labeled_by`).
+    * Reopened incidents: labels remain as historical facts about the episode
+      that was closed; reopening does not invalidate or delete them. New
+      labels on a reopened episode simply append.
+
+    No scoring path reads this table (production scoring unchanged); it is
+    pure data collection for future evaluation/ML readiness reviews.
+    """
+    __tablename__ = "outcome_labels"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    incident_uid = Column(String, nullable=False, index=True)
+    disposition = Column(String, nullable=False)            # true_positive|false_positive|benign_duplicate|unknown
+    priority_correctness = Column(String, nullable=False)   # correct|too_high|too_low|unknown
+    priority_labeled_at = Column(String, nullable=True)     # p1..p4 effective priority at labeling time
+    rationale = Column(Text, nullable=True)                 # optional analyst free text
+    reviewer = Column(String, nullable=True)                # optional reviewer identity (defaults to actor)
+    labeled_by = Column(String, nullable=False)             # authenticated actor email
+    supersedes_id = Column(Integer, nullable=True, index=True)  # correction chain (immutable append)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class IncidentNote(Base):
     """Investigation note attached to an incident (append-only)."""
     __tablename__ = "incident_notes"

@@ -19,6 +19,11 @@ Covers the previously SQLite-only evidence gaps:
       orgs must NOT conflict
   R1  resolved episode does not block a recurrence episode (partial index
       semantics on Postgres)
+
+STAGE 6A additions (outcome labeling):
+  M1 now asserts single head == c3d9e1f7a2b4 across 9 revisions;
+  M3 executes the Stage 6A revision's real op.* code paths on Postgres and
+     verifies its downgrade() removes ONLY outcome_labels.
 """
 import asyncio
 import os
@@ -140,7 +145,7 @@ def test_m1_migration_chain_is_linear_single_head():
         mods[m.revision] = m.down_revision
     downs = set(mods.values())
     heads = [r for r in mods if r not in downs]
-    assert heads == ["b7d2f4a1c8e3"], f"expected single head, got {heads}"
+    assert heads == ["c3d9e1f7a2b4"], f"expected single head, got {heads}"
     # walk from head to base
     order, cur = [], heads[0]
     while cur is not None:
@@ -148,8 +153,9 @@ def test_m1_migration_chain_is_linear_single_head():
         order.append(cur)
         cur = mods[cur]
     order.reverse()
-    assert len(order) == len(mods) == 8
-    assert order[-2] == "a3c5e7f9b1d2" and order[-1] == "b7d2f4a1c8e3"
+    assert len(order) == len(mods) == 9
+    assert order[-2] == "b7d2f4a1c8e3" and order[-1] == "c3d9e1f7a2b4"
+    assert order[-3] == "a3c5e7f9b1d2"
     assert "f1b3d5e7a9c2" == order[order.index("a3c5e7f9b1d2") - 1]
 
 
@@ -327,3 +333,63 @@ async def test_r1_resolved_episode_allows_new_active_episode(engine):
                                       "recurrence_of_uid": "INC-E2", "episode_number": 3})
         assert r3.scalar() is None
         await conn.execute(sa.text("ROLLBACK"))
+
+
+# ---------------------------------------------------------------------------
+# M3 — STAGE 6A: execute the outcome_labels revision's real op.* upgrade() and
+#      downgrade() code paths on Postgres (same Operations-proxy technique as
+#      M2). Proves the migration runs on the supported DB workflow and that
+#      downgrade removes ONLY the new table (historical tables untouched).
+# ---------------------------------------------------------------------------
+
+async def test_m3_stage6a_revision_ops_execute_on_postgres(engine):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import importlib.util
+
+    async with engine.connect() as conn:
+        def run_upgrade_and_downgrade(sync_conn):
+            mc = MigrationContext.configure(
+                connection=sync_conn, opts={"target_metadata": None})
+            sync_conn.execute(sa.text("DROP TABLE IF EXISTS outcome_labels CASCADE"))
+            # minimal stub of the FK target so the real op.create_table runs
+            # standalone in this scratch schema (dropped with the rollback below)
+            sync_conn.execute(sa.text(
+                "CREATE TABLE organizations (id SERIAL PRIMARY KEY)"))
+            # pre-existing neighbor table to prove downgrade leaves it alone
+            sync_conn.execute(sa.text(
+                "CREATE TABLE triage_evaluations (id SERIAL PRIMARY KEY,"
+                " org_id INTEGER, incident_uid TEXT)"))
+            spec = importlib.util.spec_from_file_location(
+                "rev_c3d9", os.path.join(os.path.dirname(__file__), "..",
+                "migrations", "versions", "c3d9e1f7a2b4_outcome_label_tables.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            with Operations.context(mc):
+                mod.upgrade()
+            cols = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_name='outcome_labels'"))}
+            idxs = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT indexname FROM pg_indexes WHERE tablename='outcome_labels'"))}
+            with Operations.context(mc):
+                mod.downgrade()
+            still_there = sync_conn.execute(sa.text(
+                "SELECT count(*) FROM information_schema.tables"
+                " WHERE table_name='outcome_labels'")).scalar()
+            neighbor = sync_conn.execute(sa.text(
+                "SELECT count(*) FROM information_schema.tables"
+                " WHERE table_name='triage_evaluations'")).scalar()
+            return cols, idxs, still_there, neighbor
+
+        cols, idxs, dropped, neighbor = await conn.run_sync(run_upgrade_and_downgrade)
+        await conn.execute(sa.text("ROLLBACK"))  # scratch state never persisted
+        assert {"id", "org_id", "incident_uid", "disposition",
+                "priority_correctness", "priority_labeled_at", "rationale",
+                "reviewer", "labeled_by", "supersedes_id",
+                "created_at"} <= cols, cols
+        assert {"ix_outcome_labels_org_id", "ix_outcome_labels_incident_uid",
+                "ix_outcome_labels_supersedes_id",
+                "ix_outcome_labels_created_at"} <= idxs, idxs
+        assert dropped == 0, "downgrade must remove outcome_labels"
+        assert neighbor == 1, "downgrade must NOT touch historical tables"
