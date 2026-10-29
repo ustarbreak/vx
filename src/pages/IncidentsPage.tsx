@@ -6,6 +6,7 @@ import {
   Link2, FileText, Inbox, Loader2, Hash,
 } from 'lucide-react';
 import ServiceGate from '../components/ServiceGate';
+import OutcomeLabelPanel from '../components/OutcomeLabelPanel';
 import { isDemoMode } from '../services/demoMode';
 import { useAuth } from '../context/AuthContext';
 import { organizationsApi, BackendOrganization } from '../services/api';
@@ -398,6 +399,13 @@ const DetailDrawer: React.FC<{
                       ))}
                     </div>
                   </section>
+                )}
+
+                {/* STAGE 6A — structured outcome labeling (append-only, audited).
+                    Talks to /api/triage/incidents/{uid}/outcome-label[s]; visible
+                    in every role (client_user sees read-only state on 403). */}
+                {!isDemoMode() && (
+                  <OutcomeLabelPanel uid={detail.uid} status={detail.status} pushToast={pushToast} />
                 )}
               </div>
             )}
