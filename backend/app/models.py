@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -18,7 +18,7 @@ class Organization(Base):
     country = Column(String)
     member_count = Column(Integer, default=0)
     asset_count = Column(Integer, default=0)
-    # --- Bundle All-in-One billing (single source of truth: app.core.pricing) ---
+    # --- Legacy v1 billing columns (v1 engine deleted; V2 = app.services.pricing_engine + core/pricing_config.json) ---
     plan_tier = Column(String(16), nullable=False, default="STARTER", index=True)  # STARTER|PRO|SOUVERAIN
     endpoint_count = Column(Integer, nullable=False, default=0)
     seat_limit = Column(Integer, nullable=False, default=3)      # 0 = unlimited
@@ -103,7 +103,8 @@ class Integration(Base):
 
 # ---------------------------------------------------------------------------
 # Pricing v2 (per-asset packs, Health Check trials, sales quotes, partners)
-# Single source of truth for prices: app/core/pricing_config.json + engine.
+# Single source of truth for prices: app/core/pricing_config.json (canonical mirror
+# of src/data/pricingConfig.ts, checked by tests/config_parity.cjs) + app/services/pricing_engine.py.
 # ---------------------------------------------------------------------------
 
 class PricingConfigVersion(Base):
@@ -366,6 +367,16 @@ class Alert(Base):
     """Inbound security/monitoring event. Triggers notification rules and,
     when configured, automatically creates tickets."""
     __tablename__ = "alerts"
+    # STAGE 3: grouping-window epoch for the ACTIVE group of a fingerprint.
+    # One (org_id, dedup_key, window_epoch) may exist at most once — enforced
+    # by the partial unique index below (PostgreSQL-compatible; SQLite honors
+    # partial indexes too). Folded duplicates are deleted, so their (possibly
+    # bumped) epoch never conflicts.
+    window_epoch = Column(Integer, default=0, nullable=False)
+    # STAGE 3: last activity time for the grouping window. Bumped on every
+    # fold; drives documented "fold iff last activity within window" semantics
+    # (see correlate()). Nullable so legacy rows fall back to created_at.
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
     id = Column(Integer, primary_key=True, index=True)
     uid = Column(String, unique=True, index=True, nullable=False)   # ALR-000123
@@ -379,9 +390,168 @@ class Alert(Base):
     dedup_key = Column(String, index=True, nullable=True)
     correlated_count = Column(Integer, default=1)  # alert correlation
     storm_suppressed = Column(Boolean, default=False)
+    status = Column(String, default="active", index=True)  # active|acked|resolved (derived from evidence below)
+    assignee = Column(String, nullable=True)               # user email — analyst assignment
     acked_by = Column(String, nullable=True)
     acked_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_by = Column(String, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    version = Column(Integer, default=1, nullable=False)   # optimistic concurrency token
     ticket_uid = Column(String, nullable=True, index=True)  # auto-created ticket
+    incident_uid = Column(String, nullable=True, index=True)  # set by the IR pipeline (real link only)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        # STAGE 3 — concurrency-safe grouping backstop. At most ONE ACTIVE
+        # group per (tenant, fingerprint, window epoch). The correlate() fold
+        # deletes duplicate rows inside a SELECT ... FOR UPDATE critical
+        # section; this index is the hard DB-level guarantee that even a race
+        # cannot leave two live groups for the same key in the same window.
+        #
+        # STAGE 3 FIX (G4/G8): the predicate now also EXCLUDES transient
+        # pipeline candidates (dedup_key IS NULL until correlate() stamps the
+        # survivor path). Without it, the legacy "persist candidate before
+        # correlate" contract meant two concurrent identical submissions
+        # collided on this index at CANDIDATE INSERT time — before correlation
+        # ever ran — raising IntegrityError instead of converging on one group.
+        # With it, un-stamped candidates are invisible to the index and only
+        # committed GROUP rows participate in uniqueness. Folded duplicates are
+        # deleted, so their (possibly bumped) epoch never conflicts.
+        Index(
+            "uq_alert_group_active",
+            "org_id", "dedup_key", "window_epoch",
+            unique=True,
+            postgresql_where=text("status != 'resolved' AND dedup_key IS NOT NULL"),
+            sqlite_where=text("status != 'resolved' AND dedup_key IS NOT NULL"),
+        ),
+    )
+
+
+class AlertNote(Base):
+    """Append-only investigation note on an alert (analyst-authored)."""
+    __tablename__ = "alert_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=False, index=True)
+    author = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AlertEvent(Base):
+    """Immutable lifecycle history for one alert (audit trail of transitions)."""
+    __tablename__ = "alert_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=False, index=True)
+    actor = Column(String, nullable=False)      # email or "system"
+    action = Column(String, nullable=False)     # created|correlated|acked|assigned|resolved|reopened|notified|delivery_failed
+    detail = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class EventEvidence(Base):
+    """Durable per-EVENT evidence row (Stage 1: event evidence).
+
+    One row is stored for EVERY accepted ingestion event — including duplicates
+    that the correlation layer folds into an existing alert. This closes the
+    Phase-5 honesty gap where a folded duplicate's unique raw payload and
+    metadata were deleted with its alert row.
+
+    Identity notes (deliberate separation, never conflated):
+      * `event_uid` identifies THIS accepted ingestion event (transport-level).
+      * `source_event_id` is the upstream detector's own ID when it provides
+        one; identical payloads do NOT prove two events are the same, so we
+        never derive identity from payload content alone.
+      * `payload_sha256` is integrity metadata (detects corruption / proves
+        byte equality), not an identity key.
+      * The alert GROUP identity remains `alerts.dedup_key` — unchanged here.
+
+    Retention: `raw_payload`/`payload_excerpt` are nulled by the expiry job
+    after `expires_at`; the row itself survives as an intelligible stub
+    (provenance + hash + sizes + `payload_expired` flag) so alert/incident
+    history stays explainable after payload deletion.
+
+    Access: payloads are served only through tenant-scoped, write-role-gated
+    endpoints (see routers/notifications.py evidence routes).
+    """
+    __tablename__ = "event_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_uid = Column(String(36), unique=True, index=True, nullable=False)  # uuid4
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    source_system = Column(String, default="api")   # ingest path: api|agent|discovery|seed...
+    source_event_id = Column(String, nullable=True)  # upstream detector's own ID (if any)
+    # Grouping provenance ONLY — this stage does not change grouping logic.
+    dedup_fingerprint = Column(String, nullable=True, index=True)
+
+    # --- original payload + integrity metadata -----------------------------
+    raw_payload = Column(JSON, nullable=True)       # null after retention expiry
+    payload_sha256 = Column(String(64), nullable=False)
+    payload_bytes = Column(Integer, default=0)      # true serialized size
+    truncated = Column(Boolean, default=False)      # inline copy cut to size cap
+    payload_excerpt = Column(Text, nullable=True)   # first N bytes when truncated
+    payload_expired = Column(Boolean, default=False)
+
+    # --- provenance ---------------------------------------------------------
+    provenance = Column(JSON, default=dict)  # {actor, endpoint, request_ip, ...}
+
+    # --- timekeeping --------------------------------------------------------
+    source_occurred_at = Column(DateTime(timezone=True), nullable=True)  # if collector says
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    # --- processing / policy versions ----------------------------------------
+    normalization_version = Column(String, default="v1")
+    retention_policy_version = Column(String, default="v1")
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    # --- linkage (nullable: survives even if the alert row is folded away) --
+    alert_db_id = Column(Integer, nullable=True)     # alerts.id at ingest time
+    alert_uid = Column(String, nullable=True, index=True)  # surviving group uid after fold
+
+    # --- ingestion idempotency & recovery (Stage 2: shared pipeline) -------
+    # Deliberately SEPARATE from payload_sha256 (integrity only) and from
+    # dedup_fingerprint (alert grouping). None of the three prove the others.
+    ingest_key = Column(String(128), nullable=True, unique=True, index=True)
+    #   sha256(org|source_system|source_event_id) — present ONLY when the
+    #   upstream collector supplied a source_event_id; identical payloads
+    #   without a source ID are NOT treated as the same event.
+    processing_status = Column(String, default="pending")
+    #   pending -> processed | failed (permanent failure keeps evidence intact)
+    processing_error = Column(Text, nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class UidCounter(Base):
+    """STAGE 3 — atomic per-(table,prefix) UID sequence.
+
+    Replaces the racy COUNT(rows)+1 allocation for pipeline paths. Claimed
+    with INSERT ... ON CONFLICT DO UPDATE ... RETURNING (PostgreSQL and
+    SQLite >= 3.24 compatible). Rollbacks may skip numbers; duplicates are
+    impossible."""
+    __tablename__ = "uid_counters"
+
+    table_name = Column(String(64), primary_key=True)
+    prefix = Column(String(16), primary_key=True)
+    last_value = Column(Integer, nullable=False, default=0)
+
+
+class GroupingPolicy(Base):
+    """STAGE 3 — documented, versioned grouping policy.
+
+    One row per policy_version. Makes the fingerprint recipe and window
+    auditable at runtime instead of living only in code comments. Seeded at
+    startup if absent (create_all convention — no Alembic revision needed)."""
+    __tablename__ = "grouping_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_version = Column(String(16), unique=True, nullable=False)  # v1|v2...
+    fingerprint_fields = Column(JSON, default=list)   # ordered field list
+    window_minutes = Column(Integer, default=60, nullable=False)
+    storm_threshold = Column(Integer, default=5, nullable=False)
+    notes = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -555,6 +725,13 @@ class DiscoveryScan(Base):
     finished_at = Column(DateTime(timezone=True), nullable=True)
     created_by = Column(String, default="system")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # --- Infrastructure Map / Auto Discovery completion -------------------
+    # Approved site (multi-site org hierarchy: HQ/SUBSIDIARY/AGENCY org id)
+    # the scan targets. Null for legacy scans — never inferred.
+    site_id = Column(Integer, nullable=True)
+    # Explicit operator authorization recorded at launch time (scope consent).
+    authorized = Column(Boolean, default=False)
+    authorization_note = Column(String, nullable=True)
 
 
 class DiscoveredDevice(Base):
@@ -715,4 +892,254 @@ class MonitoringRule(Base):
     notify_channels = Column(JSON, default=list)
     enabled = Column(Boolean, default=True)
     created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============================================================================
+# Incident Response — incidents, notes, activity trail, evidence & actions
+# (wraps the existing SIEM/alert/ticket engines; never replaces them)
+# ============================================================================
+
+class Incident(Base):
+    """Security incident record. One incident may aggregate many alerts and
+    links to tickets/evidence/response actions. `uid` is stable (INC-000123)
+    and deduped via `dedup_key` so alert re-processing updates an existing
+    incident instead of creating duplicates."""
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=False)   # INC-000123
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    site_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)  # affected site (multi-site)
+    title = Column(String, nullable=False)
+    description = Column(Text, default="")
+    severity = Column(String, default="medium")     # critical|high|medium|low|info
+    status = Column(String, default="open", index=True)  # open|investigating|contained|resolved|closed
+    assignee = Column(String, nullable=True)        # user email
+    reporter = Column(String, nullable=True)
+    acknowledged_by = Column(String, nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    affected_assets = Column(JSON, default=list)    # hostnames / IPs (links into device details)
+    ioc_related = Column(JSON, default=list)        # threat-intel IOCs
+    tags = Column(JSON, default=list)
+    alert_id = Column(Integer, ForeignKey("alerts.id"), nullable=True, index=True)
+    ticket_uid = Column(String, nullable=True, index=True)          # linked TCK-xxxx
+    category = Column(String, default="other")      # malware|phishing|intrusion|data_exfiltration|policy_violation|other
+    dedup_key = Column(String, nullable=True, index=True)
+    # ---- STAGE 4: incident episodes -------------------------------------
+    # Recurrence lineage. An incident that matches a RESOLVED/CLOSED episode's
+    # dedup key starts a NEW episode rather than mutating history:
+    #   recurrence_of_uid -> uid of the previous episode in the chain
+    #   episode_number    -> 1-based position within the chain
+    # Historical resolved/closed rows are never auto-reopened or mutated by
+    # evidence arrival; only explicit analyst action (existing transition API)
+    # may reopen them, which is recorded in IncidentActivity as before.
+    recurrence_of_uid = Column(String, nullable=True, index=True)
+    episode_number = Column(Integer, default=1)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        # Concurrency backstop: at most one ACTIVE episode per tenant+dedup key.
+        # The service layer uses SELECT ... FOR UPDATE + re-check; this partial
+        # unique index is the last-resort guard against duplicate active
+        # episodes created by racing requests. Resolved/closed episodes do not
+        # block new ones — that is exactly what enables recurrence episodes.
+        Index(
+            "uq_incident_active_episode",
+            "org_id", "dedup_key",
+            unique=True,
+            postgresql_where=text("status NOT IN ('resolved','closed') AND dedup_key IS NOT NULL"),
+            sqlite_where=text("status NOT IN ('resolved','closed') AND dedup_key IS NOT NULL"),
+        ),
+    )
+
+
+
+# ============================================================================
+# STAGE 5 — Rules-based triage (deterministic scoring, no ML/LLM)
+# ============================================================================
+class TriagePolicy(Base):
+    """Versioned scoring policy. One row per policy_version; changing any
+    weight/band means inserting a NEW version (v2, v3...) — old rows are never
+    edited so historical evaluations stay reproducible."""
+    __tablename__ = "triage_policies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    policy_version = Column(String(16), unique=True, nullable=False)   # v1|v2...
+    weights = Column(JSON, default=dict)                # declarative point weights
+    bands = Column(JSON, default=list)                  # [{min_score, priority}...]
+    confidence_weights = Column(JSON, default=dict)     # data-quality axis weights
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TriageEvaluation(Base):
+    """Immutable audit history of triage runs. One row per evaluation; the
+    full reason-code breakdown is frozen in `breakdown`. Analyst overrides are
+    appended into the stored breakdown's `override` field (the score itself is
+    never rewritten silently)."""
+    __tablename__ = "triage_evaluations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    incident_uid = Column(String, nullable=False, index=True)
+    policy_version = Column(String(16), nullable=False)
+    score = Column(Integer, nullable=False)             # bounded 0..100
+    priority = Column(String(4), nullable=False)        # p1|p2|p3|p4 (calculated)
+    confidence = Column(Integer, default=0, nullable=False)
+    corroboration = Column(Integer, default=0, nullable=False)
+    reason_codes = Column(JSON, default=list)
+    breakdown = Column(JSON, default=dict)              # full payload incl. override
+    evaluator = Column(String, nullable=False)          # analyst email or 'system'
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class OutcomeLabel(Base):
+    """STAGE 6A — Structured outcome labels for ML-readiness data collection.
+
+    Append-only, immutable history of analyst-labeled final dispositions per
+    incident episode. One row per labeling event; corrections append a NEW row
+    with `supersedes_id` pointing at the row they correct — prior rows are
+    NEVER edited or deleted, so the full labeling lineage stays auditable.
+
+    * disposition: true_positive|false_positive|benign_duplicate|unknown
+      -> was the alert/incident real? (TP/FP/dup ground truth)
+    * priority_correctness: correct|too_high|too_low|unknown
+      -> was the effective triage priority right? (compared against the
+        CURRENT latest TriageEvaluation incl. analyst override, frozen in
+        `priority_labeled_at`)
+    * rationale/reviewer are optional; reviewer defaults to the authenticated
+      actor (`labeled_by`).
+    * Reopened incidents: labels remain as historical facts about the episode
+      that was closed; reopening does not invalidate or delete them. New
+      labels on a reopened episode simply append.
+
+    No scoring path reads this table (production scoring unchanged); it is
+    pure data collection for future evaluation/ML readiness reviews.
+    """
+    __tablename__ = "outcome_labels"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    incident_uid = Column(String, nullable=False, index=True)
+    disposition = Column(String, nullable=False)            # true_positive|false_positive|benign_duplicate|unknown
+    priority_correctness = Column(String, nullable=False)   # correct|too_high|too_low|unknown
+    priority_labeled_at = Column(String, nullable=True)     # p1..p4 effective priority at labeling time
+    rationale = Column(Text, nullable=True)                 # optional analyst free text
+    reviewer = Column(String, nullable=True)                # optional reviewer identity (defaults to actor)
+    labeled_by = Column(String, nullable=False)             # authenticated actor email
+    supersedes_id = Column(Integer, nullable=True, index=True)  # correction chain (immutable append)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class IncidentNote(Base):
+    """Investigation note attached to an incident (append-only)."""
+    __tablename__ = "incident_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    author = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    internal = Column(Boolean, default=True)        # internal vs client-visible
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentActivity(Base):
+    """Immutable activity/audit trail per incident (lifecycle transitions,
+    assignment, acknowledgment, linked records, playbook runs...)."""
+    __tablename__ = "incident_activities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    actor = Column(String, nullable=False)
+    action = Column(String, nullable=False)         # created|status_changed|assigned|acked|note_added|linked|playbook_run ...
+    detail = Column(Text, default="")
+    from_value = Column(String, nullable=True)      # e.g. previous status
+    to_value = Column(String, nullable=True)        # e.g. new status
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentEvidence(Base):
+    """Evidence snapshot referencing a TicketEvidence row (or standalone text).
+    Never copies blobs: points at the evidence vault by (ticket_uid, ev_id)."""
+    __tablename__ = "incident_evidence"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    ticket_uid = Column(String, nullable=True, index=True)
+    ticket_evidence_id = Column(Integer, nullable=True)
+    kind = Column(String, default="log")
+    name = Column(String, nullable=False)
+    sha256 = Column(String, nullable=True)          # integrity fingerprint when known
+    collected_by = Column(String, default="system")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAction(Base):
+    """Response action taken on an incident (containment, isolation, block…).
+    Actions are recorded against the real engines that executed them; this
+    table is the ledger, not the executor."""
+    __tablename__ = "incident_actions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_uid = Column(String, index=True, nullable=False)
+    action_type = Column(String, nullable=False)    # escalate|contain|isolate_host|block_ip|notify|create_ticket|run_playbook|resolve
+    status = Column(String, default="completed")    # proposed|pending_approval|approved|executing|completed|failed|cancelled
+    detail = Column(Text, default="")
+    performed_by = Column(String, nullable=False)
+    playbook_run_uid = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ============================================================================
+# SOAR — persisted playbooks + real execution history
+# ============================================================================
+
+class Playbook(Base):
+    """SOAR playbook definition, persisted per tenant (org_id NULL => platform
+    shared playbook managed by platform admins). Steps are validated against
+    the allow-list of safe action types in app.services.soar — there is no
+    arbitrary command/shell execution."""
+    __tablename__ = "soar_playbooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=True)    # PBK-000001
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    category = Column(String, default="Incident Response")
+    steps = Column(JSON, default=list)      # [{name, action, params}]
+    triggers = Column(JSON, default=list)   # [{type: alert|schedule|manual, ...}] descriptive only
+    enabled = Column(Boolean, default=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class PlaybookRun(Base):
+    """One execution of a playbook. `mode` separates simulation/preview from
+    actual execution; terminal status is written ONLY after every step has
+    really completed (or failed) — the UI never sees an optimistic success."""
+    __tablename__ = "soar_playbook_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uid = Column(String, unique=True, index=True, nullable=False)   # RUN-000123
+    playbook_id = Column(Integer, ForeignKey("soar_playbooks.id"), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    incident_uid = Column(String, nullable=True, index=True)        # triggering incident, if any
+    mode = Column(String, default="simulate")   # simulate|preview|execute
+    status = Column(String, default="queued", index=True)  # queued|running|completed|failed|partial|cancelled
+    triggered_by = Column(String, nullable=False)
+    idempotency_key = Column(String, nullable=True, index=True)
+    cancel_requested = Column(Boolean, default=False)
+    total_steps = Column(Integer, default=0)
+    completed_steps = Column(Integer, default=0)
+    failed_steps = Column(Integer, default=0)
+    skipped_steps = Column(Integer, default=0)
+    result_log = Column(JSON, default=list)     # redacted step log
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -6,16 +6,17 @@
 // They NEVER see Infracentra's direct clients nor other partners (enforced
 // by the API layer, mirrored in demoMode.ts with 403s).
 // White-label: header uses the partner's brand name + primary color.
+// Pricing: V2 engine only — src/data/pricingConfig.ts + pricingEngine.quote().
+// The full wholesale partner UI (tier progress, margin simulator, deal
+// registration) is Phase 3; this page shows the pack catalogue + estimator.
 // ---------------------------------------------------------------------------
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { partnersApi } from '../../services/partnersApi';
 import type { Partner, PartnerEndClient } from '../../data/partnerWorld';
 import { partnerValueProfile, partnerProgramTiers, type PartnerValueProfile } from '../../data/partnerValue';
-import {
-  TIER_LIMITS, computeInvoice, unitPrice, formatMoney, resolveCurrency,
-  type PlanTier, type BillingCycle,
-} from '../../config/pricing';
+import { PRICING_CONFIG_V2, PACK_SERVICES, SERVICE_LABELS_FR, fmtMad, type PackId } from '../../data/pricingConfig';
+import { quote, billableUnits, partnerTierFor, type QuoteInputs } from '../../services/pricingEngine';
 import {
   Building2, Server, Users, Euro, Gauge, Globe, CheckCircle2, Clock, XCircle,
   Loader2, Plus, Trash2, Palette, Upload, RefreshCw, GraduationCap, Award,
@@ -303,49 +304,65 @@ export function PartnerLicensingPage() {
           {lic.ticketing && <span className="px-3 py-1 rounded-full text-xs border font-semibold" style={{ borderColor: partner.branding.primary_color, color: partner.branding.primary_color }}>Advanced Ticketing</span>}
         </div>
       </Card>
-      <BundleTiersSection country={partner.country ?? 'ma'} />
-      <InvoiceCalculatorSection country={partner.country ?? 'ma'} />
+      <BundleTiersSection managedUnits={partner.end_clients.reduce((a, c) => a + (c.devices ?? 0), 0)} />
+      <InvoiceCalculatorSection />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Bundle All-in-One — 3 tiers cards + real-time invoice calculator.
-// Prices come EXCLUSIVELY from src/config/pricing.ts (mirror of the backend).
-// Currency adapts to the account country: Morocco -> MAD, EU -> EUR, else USD.
+// Pricing V2 — 3 pack cards + real-time invoice estimator (direct list price).
+// Prices come EXCLUSIVELY from PRICING_CONFIG_V2 and quote() (mirror of
+// backend/app/services/pricing_engine.py). The wholesale partner experience
+// (tier discount table, margin simulator, deal registration) is Phase 3.
 // ---------------------------------------------------------------------------
-const BUNDLE_TIERS: PlanTier[] = ['STARTER', 'PRO', 'SOUVERAIN'];
-const TIER_BLURB: Record<PlanTier, string> = {
-  STARTER: 'Petites équipes IT. Supervision complète, SIEM léger.',
-  PRO: 'Équipes SOC structurées. Toute la plateforme, ticketing avancé inclus.',
-  SOUVERAIN: 'MSP / grandes infrastructures. Sièges illimités, gros volume SIEM, prix de gros.',
+const PACK_IDS: PackId[] = ['starter', 'pro', 'souverain'];
+const PACK_BLURB: Record<PackId, string> = {
+  starter: 'Petites équipes IT. Supervision complète du parc, sauvegarde et conformité.',
+  pro: 'Équipes SOC structurées. Toute la plateforme + services offerts (DNS, analytique, threat intel, ticketing).',
+  souverain: 'MSP / grandes infrastructures. SOAR, cloud, SD-WAN et astreinte 24/7 incluse.',
 };
 
-function BundleTiersSection({ country }: { country: string }) {
-  const cur = resolveCurrency(country);
+/** Map a physical endpoint count to V2 asset classes (~80 % heavy / 20 % light),
+ *  identical to demoMode.ts so estimates match the tenant invoices. */
+function assetsFromEndpoints(n: number): QuoteInputs['assets'] {
+  const heavy = Math.round(n * 0.8);
+  return [{ class: 'workstation', qty: heavy }, { class: 'mailbox', qty: Math.max(0, n - heavy) }];
+}
+
+function BundleTiersSection({ managedUnits }: { managedUnits: number }) {
+  const tier = partnerTierFor(PRICING_CONFIG_V2, managedUnits);
   return (
     <div>
       <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--ic-muted)] mb-3">
-        <ShieldCheck className="w-4 h-4" /> Bundle All-in-One — facturation par asset supervisé
+        <ShieldCheck className="w-4 h-4" /> Packs Infracentra — facturation par unité-service (moteur V2 v{PRICING_CONFIG_V2.version})
       </h3>
+      <p className="text-[11px] text-[var(--ic-muted)] mb-3">
+        Votre palier partenaire actuel : <b className="text-[var(--ic-heading)]">{tier.id}</b> — remise de gros
+        {Math.round(tier.discount * 100)} % sur les lignes par unité (détail wholesale : section Licensing, Phase 3).
+        Les prix ci-dessous sont les prix catalogue publics, hors TVA.
+      </p>
       <div className="grid md:grid-cols-3 gap-4">
-        {BUNDLE_TIERS.map((t) => {
-          const l = TIER_LIMITS[t];
+        {PACK_IDS.map((p) => {
+          const d = PRICING_CONFIG_V2.packs[p];
+          const range = d.maxUnits === null ? `dès ${d.minUnits} unités` : `${d.minUnits} à ${d.maxUnits} unités`;
           return (
-            <div key={t} className={`bg-[var(--ic-surface)] border rounded-2xl p-5 ${t === 'SOUVERAIN' ? 'border-violet-500/60' : 'border-[var(--ic-border)]'}`}>
-              <div className="text-sm font-bold text-[var(--ic-heading)]">BUNDLE {t}</div>
-              <div className="mt-2 text-2xl font-extrabold" style={{ color: t === 'SOUVERAIN' ? '#a78bfa' : '#22d3ee' }}>
-                {formatMoney(unitPrice(t, 'MONTHLY'), cur)}
-                <span className="text-xs font-normal text-[var(--ic-muted)]"> /asset supervisé/mois HT</span>
+            <div key={p} className={`bg-[var(--ic-surface)] border rounded-2xl p-5 ${p === 'souverain' ? 'border-violet-500/60' : 'border-[var(--ic-border)]'}`}>
+              <div className="text-sm font-bold text-[var(--ic-heading)] uppercase">{p === 'souverain' ? 'Souverain (Enterprise)' : p}</div>
+              <div className="mt-2 text-2xl font-extrabold" style={{ color: p === 'souverain' ? '#a78bfa' : '#22d3ee' }}>
+                {fmtMad(d.price)}
+                <span className="text-xs font-normal text-[var(--ic-muted)]"> /unité-service/mois HT</span>
               </div>
-              <div className="text-[11px] text-emerald-400 mt-1">Annuel −12 % → {formatMoney(unitPrice(t, 'ANNUAL'), cur)}/asset/mois</div>
+              <div className="text-[11px] text-emerald-400 mt-1">Éligibilité : {range}</div>
               <ul className="text-sm text-[var(--ic-muted)] mt-3 space-y-1">
-                <li>{l.seatLimit === 0 ? 'Sièges techniciens illimités' : `${l.seatLimit} sièges tech inclus`}</li>
-                <li>SIEM : {l.siemLimitGbDay} Go/jour inclus</li>
-                <li>{l.extraSeatMad > 0 ? `Siège extra : ${formatMoney(l.extraSeatMad, cur)}/mois` : 'Pas de frais de siège'}</li>
-                <li>Dépassement SIEM : {formatMoney(l.siemOverageMadPerGb, cur)}/Go/jour</li>
+                <li>{PACK_SERVICES[p].length} services inclus</li>
+                <li>SIEM : {d.siemQuota.min > 0 ? `${d.siemQuota.min} Go/jour inclus (+${d.siemQuota.perUnit} Go/unité)` : 'non inclus (options payantes)'}</li>
+                <li>Rétention : {d.retentionDays} jours</li>
+                <li>Sauvegarde : {d.backupQuotaGbPerUnit} Go/unité</li>
+                <li>Support : {d.support}</li>
+                <li>Mise en service : {fmtMad(d.onboarding)}</li>
               </ul>
-              <p className="text-[11px] text-[var(--ic-muted)] mt-3">{TIER_BLURB[t]}</p>
+              <p className="text-[11px] text-[var(--ic-muted)] mt-3">{PACK_BLURB[p]}</p>
             </div>
           );
         })}
@@ -354,61 +371,71 @@ function BundleTiersSection({ country }: { country: string }) {
   );
 }
 
-function InvoiceCalculatorSection({ country }: { country: string }) {
-  const [tier, setTier] = useState<PlanTier>('PRO');
-  const [cycle, setCycle] = useState<BillingCycle>('MONTHLY');
+function InvoiceCalculatorSection() {
+  const [pack, setPack] = useState<PackId>('pro');
+  const [contractMonths, setContractMonths] = useState<0 | 12 | 24 | 36>(0);
   const [endpoints, setEndpoints] = useState(100);
-  const [seats, setSeats] = useState(15);
-  const [siem, setSiem] = useState(42);
-  const inv = useMemo(() => computeInvoice({
-    planTier: tier, billingCycle: cycle, endpointCount: endpoints,
-    seatsUsed: seats, siemGbDayUsed: siem, country,
-  }), [tier, cycle, endpoints, seats, siem, country]);
-  const limits = TIER_LIMITS[tier];
+  const [siem, setSiem] = useState(20);
+  const def = PRICING_CONFIG_V2.packs[pack];
+  const assets = useMemo(() => assetsFromEndpoints(endpoints), [endpoints]);
+  const units = useMemo(() => billableUnits(PRICING_CONFIG_V2, assets), [assets]);
+  const q = useMemo(() => quote({
+    mode: 'pack', pack, assets,
+    siemGbDay: siem || undefined,
+    retentionDays: def.retentionDays,
+    contractMonths,
+  }), [pack, assets, siem, def.retentionDays, contractMonths]);
   const num = 'bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:border-cyan-500';
 
   return (
     <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-2xl p-5">
       <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--ic-muted)] mb-4">
-        <Percent className="w-4 h-4" /> Calculateur de facture en temps réel
+        <Percent className="w-4 h-4" /> Estimateur de facture (prix catalogue, moteur V2)
       </h3>
-      <div className="grid md:grid-cols-5 gap-3 text-sm">
-        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Bundle</span>
-          <select className={num} value={tier} onChange={(e) => setTier(e.target.value as PlanTier)}>
-            {BUNDLE_TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+      <div className="grid md:grid-cols-4 gap-3 text-sm">
+        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Pack</span>
+          <select className={num} value={pack} onChange={(e) => setPack(e.target.value as PackId)}>
+            {PACK_IDS.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
           </select></label>
-        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Cycle</span>
-          <select className={num} value={cycle} onChange={(e) => setCycle(e.target.value as BillingCycle)}>
-            <option value="MONTHLY">Mensuel</option><option value="ANNUAL">Annuel −12 %</option>
+        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Durée du contrat</span>
+          <select className={num} value={contractMonths} onChange={(e) => setContractMonths(Number(e.target.value) as 0 | 12 | 24 | 36)}>
+            <option value={0}>Sans engagement</option><option value={12}>12 mois −8 %</option>
+            <option value={24}>24 mois −12 %</option><option value={36}>36 mois −15 %</option>
           </select></label>
-        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Endpoints ({limits.seatLimit ? '' : ''})</span>
+        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Actifs supervisés</span>
           <input type="number" min={1} className={num} value={endpoints} onChange={(e) => setEndpoints(Math.max(0, Number(e.target.value)))} /></label>
-        <label className="block"><span className="text-xs text-[var(--ic-muted)]">Sièges tech utilisés</span>
-          <input type="number" min={0} className={num} value={seats} onChange={(e) => setSeats(Math.max(0, Number(e.target.value)))} /></label>
         <label className="block"><span className="text-xs text-[var(--ic-muted)]">SIEM Go/jour</span>
           <input type="number" min={0} className={num} value={siem} onChange={(e) => setSiem(Math.max(0, Number(e.target.value)))} /></label>
       </div>
-      <table className="w-full text-sm mt-4">
-        <thead><tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ic-muted)]">
-          <th className="py-1">Ligne</th><th>Qté</th><th>P.U.</th><th className="text-right">Total</th></tr></thead>
-        <tbody>
-          {inv.lines.map((ln, i) => (
-            <tr key={i} className="border-t border-[var(--ic-border)]">
-              <td className="py-1.5">{ln.label}</td>
-              <td>{ln.qty}</td>
-              <td>{formatMoney(ln.unitMad, inv.currency)}</td>
-              <td className="text-right">{formatMoney(ln.totalMad, inv.currency)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="flex justify-between items-center border-t border-[var(--ic-border)] mt-2 pt-3">
-        <span className="text-xs text-[var(--ic-muted)]">
-          Formule : (Endpoints × Prix unitaire{cycle === 'ANNUAL' ? ' × 0.88' : ''}) + (Sièges extras × {formatMoney(limits.extraSeatMad, inv.currency)}) + (Dépassement SIEM × {formatMoney(limits.siemOverageMadPerGb, inv.currency)})
-        </span>
-        <span className="text-xl font-extrabold" style={{ color: '#22d3ee' }}>{formatMoney(inv.totalDisplay, inv.currency)} /mois HT</span>
-      </div>
-      <p className="text-[11px] text-[var(--ic-muted)] mt-2">Aucun frais caché : maintenance, mises à jour et formation sont incluses. Devise affichée selon le pays du compte ({inv.currency}).</p>
+      {!q.eligible ? (
+        <p className="text-sm text-amber-400 mt-4 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" /> {q.reason}
+        </p>
+      ) : (
+        <>
+          <table className="w-full text-sm mt-4">
+            <thead><tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ic-muted)]">
+              <th className="py-1">Ligne</th><th>Qté</th><th>P.U.</th><th className="text-right">Total</th></tr></thead>
+            <tbody>
+              {q.lines.filter(l => l.kind !== 'vat').map((ln, i) => (
+                <tr key={i} className="border-t border-[var(--ic-border)]">
+                  <td className="py-1.5">{ln.label_fr}</td>
+                  <td>{ln.qty !== undefined ? ln.qty : '—'}</td>
+                  <td>{ln.unit_mad !== undefined ? fmtMad(ln.unit_mad) : '—'}</td>
+                  <td className="text-right">{fmtMad(ln.amount_mad)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="flex justify-between items-center border-t border-[var(--ic-border)] mt-2 pt-3">
+            <span className="text-xs text-[var(--ic-muted)]">
+              {units.toFixed(1)} unité(s)-service facturée(s) · TVA {Math.round(PRICING_CONFIG_V2.vat * 100)} % : {fmtMad(q.totals.vat_mad)}
+            </span>
+            <span className="text-xl font-extrabold" style={{ color: '#22d3ee' }}>{fmtMad(q.totals.monthly_excl_vat_mad)} /mois HT</span>
+          </div>
+        </>
+      )}
+      <p className="text-[11px] text-[var(--ic-muted)] mt-2">Prix catalogue publics hors TVA — la remise wholesale de votre palier est appliquée côté Licensing (Phase 3). Devis calculé par le même moteur que le backend (version {q.config_version}).</p>
     </div>
   );
 }

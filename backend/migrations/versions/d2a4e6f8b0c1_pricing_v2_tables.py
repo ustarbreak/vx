@@ -4,7 +4,8 @@ Revision ID: d2a4e6f8b0c1
 Revises: c9f0a1b2c3d4
 Create Date: 2026-10-26
 
-Single source of truth for prices stays in app/core/pricing_config.json;
+Single source of truth for prices stays in app/core/pricing_config.json
+(canonical JSON mirror of src/data/pricingConfig.ts);
 these tables only store business objects (leads, links, trials, deals, events).
 Quote-link and enrollment-key secrets are stored as SHA-256 hashes ONLY.
 """

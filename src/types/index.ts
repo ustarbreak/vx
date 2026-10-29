@@ -63,7 +63,12 @@ export interface Organization {
   contractStart: string;
   contractEnd: string;
   monthlyRevenue: number;
-  // Bundle All-in-One billing fields (optional)
+  // Billing fields — Pricing V2 (see src/data/pricingConfig.ts).
+  // pack/contractMonths are the V2 facts; planTier/billingCycle remain legacy
+  // display aliases served by the backend for backward compatibility.
+  pack?: "starter" | "pro" | "souverain";
+  contractMonths?: 0 | 12 | 24 | 36;
+  billableUnits?: number;
   planTier?: "STARTER" | "PRO" | "SOUVERAIN";
   endpointCount?: number;
   seatLimit?: number;

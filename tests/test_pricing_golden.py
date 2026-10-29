@@ -119,4 +119,19 @@ for case in FIXTURES["cases"]:
 print(f"\n{'FAIL' if failures else 'PASS'}: {len(FIXTURES['cases'])} golden cases, {len(failures)} failure(s)")
 for f in failures:
     print("  ✗", f)
+
+# --------------------------------------------------------------------------- #
+# Embedded fallback config must be byte-for-byte equivalent to the canonical
+# JSON (app/core/pricing_config.json). Guards the load_config() robustness path.
+# --------------------------------------------------------------------------- #
+from app.services.pricing_engine import _EMBEDDED_CONFIG_JSON, load_config  # noqa: E402
+
+_json_path = os.path.join(ROOT, "backend", "app", "core", "pricing_config.json")
+canonical = json.load(open(_json_path, encoding="utf-8"))
+embedded = json.loads(_EMBEDDED_CONFIG_JSON)
+if canonical != embedded:
+    failures.append("embedded fallback config != backend/app/core/pricing_config.json")
+if load_config("/nonexistent/pricing_config.json") != canonical:
+    failures.append("load_config() fallback did not return the canonical config")
+
 sys.exit(1 if failures else 0)

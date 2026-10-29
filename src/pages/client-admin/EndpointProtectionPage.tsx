@@ -5,6 +5,8 @@ import {
   Filter, Search, Clock, Server, Activity
 } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { useAuth } from '../../context/AuthContext';
+import { demoEndpointAlerts } from '../../data/demoWorld';
 
 interface EndpointAlert {
   id: string;
@@ -21,6 +23,7 @@ interface EndpointAlert {
 
 export default function EndpointProtectionPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [alerts, setAlerts] = useState<EndpointAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -34,70 +37,13 @@ export default function EndpointProtectionPage() {
         // REAL DATA: same structure, fed by the service's open-source engine
         const live = await tryLiveFeed('endpoint-protection');
         if (live) { setAlerts(live as any); setLoading(false); return; }
-        const mockAlerts: EndpointAlert[] = [
-          {
-            id: 'EDR-001',
-            type: 'ransomware',
-            severity: 'critical',
-            device: 'workstation-01',
-            deviceIp: '10.0.10.20',
-            threat: 'LockBit 4.0',
-            action: 'blocked',
-            timestamp: '2027-01-15T09:45:00Z',
-            ticketCreated: true,
-            details: 'Ransomware attempt detected and blocked. Process killed, files restored.',
-          },
-          {
-            id: 'EDR-002',
-            type: 'malware',
-            severity: 'high',
-            device: 'server-web-01',
-            deviceIp: '10.0.10.10',
-            threat: 'Trojan.GenericKD',
-            action: 'quarantined',
-            timestamp: '2027-01-15T08:30:00Z',
-            ticketCreated: true,
-            details: 'Malware quarantined. System scanned and cleaned.',
-          },
-          {
-            id: 'EDR-003',
-            type: 'fileless',
-            severity: 'critical',
-            device: 'workstation-05',
-            deviceIp: '10.0.10.25',
-            threat: 'PowerShell Empire',
-            action: 'blocked',
-            timestamp: '2027-01-15T07:15:00Z',
-            ticketCreated: false,
-            details: 'Fileless attack detected in memory. PowerShell execution blocked.',
-          },
-          {
-            id: 'EDR-004',
-            type: 'exploit',
-            severity: 'high',
-            device: 'server-db-01',
-            deviceIp: '10.0.10.11',
-            threat: 'CVE-2027-0142',
-            action: 'blocked',
-            timestamp: '2027-01-15T06:00:00Z',
-            ticketCreated: true,
-            details: 'Exploit attempt blocked. Vulnerability patched.',
-          },
-          {
-            id: 'EDR-005',
-            type: 'suspicious',
-            severity: 'medium',
-            device: 'workstation-12',
-            deviceIp: '10.0.10.32',
-            threat: 'Suspicious Process',
-            action: 'detected',
-            timestamp: '2027-01-15T05:30:00Z',
-            ticketCreated: false,
-            details: 'Unusual process behavior detected. Monitoring in progress.',
-          },
-        ];
-        
-        setAlerts(mockAlerts);
+        // Unified demo world fallback — devices/IPs all exist in demoDevices
+        // and correlate with ALR-0001/0006/0010 and TCK-01001/0002/0008/0010.
+        const n = Number(String(user?.orgId ?? '').replace(/^org-dw-/, ''));
+        const orgId = Number.isFinite(n) && n > 0 ? n : null;
+        setAlerts(orgId != null
+          ? demoEndpointAlerts.filter(a => a.orgId === orgId)
+          : demoEndpointAlerts);
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch endpoint alerts:', error);
@@ -106,7 +52,7 @@ export default function EndpointProtectionPage() {
     };
 
     fetchAlerts();
-  }, []);
+  }, [user?.orgId]);
 
   const filteredAlerts = alerts.filter(alert => {
     const matchesFilter = filter === 'all' || alert.type === filter;

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, computed_field
 from typing import Optional, List
 from datetime import datetime
 
@@ -360,6 +360,18 @@ class ApprovalResponse(BaseModel):
 # Notification & Event Intelligence schemas
 # ============================================================================
 
+class GeoPoint(BaseModel):
+    """Approximate geolocation attached to an inbound event.
+
+    IP geolocation is ALWAYS approximate; `confidence` documents the quality of
+    the fix (0..1). Coordinates are optional — a country-only lookup is valid.
+    """
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lon: Optional[float] = Field(None, ge=-180, le=180)
+    country: Optional[str] = Field(None, max_length=60)
+    confidence: Optional[float] = Field(None, ge=0, le=1)
+
+
 class AlertIn(BaseModel):
     """Inbound event — this is what real integrations POST to /api/alerts."""
     title: str
@@ -369,6 +381,22 @@ class AlertIn(BaseModel):
     resource: Optional[str] = None
     org_id: Optional[int] = None         # required for platform-admin ingest
     raw_payload: dict = {}
+    # --- Worldwide attack map (additive, optional) ---------------------------
+    # When the collector/SIEM knows the geographic origin/target of the event
+    # it may send them here; the ingest path persists them into raw_payload
+    # (src_geo / dst_geo) so GET /api/security/attack-map can serve real data.
+    src_geo: Optional[GeoPoint] = None
+    dst_geo: Optional[GeoPoint] = None
+    classification: Optional[str] = Field(
+        None, pattern=r"^$|^(observed|malicious|confirmed)$",
+        description="observed = plain telemetry; malicious = classified by a "
+                    "detection source; confirmed = verified attack evidence.")
+    # --- Event evidence (Stage 1, additive & optional) -----------------------
+    # The upstream detector's OWN identifier for this event, when it has one.
+    # Stored verbatim on the durable evidence row as provenance. It NEVER
+    # changes grouping/dedup behavior in this stage — identical payloads do
+    # not prove two events are the same, and we do not key anything off it.
+    source_event_id: Optional[str] = Field(None, max_length=255)
 
 
 class AlertResponse(BaseModel):
@@ -382,13 +410,130 @@ class AlertResponse(BaseModel):
     resource: Optional[str]
     correlated_count: int = 1
     storm_suppressed: bool = False
+    status: str = "active"                 # active|acked|resolved — persisted lifecycle state
+    assignee: Optional[str] = None
     acked_by: Optional[str]
     acked_at: Optional[datetime]
+    resolved_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    version: int = 1                       # optimistic-concurrency token (409 on stale writes)
     ticket_uid: Optional[str]
+    incident_uid: Optional[str] = None     # real IR link only — never fabricated
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class AlertSummaryResponse(BaseModel):
+    """Server-computed severity/status totals over the FULL filtered set
+    (independent of pagination — so KPI cards are honest even on page 2)."""
+    total: int
+    by_severity: dict
+    by_status: dict
+    unassigned_active: int = 0
+
+
+class AlertUpdateIn(BaseModel):
+    """Status transitions / assignment. Every field is validated server-side."""
+    status: Optional[str] = Field(None, pattern=r"^(active|acked|resolved)$")
+    assignee: Optional[str] = None
+    clear_assignee: bool = False               # explicit unassign (distinguishes null from "unset")
+    expected_version: Optional[int] = None   # if sent and mismatched -> 409
+    note: Optional[str] = Field(None, max_length=4000)  # optional investigation note appended atomically
+
+
+class BulkAlertActionIn(BaseModel):
+    ids: List[int] = Field(..., min_length=1, max_length=200)
+    action: str = Field(..., pattern=r"^(ack|resolve|reopen|assign)$")
+    assignee: Optional[str] = None
+
+    class Config:
+        json_schema_extra = {"example": {"ids": [1, 2], "action": "ack"}}
+
+
+class AlertPageResponse(BaseModel):
+    items: List[AlertResponse]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+
+
+class AlertDetailResponse(AlertResponse):
+    """Detail view: related detections/incidents/tickets + notes + history."""
+    related_incidents: List[dict] = []     # real Incident rows referencing this alert
+    related_tickets: List[dict] = []       # real Ticket rows referencing this alert
+    notes: List["AlertNoteResponse"] = []
+    events: List["AlertEventResponse"] = []
+    evidence: List["EventEvidenceSummary"] = []   # additive (Stage 1): per-event stubs
+
+
+class AlertNoteIn(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+
+
+class AlertNoteResponse(BaseModel):
+    id: int
+    alert_id: int
+    author: str
+    body: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertEventResponse(BaseModel):
+    id: int
+    alert_id: int
+    actor: str
+    action: str
+    detail: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ---------------------------------------------------------------------------
+# Event evidence (Stage 1 — durable per-event raw payload + provenance).
+# Summary view is additive on alert detail; the FULL payload is only served by
+# the dedicated, tenant-scoped, write-role-gated evidence endpoints.
+# ---------------------------------------------------------------------------
+class EventEvidenceSummary(BaseModel):
+    """Non-sensitive metadata about one accepted event's stored evidence.
+    Never includes the payload itself."""
+    event_uid: str
+    source_system: str
+    source_event_id: Optional[str] = None
+    received_at: datetime
+    source_occurred_at: Optional[datetime] = None
+    payload_bytes: int = 0
+    truncated: bool = False
+    payload_expired: bool = False
+    payload_sha256: str
+    expires_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class EventEvidenceDetail(EventEvidenceSummary):
+    """Full evidence record — raw payload included. Access-controlled."""
+    raw_payload: Optional[dict] = None      # null after retention expiry
+    payload_excerpt: Optional[str] = None   # first bytes when truncation happened
+    provenance: dict = {}
+    normalization_version: str = "v1"
+    retention_policy_version: str = "v1"
+
+
+class NotificationRetryResult(BaseModel):
+    id: int
+    status: str            # backend-confirmed outcome after retry: queued|sent|dead_letter|suppressed
+    attempts: int
+    last_error: Optional[str] = None
+    sent_at: Optional[datetime] = None
 
 
 class RuleCreate(BaseModel):
@@ -428,6 +573,7 @@ class NotificationResponse(BaseModel):
     id: int
     org_id: int
     alert_id: Optional[int]
+    alert_uid: Optional[str] = None      # resolved server-side for drill-down links
     rule_id: Optional[int]
     channel: str
     recipient: str
@@ -478,8 +624,14 @@ class SnmpCredentialResponse(SnmpCredentialCreate):
 
 class ScanCreate(BaseModel):
     network_cidr: str                    # e.g. 192.168.1.0/24
+    prefix: Optional[int] = Field(None, ge=8, le=32,
+        description="Optional explicit mask override; must be >= /22 to keep "
+                    "scans bounded (never larger than the engine's 1024-host cap).")
     credential_ids: List[int] = []
     org_id: Optional[int] = None
+    site_id: Optional[int] = Field(None, description="Approved site/org the scan targets (multi-site hierarchy).")
+    authorized: bool = Field(False, description="Explicit operator authorization for this scan scope.")
+    authorization_note: Optional[str] = Field(None, max_length=500)
 
 
 class ScanResponse(BaseModel):
@@ -495,6 +647,9 @@ class ScanResponse(BaseModel):
     finished_at: Optional[datetime]
     created_by: str
     created_at: datetime
+    site_id: Optional[int] = None
+    authorized: bool = False
+    authorization_note: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -514,6 +669,24 @@ class DiscoveredDeviceResponse(BaseModel):
     sys_desc: Optional[str]
     imported: bool
     created_at: datetime
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def verified(self) -> Optional[bool]:
+        """Server-derived provenance: identity confirmed by a stored-credential SNMP walk."""
+        return bool(self.snmp_match)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def source(self) -> str:
+        """This table only stores scanner findings; manually configured assets live in the CMDB."""
+        return "discovery"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def last_seen(self) -> Optional[datetime]:
+        """Real observation timestamp of this finding - never synthesized."""
+        return self.created_at
 
     class Config:
         from_attributes = True

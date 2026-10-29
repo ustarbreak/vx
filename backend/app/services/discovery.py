@@ -147,6 +147,9 @@ async def execute_scan(scan_id: int) -> None:
         scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
         if not scan:
             return
+        if scan.status == "cancelled":
+            # User cancelled between queueing and execution — never resurrect.
+            return
         scan.status = "running"
         scan.started_at = now_utc()
         hosts = cidr_hosts(scan.network_cidr)
@@ -158,53 +161,98 @@ async def execute_scan(scan_id: int) -> None:
         )).scalars().all()
         cred_map = {c.id: c for c in creds if not scan.credential_ids or c.id in (scan.credential_ids or [])}
 
-        if await nmap_available():
-            raw = await run_nmap(scan.network_cidr)
-        else:
-            raw = await simulate_scan(scan_id)
+        try:
+            if await nmap_available():
+                raw = await run_nmap(scan.network_cidr)
+            else:
+                raw = await simulate_scan(scan_id)
+        except Exception as exc:  # worker crash / unreachable network — report, never fake success
+            scan.status = "failed"
+            scan.finished_at = now_utc()
+            await db.commit()
+            import logging
+            logging.getLogger("infracentra.discovery").error("discovery scan %s failed: %s", scan_id, exc)
+            return
 
         async def _next_alert_uid() -> str:
-            from app.models import Alert as A
-            count = len((await db.execute(select(A.id))).scalars().all())
-            return f"ALR-{count + 1:06d}"
+            # STAGE 3: atomic counter claim (was COUNT+1, racy under parallel
+            # writers). Counter row is bootstrapped at startup from legacy uids.
+            from app.services import notifications as nv
+            return await nv.allocate_uid(db, "alerts", "ALR")
 
         discovered = 0
         matched = 0
+        # Dedup identity rule: an IP already seen for this tenant in a previous
+        # scan is refreshed (last observation) instead of duplicated. Real
+        # relationship data only — never invent links between findings.
+        existing = {d.ip: d for d in (await db.execute(
+            select(DiscoveredDevice).where(DiscoveredDevice.org_id == scan.org_id)
+        )).scalars().all()}
         for h in raw:
             snmp_info = None
             for cid, cred in cred_map.items():
                 snmp_info = await snmp_probe(h["ip"], cred)
                 if snmp_info:
                     break
-            dev = DiscoveredDevice(
-                scan_id=scan.id, org_id=scan.org_id, ip=h["ip"],
-                mac=h.get("mac"), hostname=h.get("hostname"),
-                os_guess=h.get("os_guess") or (snmp_info or {}).get("sys_desc", "")[:60] or "unknown",
-                device_type=h.get("device_type") or "unknown",
-                open_ports=h.get("open_ports", []),
-                snmp_match=bool(snmp_info),
-                sys_desc=(snmp_info or {}).get("sys_desc"),
-            )
-            db.add(dev)
+            dev = existing.get(h["ip"])
+            if dev is not None:
+                # refresh the persisted row with the newest real observations
+                dev.hostname = h.get("hostname") or dev.hostname
+                dev.mac = h.get("mac") or dev.mac
+                dev.open_ports = h.get("open_ports", dev.open_ports)
+                dev.os_guess = h.get("os_guess") or dev.os_guess
+                dev.device_type = h.get("device_type") or dev.device_type
+                if snmp_info:
+                    dev.snmp_match = True
+                    dev.sys_desc = snmp_info.get("sys_desc")
+                dev.created_at = now_utc()   # last_seen derives from this row
+            else:
+                dev = DiscoveredDevice(
+                    scan_id=scan.id, org_id=scan.org_id, ip=h["ip"],
+                    mac=h.get("mac"), hostname=h.get("hostname"),
+                    os_guess=h.get("os_guess") or (snmp_info or {}).get("sys_desc", "")[:60] or "unknown",
+                    device_type=h.get("device_type") or "unknown",
+                    open_ports=h.get("open_ports", []),
+                    snmp_match=bool(snmp_info),
+                    sys_desc=(snmp_info or {}).get("sys_desc"),
+                )
+                db.add(dev)
             discovered += 1
             if snmp_info:
                 matched += 1
-                # emit an event into the notification engine: new SNMP-managed device found
-                from app.models import Alert as AlertModel
-                alert = AlertModel(
-                    uid=await _next_alert_uid(), org_id=scan.org_id,
-                    title=f"SNMP-matched device discovered at {h['ip']}",
-                    description=(f"Auto-discovery found a device responding to credential "
-                                 f"'{snmp_info['matched_credential']}': {snmp_info['sys_desc'][:120]}"),
-                    severity="info", source="nmap", resource=h.get("hostname") or h["ip"],
-                    raw_payload={"scan_id": scan.id, "ip": h["ip"],
-                                 "credential": snmp_info["matched_credential"]},
-                    created_at=now_utc(),
+                # emit an event through the SAME shared processing pipeline as
+                # HTTP/API and agent paths (Stage 2). run_side_effects=False
+                # preserves this path's pre-pipeline notification semantics
+                # exactly (alert row + grouping, no rule dispatch) — enabling
+                # side effects here is a flagged change awaiting approval.
+                from app.models import Alert as AlertModel  # noqa: F401 (kept for clarity)
+                from app.services import evidence as ev_service
+                from app.services import pipeline as shared_pipeline
+                payload = {"scan_id": scan.id, "ip": h["ip"],
+                           "credential": snmp_info["matched_credential"]}
+                # --- Tx A: durable evidence committed BEFORE processing ------
+                rec = await ev_service.store_event_evidence(
+                    db, org_id=scan.org_id,
+                    payload=payload,
+                    source_system="nmap",
+                    source_event_id=f"scan-{scan.id}-{h['ip']}",
+                    provenance={"actor": "discovery-service",
+                                "endpoint": "services/discovery.run_scan"},
                 )
-                db.add(alert)
-                await db.flush()
-                from app.services.notifications import process_alert
-                await process_alert(db, alert)
+                await db.commit()
+                # --- shared pipeline (correlate/grouping now applies here too)
+                await shared_pipeline.process_ingested_event(
+                    db, org_id=scan.org_id, evidence_uid=rec.event_uid,
+                    run_side_effects=False,
+                    fields={
+                        "title": f"SNMP-matched device discovered at {h['ip']}",
+                        "description": (f"Auto-discovery found a device responding to credential "
+                                        f"'{snmp_info['matched_credential']}': "
+                                        f"{snmp_info['sys_desc'][:120]}"),
+                        "severity": "info", "source": "nmap",
+                        "resource": h.get("hostname") or h["ip"],
+                        "raw_payload": payload,
+                    })
         scan.discovered = discovered
         scan.snmp_matched = matched
         scan.status = "completed"

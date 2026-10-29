@@ -4,6 +4,8 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
+import { useAuth } from '../../context/AuthContext';
+import { demoDevices, demoDeviceMetrics, demoHealthStatuses, demoHash } from '../../data/demoWorld';
 
 interface PerformanceMetric {
   timestamp: string;
@@ -22,6 +24,7 @@ interface SystemHealth {
 }
 
 export default function PerformanceStatistics() {
+  const { user } = useAuth();
   const [timeRange, setTimeRange] = useState('24h');
   const [metrics, setMetrics] = useState<PerformanceMetric[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth[]>([]);
@@ -31,35 +34,44 @@ export default function PerformanceStatistics() {
     // Simulate API call to fetch performance metrics
     const fetchMetrics = async () => {
       try {
-        // In production: const response = await fetch('/api/performance/metrics');
+        // In production: GET /api/organizations/{id}/performance/metrics — the
+        // backend aggregates collector samples per org; in demo mode the SAME
+        // figures are derived deterministically from demoWorld (hostname hash),
+        // never Math.random(). Org-scoped via the logged-in tenant.
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Generate mock time series data
+
+        const n = Number(String(user?.orgId ?? '').replace(/^org-dw-/, ''));
+        const orgId = Number.isFinite(n) && n > 0 ? n : null;
+        const orgDevices = orgId != null
+          ? demoDevices.filter(d => d.orgId === orgId)
+          : demoDevices;
+
+        // Build a deterministic 24h series from the fleet's base metrics.
         const now = new Date();
-        const mockMetrics: PerformanceMetric[] = Array.from({ length: 24 }, (_, i) => {
+        const series: PerformanceMetric[] = Array.from({ length: 24 }, (_, i) => {
           const time = new Date(now.getTime() - (23 - i) * 3600000);
+          let cpu = 0, mem = 0, dsk = 0;
+          for (const d of orgDevices) {
+            const m = demoDeviceMetrics(d.hostname, `h${i}`);
+            cpu += m.cpu; mem += m.memory; dsk += m.disk;
+          }
+          const k = Math.max(1, orgDevices.length);
           return {
             timestamp: time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            cpu: 40 + Math.random() * 40,
-            memory: 60 + Math.random() * 25,
-            disk: 45 + Math.random() * 15,
-            network: 30 + Math.random() * 50,
+            cpu: Math.round(cpu / k),
+            memory: Math.round(mem / k),
+            disk: Math.round(dsk / k),
+            network: 30 + demoHash(`net|${i}|${orgId ?? 'all'}`, 50),
           };
         });
-        
-        setMetrics(mockMetrics);
 
-        // Generate system health data
-        const mockHealth: SystemHealth[] = [
-          { component: 'CPU Usage', status: 'healthy', value: 52, threshold: 80, message: 'Normal operation' },
-          { component: 'Memory Usage', status: 'warning', value: 78, threshold: 75, message: 'High memory usage detected' },
-          { component: 'Disk I/O', status: 'healthy', value: 45, threshold: 80, message: 'Normal disk activity' },
-          { component: 'Network Latency', status: 'healthy', value: 12, threshold: 50, message: 'Low latency' },
-          { component: 'Database Connections', status: 'critical', value: 95, threshold: 90, message: 'Connection pool nearly exhausted' },
-          { component: 'API Response Time', status: 'healthy', value: 245, threshold: 500, message: 'Within acceptable range' },
-        ];
-        
-        setSystemHealth(mockHealth);
+        setMetrics(series);
+
+        // Health cards come straight from the canonical demoWorld slice
+        // (demoHealthStatuses), scoped to the tenant like the real feed.
+        setSystemHealth(orgId != null
+          ? demoHealthStatuses.filter(h => h.orgId === orgId)
+          : demoHealthStatuses);
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch performance metrics:', error);
@@ -69,24 +81,29 @@ export default function PerformanceStatistics() {
 
     fetchMetrics();
 
-    // Simulate real-time updates
+    // Real-time updates — deterministic hash-based walk (no Math.random):
+    // each tick advances by a stable delta derived from the hour slot.
     const interval = setInterval(() => {
       setMetrics(prev => {
+        if (!prev.length) return prev;
         const newMetrics = [...prev.slice(1)];
         const now = new Date();
+        const slot = `${now.getHours()}:${Math.floor(now.getMinutes() / 5)}`;
+        const last = prev[prev.length - 1];
+        const step = (salt: string, span: number) => demoHash(`${slot}|${salt}`, span * 2 + 1) - span;
         newMetrics.push({
           timestamp: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          cpu: Math.max(0, Math.min(100, prev[prev.length - 1].cpu + (Math.random() * 10 - 5))),
-          memory: Math.max(0, Math.min(100, prev[prev.length - 1].memory + (Math.random() * 8 - 4))),
-          disk: Math.max(0, Math.min(100, prev[prev.length - 1].disk + (Math.random() * 6 - 3))),
-          network: Math.max(0, Math.min(100, prev[prev.length - 1].network + (Math.random() * 12 - 6))),
+          cpu: Math.max(0, Math.min(100, last.cpu + step('cpu', 5))),
+          memory: Math.max(0, Math.min(100, last.memory + step('mem', 4))),
+          disk: Math.max(0, Math.min(100, last.disk + step('dsk', 3))),
+          network: Math.max(0, Math.min(100, last.network + step('net', 6))),
         });
         return newMetrics;
       });
     }, 5000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.orgId]);
 
   const currentMetrics = metrics[metrics.length - 1] || { cpu: 0, memory: 0, disk: 0, network: 0 };
   const avgMetrics = {

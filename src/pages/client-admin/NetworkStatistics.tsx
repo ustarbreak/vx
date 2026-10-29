@@ -5,6 +5,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   LineChart, Line
 } from 'recharts';
+import { demoNetInterfaces, demoHash } from '../../data/demoWorld';
 
 interface NetworkDevice {
   id: string;
@@ -18,6 +19,11 @@ interface NetworkDevice {
   errors: number;
   location: string;
 }
+
+// Deterministic traffic jitter for the live tick — same value for the same
+// (timeSlot, hour) in demo AND real mode; replaces Math.random() entirely.
+const jitter = (time: string, salt: string, slot: number, span: number, offset: number) =>
+  demoHash(`${time}|${salt}|${slot}`, span * 2 + 1) - span + offset;
 
 export default function NetworkStatistics() {
   const navigate = useNavigate();
@@ -40,19 +46,25 @@ export default function NetworkStatistics() {
     // Simulate API call to fetch network devices
     const fetchDevices = async () => {
       try {
-        // In production, this would be: const response = await fetch('/api/network/devices');
-        // For now, simulate with mock data
+        // In production this is GET /api/organizations/{id}/net-interfaces —
+        // the backend derives the SAME rows deterministically from the
+        // discovered_devices table (hostname hash), mirroring demoWorld.
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        const mockDevices: NetworkDevice[] = [
-          { id: '1', hostname: 'router-main', ip: '10.0.10.1', type: 'router', status: 'online', bandwidth: 850, packetsIn: 125000, packetsOut: 98000, errors: 2, location: 'Datacenter' },
-          { id: '2', hostname: 'switch-core', ip: '10.0.10.2', type: 'switch', status: 'online', bandwidth: 920, packetsIn: 245000, packetsOut: 238000, errors: 0, location: 'Datacenter' },
-          { id: '3', hostname: 'firewall-ext', ip: '10.0.10.3', type: 'firewall', status: 'warning', bandwidth: 680, packetsIn: 180000, packetsOut: 165000, errors: 15, location: 'Datacenter' },
-          { id: '4', hostname: 'ap-floor1', ip: '10.0.10.40', type: 'access-point', status: 'online', bandwidth: 450, packetsIn: 85000, packetsOut: 72000, errors: 1, location: 'Floor 1' },
-          { id: '5', hostname: 'ap-floor2', ip: '10.0.10.41', type: 'access-point', status: 'offline', bandwidth: 0, packetsIn: 0, packetsOut: 0, errors: 0, location: 'Floor 2' },
-        ];
-        
-        setDevices(mockDevices);
+
+        const netDevices: NetworkDevice[] = demoNetInterfaces.map(ni => ({
+          id: ni.id,
+          hostname: ni.hostname,
+          ip: ni.ip,
+          type: ni.type,
+          status: ni.status,
+          bandwidth: ni.inboundMbps + ni.outboundMbps,
+          packetsIn: ni.packetsIn,
+          packetsOut: ni.packetsOut,
+          errors: ni.errors,
+          location: ni.location,
+        }));
+
+        setDevices(netDevices);
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch network devices:', error);
@@ -62,13 +74,15 @@ export default function NetworkStatistics() {
 
     fetchDevices();
 
-    // Simulate real-time updates
+    // Real-time updates — deterministic hash-based jitter (no Math.random),
+    // so every viewer sees identical numbers at the same wall-clock slot.
     const interval = setInterval(() => {
+      const slot = Math.floor(Date.now() / 5000); // advances every tick
       setTrafficData(prev => prev.map(item => ({
         ...item,
-        inbound: item.inbound + Math.floor(Math.random() * 100 - 50),
-        outbound: item.outbound + Math.floor(Math.random() * 80 - 40),
-        errors: Math.max(0, item.errors + Math.floor(Math.random() * 3 - 1)),
+        inbound: Math.max(0, item.inbound + jitter(item.time, 'in', slot, 50, 0)),
+        outbound: Math.max(0, item.outbound + jitter(item.time, 'out', slot, 40, 0)),
+        errors: Math.max(0, item.errors + jitter(item.time, 'err', slot, 1, 0)),
       })));
     }, 5000);
 

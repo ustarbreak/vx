@@ -116,7 +116,16 @@ export function downloadText(filename: string, text: string, mime = 'text/csv;ch
 // Demo Mode OFF → real FastAPI backend through the Vite dev proxy.
 // ---------------------------------------------------------------------------
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  if (isDemoMode()) return demoStore.handle<T>(options.method ?? 'GET', path, options.body);
+  if (isDemoMode()) {
+    // Demo errors carry `demoStatus`; rethrow as ApiError so pages can react
+    // to 403/409/422 exactly like they would against the real backend.
+    try {
+      return await demoStore.handle<T>(options.method ?? 'GET', path, options.body);
+    } catch (e: any) {
+      if (e && typeof e.demoStatus === 'number') throw new ApiError(e.demoStatus, e.message);
+      throw e;
+    }
+  }
   return realRequest<T>(path, options);
 }
 
@@ -376,10 +385,102 @@ export interface AlertRow {
   resource?: string | null;
   correlated_count: number;
   storm_suppressed: boolean;
+  status: string;                 // active | acked | resolved (persisted lifecycle state)
+  assignee?: string | null;
   acked_by?: string | null;
   acked_at?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  version: number;                // optimistic-concurrency token (409 on stale writes)
   ticket_uid?: string | null;
+  incident_uid?: string | null;   // real IR link only — never fabricated
   created_at: string;
+}
+
+// ---- Phase 5 alert-management types (mirror backend/app/schemas.py) --------
+export interface AlertSummary {
+  total: number;
+  by_severity: Record<string, number>;
+  by_status: Record<string, number>;
+  unassigned_active: number;
+}
+
+export interface AlertPage {
+  items: AlertRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}
+
+export interface AlertNoteRow {
+  id: number;
+  alert_id: number;
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+export interface AlertEventRow {
+  id: number;
+  alert_id: number;
+  actor: string;
+  action: string;
+  detail: string;
+  created_at: string;
+}
+
+export interface AlertDetail extends AlertRow {
+  related_incidents: { uid: string; title: string; severity: string; status: string }[];
+  related_tickets: { uid: string; title: string; status: string; priority: string }[];
+  notes: AlertNoteRow[];
+  events: AlertEventRow[];
+}
+
+export interface AlertUpdateIn {
+  status?: 'active' | 'acked' | 'resolved';
+  assignee?: string | null;
+  clear_assignee?: boolean;
+  expected_version?: number;
+  note?: string;
+}
+
+export interface BulkAlertResult {
+  results: { id: number; ok: boolean; changed?: boolean; reason?: string }[];
+  applied: number;
+}
+
+export interface NotificationRetryResult {
+  id: number;
+  status: string;
+  attempts: number;
+  last_error?: string | null;
+  sent_at?: string | null;
+}
+
+export interface AlertListParams {
+  q?: string;
+  severity?: string;      // csv
+  status?: string;        // csv
+  source?: string;        // csv
+  assignee?: string;      // email or '__unassigned__'
+  org_id?: number;
+  since?: string;         // ISO
+  until?: string;         // ISO
+  sort?: 'created_at' | 'severity' | 'status' | 'title' | 'source';
+  order?: 'asc' | 'desc';
+  page?: number;
+  page_size?: number;
+}
+
+function alertQs(p?: AlertListParams): string {
+  if (!p) return '';
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const s = qs.toString();
+  return s ? `?${s}` : '';
 }
 
 export interface NotifRule {
@@ -401,6 +502,7 @@ export interface NotificationRow {
   id: number;
   org_id: number;
   alert_id?: number | null;
+  alert_uid?: string | null;      // resolved server-side for drill-down links
   rule_id?: number | null;
   channel: string;
   recipient: string;
@@ -427,18 +529,33 @@ export const alertsApi = {
     raw_payload?: Record<string, any>;
   }) =>
     api.post<{ alert: AlertRow; pipeline: { notifications: any[]; ticket_created?: boolean; ticket_uid?: string | null } }>('/alerts', data),
-  list: (org_id?: number) =>
-    api.get<AlertRow[]>(`/alerts${org_id ? `?org_id=${org_id}` : ''}`),
+  /** Server-side search/filter/sort/pagination over persisted alerts. */
+  page: (p?: AlertListParams) => api.get<AlertPage>(`/alerts${alertQs(p)}`),
+  /** Flat list helper for widgets/banners (first 100 rows, newest first). */
+  list: async (org_id?: number): Promise<AlertRow[]> =>
+    (await api.get<AlertPage>(`/alerts${alertQs({ org_id, page_size: 100 })}`)).items,
+  /** Severity/status totals over the FULL filtered set (independent of page). */
+  summary: (p?: AlertListParams) => api.get<AlertSummary>(`/alerts/summary${alertQs(p)}`),
+  detail: (id: number) => api.get<AlertDetail>(`/alerts/${id}`),
+  /** Validated transition / assignment / atomic note. 409 on stale expected_version. */
+  update: (id: number, patch: AlertUpdateIn) => api.patch<AlertRow>(`/alerts/${id}`, patch),
   ack: (id: number) => api.post(`/alerts/${id}/ack`),
+  bulk: (ids: number[], action: 'ack' | 'resolve' | 'reopen' | 'assign', assignee?: string) =>
+    api.post<BulkAlertResult>('/alerts/bulk', { ids, action, assignee }),
+  notes: (id: number) => api.get<AlertNoteRow[]>(`/alerts/${id}/notes`),
+  addNote: (id: number, body: string) => api.post<AlertNoteRow>(`/alerts/${id}/notes`, { body }),
+  events: (id: number) => api.get<AlertEventRow[]>(`/alerts/${id}/events`),
   rules: () => api.get<NotifRule[]>('/notification-rules'),
   createRule: (rule: Omit<NotifRule, 'id' | 'created_at'>) =>
     api.post<NotifRule>('/notification-rules', rule),
   updateRule: (id: number, patch: Partial<NotifRule>) =>
     api.patch<NotifRule>(`/notification-rules/${id}`, patch),
   deleteRule: (id: number) => api.del(`/notification-rules/${id}`),
-  notifications: (statusF?: string) =>
-    api.get<NotificationRow[]>(`/notifications${statusF ? `?status=${statusF}` : ''}`),
+  notifications: (p?: { status?: string; channel?: string; q?: string; alert_uid?: string; limit?: number; page?: number }) =>
+    api.get<NotificationRow[]>(`/notifications${alertQs(p as any)}`),
   ackNotification: (id: number) => api.post(`/notifications/${id}/ack`),
+  /** Single dead-letter retry — response carries the backend-confirmed outcome. */
+  retryNotification: (id: number) => api.post<NotificationRetryResult>(`/notifications/${id}/retry`),
   retryDeadLetters: () => api.post<any>('/notifications/retry-dead-letters'),
   analytics: () => api.get<Record<string, any>>('/notifications/analytics'),
 };
@@ -494,7 +611,7 @@ export interface ScanRow {
   id: number;
   org_id: number;
   network_cidr: string;
-  status: string;
+  status: string;              // queued | running | completed | failed | cancelled
   credential_ids: number[];
   total_hosts: number;
   discovered: number;
@@ -518,7 +635,29 @@ export interface DiscoveredDevice {
   snmp_match: boolean;
   sys_desc?: string | null;
   imported: boolean;
+  verified?: boolean | null;   // SNMP-verified identity (server-derived)
+  source?: 'discovery' | 'manual'; // provenance — never inferred client-side
+  last_seen?: string | null;   // real observation timestamp, null = unknown
   created_at: string;
+}
+
+// Optional live-monitoring enrichment for a discovered device. The backend
+// attaches these ONLY when the host matches an actual probe / collector row —
+// they are never inferred. Absent fields mean "not monitored", not "down".
+export interface DeviceDetailInfo {
+  monitored: boolean;
+  monitor_source: 'probe' | 'collector' | null;
+  status: string | null;            // online | offline | degraded | stale | unknown
+  last_seen: string | null;         // real timestamp from the matching record
+  os: string | null;
+  hostname: string | null;
+  ip: string;
+  mac: string | null;
+  device_type: string | null;
+  snmp_match: boolean;
+  open_ports: number[];
+  location: string | null;          // site label when registered; null = unconfigured
+  related_incidents: number | null; // open alerts referencing this resource/IP
 }
 
 export const discoveryApi = {
@@ -529,9 +668,11 @@ export const discoveryApi = {
   scans: () => api.get<ScanRow[]>('/scans'),
   startScan: (network_cidr: string, credential_ids: number[], org_id?: number) =>
     api.post<ScanRow>('/scans', { network_cidr, credential_ids, org_id }),
+  cancelScan: (id: number) => api.post<ScanRow>(`/scans/${id}/cancel`),
   scanStatus: (id: number) => api.get<ScanRow>(`/scans/${id}`),
   scanDevices: (id: number) => api.get<DiscoveredDevice[]>(`/scans/${id}/devices`),
   devices: () => api.get<DiscoveredDevice[]>('/devices'),
+  deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
 };
@@ -577,6 +718,30 @@ export const settingsApi = {
   // with configurable service entitlements and a trial window (default 30d).
   createDemoAccount: (req: DemoAccountRequest) =>
     api.post<any>('/settings/seed-demo-tenant', req as any),
+};
+
+// ---------------------------------------------------------------------------
+// Pack Customizer API — mirrors backend routers/pricing_v2.py
+//   GET   /pricing/config          → live versioned config (packDetails when set)
+//   GET   /pricing/packs           → effective pack composition + diff vs default
+//   PUT   /pricing/packs/{id}      → platform admin edits one pack (steps wizard)
+//   POST  /pricing/packs/reset     → restore the bundled DEFAULT_PACK_DETAILS
+// Served locally in Demo Mode by demoMode.ts (same shapes).
+// ---------------------------------------------------------------------------
+import type { PricingConfigV2, PackCustomizerDef } from '../data/pricingConfig';
+
+export interface PackEffectiveInfo {
+  id: string;
+  configured: boolean;          // false => still the shipped default
+  services: string[]; free_picks: string[];
+  added: string[]; removed: string[];   // diff vs DEFAULT_PACK_DETAILS
+}
+
+export const pricingPacksApi = {
+  config: () => api.get<PricingConfigV2>('/pricing/config'),
+  packs: () => api.get<{ version: string; packs: Record<string, PackCustomizerDef>; effective: Record<string, PackEffectiveInfo> }>('/pricing/packs'),
+  savePack: (id: string, def: PackCustomizerDef) => api.put<any>(`/pricing/packs/${id}`, def),
+  resetPacks: () => api.post<any>('/pricing/packs/reset'),
 };
 
 // ---------------------------------------------------------------------------
@@ -862,3 +1027,105 @@ export function agentInstallCommands(token: string, serverUrl?: string): { linux
       `& $env:TEMP\\install.ps1"`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Worldwide Attack Map — mirrors backend/app/routers/security_map.py:
+//   GET /api/security/attack-map (tenant-scoped, JWT-authenticated)
+// Only events that actually carry geographic context in Alert.raw_payload are
+// returned; production mode NEVER receives demo fixtures (the demo branch of
+// demoStore.handle() is the sole place demoAlertSeeds geo data is served).
+// Geolocation is approximate — classification separates observed telemetry
+// from malicious-classified and confirmed attacks.
+// ---------------------------------------------------------------------------
+export interface MapPoint {
+  lat: number | null;
+  lon: number | null;
+  country: string | null; // ISO-ish country code, approximate only
+}
+export type AttackClassification = 'observed' | 'malicious' | 'confirmed';
+export interface AttackMapEvent {
+  id: number;
+  uid: string;
+  timestamp: string;
+  event_type: string;       // alert source (wazuh, suricata, siem, api…)
+  title: string;
+  severity: string;         // critical|high|medium|low|info
+  classification: AttackClassification;
+  src: MapPoint | null;
+  dst: MapPoint | null;
+  confidence: number | null; // min(src,dst) geolocation confidence, 0..1
+  count: number;             // correlated/deduplicated events aggregated here
+  resource: string | null;   // affected asset (tenant-scoped)
+}
+export interface AttackMapPayload {
+  events: AttackMapEvent[];
+  total_events: number;
+  last_ingestion_at: string | null; // newest alert in window (geo or not)
+  generated_at: string;
+  note: string;
+}
+export interface AttackMapFilters {
+  start_time?: string;  // ISO
+  end_time?: string;    // ISO
+  severity?: string;    // comma list ok
+  event_type?: string;  // comma list of sources
+  source_country?: string;
+  destination_country?: string;
+  site_id?: number;     // platform_admin only
+}
+
+export const attackMapApi = {
+  get: (filters: AttackMapFilters = {}) => {
+    const qs = new URLSearchParams();
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+    });
+    const s = qs.toString();
+    return api.get<AttackMapPayload>(`/security/attack-map${s ? `?${s}` : ''}`);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Organizational Infrastructure Topology — mirrors routers/org_topology.py
+// (GET /api/org-topology). SEPARATE from the worldwide attack map: this is
+// "what does my organization look like and is it healthy?", not attack data.
+// Types match the backend Pydantic schema exactly (TopoNode/OrgTopologyPayload).
+// ---------------------------------------------------------------------------
+export type TopoHealth =
+  | 'healthy' | 'degraded' | 'offline' | 'stale'
+  | 'monitoring_unavailable' | 'unknown';
+
+export interface TopoNode {
+  id: string;                    // "org:<pk>" | "probe:<pk>" | "monitoring:<pk>"
+  kind: 'organization' | 'hq' | 'site' | 'probe';
+  name: string;
+  parent: string | null;         // organizational ownership ONLY (never inferred)
+  org_ref: number;               // owning organization id (authorization anchor)
+  site_status?: string | null;
+  org_type?: string | null;      // HQ | SUBSIDIARY | AGENCY
+  country?: string | null;
+  asset_count?: number | null;
+  health?: TopoHealth | null;    // collector health — real status + timestamps only
+  last_seen?: string | null;
+  agent_version?: string | null;
+  os?: string | null;
+  ip?: string | null;            // internal address — tenant-authorized visibility
+  related_incidents?: number | null; // open alerts for the owning org
+}
+
+export interface TopoEdge { source: string; target: string; type: 'organizational' }
+
+export interface OrgTopologyPayload {
+  nodes: TopoNode[];
+  edges: TopoEdge[];
+  root_org_id: number;
+  hq_configured: boolean;
+  network_topology_available: boolean; // false until device-link data exists
+  note: string;
+  generated_at: string;
+}
+
+export const orgTopologyApi = {
+  get: (opts: { orgId?: number } = {}) =>
+    api.get<OrgTopologyPayload>(`/org-topology${opts.orgId ? `?org_id=${opts.orgId}` : ''}`),
+};

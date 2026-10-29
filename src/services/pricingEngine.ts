@@ -163,8 +163,12 @@ function quoteCore(inputs: QuoteInputs, cfg: PricingConfigV2, withRec: boolean):
     pricePerUnit = Math.max(cfg.custom.floor, cumulative + billedList);
     included = 0;
     if (inputs.support247 && slots >= 0) { /* allowed on custom */ }
-    if (slots < 3) {
-      const need = cfg.custom.unlockThresholds[slots] - cumulative;
+    // th is typed as a 3-tuple, so TS cannot narrow `slots < th.length` to
+    // `slots <= 2`; cast the index explicitly (slots is always 0..3 here and
+    // only 0..2 are ever read).
+    if (slots < cfg.custom.unlockThresholds.length) {
+      const th = cfg.custom.unlockThresholds as number[];
+      const need = th[slots] - cumulative;
       if (need > 0) upsell.push(`Ajoutez ${Math.round(need)} MAD/actif de services pour débloquer un service offert supplémentaire.`);
     }
   }
@@ -393,6 +397,40 @@ function ineligible(cfg: PricingConfigV2, units: number, reason: string, inputs:
 }
 
 // ---------- margin helper (§7) ------------------------------------------------
+// ---------- public helpers for the sales-gated Custom calculator (UI) ------
+/** Slot analysis for the Custom mode UI: how many free-pool services are
+ * unlocked by the selected paid services (thresholds evaluated on LIST
+ * prices, §3.2), and which requested gifts still get billed. */
+export function customSlotsInfo(inputs: QuoteInputs, cfg: PricingConfigV2 = PRICING_CONFIG_V2) {
+  const svcIds = inputs.customServices ?? [];
+  const paid = cfg.services.filter(s => svcIds.includes(s.id));
+  const cumulative = cfg.custom.platformBase + paid.reduce((s, x) => s + x.price, 0);
+  const th = cfg.custom.unlockThresholds;
+  const slots = cumulative >= th[2] ? 3 : cumulative >= th[1] ? 2 : cumulative >= th[0] ? 1 : 0;
+  const picks = (inputs.freePicks ?? []).filter(id => id !== 'ticketing' || slots >= 3);
+  const poolOrder = cfg.freePool.filter(f => !f.topTierOnly).map(f => f.id);
+  const requested = poolOrder
+    .filter(id => picks.includes(id))
+    .sort((a, b) => (cfg.freePool.find(f => f.id === b)?.listPrice ?? 0) - (cfg.freePool.find(f => f.id === a)?.listPrice ?? 0));
+  const billedFree = requested.slice(slots);
+  return { cumulative, slots, billedFree };
+}
+
+/** True when a Custom selection is equivalent to (or beyond) the Souverain
+ * pack — all tier-3-capable services chosen. Per positioning we hide these
+ * prices publicly and route the prospect to sales. */
+export function isSouverainEquivalent(services: string[], cfg: PricingConfigV2 = PRICING_CONFIG_V2): boolean {
+  return cfg.services.filter(s => s.tier === 3).every(s => services.includes(s.id));
+}
+
+/** Pure eligibility check used by the estimator UI (same reasons as quote()). */
+export function packEligibility(cfg: PricingConfigV2, pack: PackId, units: number): { ok: boolean; reason?: string } {
+  const def = cfg.packs[pack];
+  if (units < def.minUnits) return { ok: false, reason: `${pack.charAt(0).toUpperCase() + pack.slice(1)} commence à ${def.minUnits} unités.` };
+  if (def.maxUnits !== null && units > def.maxUnits) return { ok: false, reason: `${pack.charAt(0).toUpperCase() + pack.slice(1)} est limité à ${def.maxUnits} unités.` };
+  return { ok: true };
+}
+
 export function partnerMargin(resalePerUnit: number, wholesalePerUnit: number) {
   return {
     per_unit: +(resalePerUnit - wholesalePerUnit).toFixed(2),

@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Radio, RefreshCw, Plus, Trash2, Zap, ShieldAlert, Bell, Mail, MessageSquare,
   Smartphone, Inbox as InAppIcon, GitBranch, CheckCheck, RotateCcw, BarChart3,
-  VolumeX, PlayCircle, X, AlertOctagon,
+  VolumeX, PlayCircle, X, AlertOctagon, Loader2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
   alertsApi, ticketsApi, ApiError,
-  AlertRow, NotifRule, NotificationRow,
-} from '../../services/api';
+  type AlertRow, type AlertSummary, type NotifRule, type NotificationRow,
+  type NotificationRetryResult,
+} from '../../services/alertsApi';
 
 // ---------------------------------------------------------------------------
 // Constants shared with the backend rule schema
@@ -259,9 +261,11 @@ const SimulateAlertModal: React.FC<{ onClose: () => void; onDone: () => void; is
 
 const NotificationEnginePage: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isPlatform = user?.role === 'platform_admin';
   const [tab, setTab] = useState<'events' | 'rules' | 'delivery' | 'analytics'>('events');
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [summary, setSummary] = useState<AlertSummary | null>(null);
   const [rules, setRules] = useState<NotifRule[]>([]);
   const [notifs, setNotifs] = useState<NotificationRow[]>([]);
   const [analytics, setAnalytics] = useState<Record<string, any>>({});
@@ -272,12 +276,21 @@ const NotificationEnginePage: React.FC = () => {
   const [showSim, setShowSim] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [retryResult, setRetryResult] = useState<NotificationRetryResult | null>(null);
+
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     setError('');
     try {
-      const [a, rl, n] = await Promise.all([alertsApi.list(), alertsApi.rules(), alertsApi.notifications()]);
-      setAlerts(a); setRules(rl); setNotifs(n);
+      // Phase 5: paged inventory + server-side summary instead of client-derived KPIs.
+      const [pg, sm, rl, n] = await Promise.all([
+        alertsApi.page({ page_size: 100, sort: 'created_at', order: 'desc' }),
+        alertsApi.summary({}),
+        alertsApi.rules(),
+        alertsApi.notifications(),
+      ]);
+      setAlerts(pg.items); setSummary(sm); setRules(rl); setNotifs(n);
       alertsApi.analytics().then(setAnalytics).catch(() => {});
       if (isPlatform) {
         ticketsApi.tenants().then(setTenants).catch(() => {});
@@ -301,13 +314,25 @@ const NotificationEnginePage: React.FC = () => {
   };
 
   const stats = useMemo(() => ({
-    events: alerts.length,
-    unacked: alerts.filter(a => !a.acked_by).length,
-    suppressed: alerts.filter(a => a.storm_suppressed).length,
-    autoTickets: alerts.filter(a => a.ticket_uid).length,
+    // KPIs from GET /alerts/summary — totals over the FULL tenant set, honest across pages.
+    events: summary?.total ?? 0,
+    unacked: (summary?.by_severity ? Object.values(summary.by_severity).reduce((s2, v) => s2 + v, 0) - (summary?.by_status?.acked ?? 0) - (summary?.by_status?.resolved ?? 0) : 0),
+    suppressed: alerts.filter(a => a.storm_suppressed).length,   // page-scoped fallback (no server counter exists yet)
+    autoTickets: alerts.filter(a => a.ticket_uid).length,        // page-scoped fallback (no server counter exists yet)
     dlq: notifs.filter(n => n.status === 'dead_letter' || n.status === 'failed').length,
     sent: notifs.filter(n => ['sent', 'delivered', 'acked'].includes(n.status)).length,
-  }), [alerts, notifs]);
+  }), [alerts, notifs, summary]);
+
+  const retryOne = async (id: number) => {
+    setRetryingId(id); setRetryResult(null); setError('');
+    try {
+      const res = await alertsApi.retryNotification(id);
+      setRetryResult(res);           // backend-confirmed outcome only — never assume success
+      await load(true);
+    } catch (ex: any) {
+      setError(ex instanceof ApiError ? `Retry rejected: ${ex.message}` : 'Retry failed — backend unreachable.');
+    } finally { setRetryingId(null); }
+  };
 
   const chIcon = (c: string) => c === 'email' ? <Mail size={13} /> : c === 'sms' ? <Smartphone size={13} /> : c === 'webhook' ? <Zap size={13} /> : <InAppIcon size={13} />;
 
@@ -430,20 +455,36 @@ const NotificationEnginePage: React.FC = () => {
       {/* DELIVERY DIAGNOSTICS */}
       {tab === 'delivery' && (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <button onClick={() => alertsApi.retryDeadLetters().then((res: any) => { setError(`Requeued ${res?.requeued ?? 0} dead letter(s).`); load(true); }).catch(e => setError(e.message))}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-600/80 hover:bg-orange-500 text-[var(--ic-heading)] text-xs font-semibold"><RotateCcw size={14} /> Retry Dead Letters</button>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {retryResult && (
+              <p className={`text-xs ${retryResult.status === 'sent' ? 'text-emerald-400' : retryResult.status === 'queued' || retryResult.status === 'retrying' ? 'text-amber-300' : 'text-red-400'}`}>
+                Notification #{retryResult.id}: backend reports <b>{retryResult.status}</b> after attempt {retryResult.attempts}
+                {retryResult.sent_at ? ` · delivered at ${fmt(retryResult.sent_at)}` : ''}
+                {retryResult.last_error ? ` · last error: ${retryResult.last_error}` : ''}
+              </p>
+            )}
+            {!retryResult && <span />}
+            <div className="flex gap-2">
+              {isPlatform && (
+                <button onClick={() => alertsApi.retryDeadLetters().then((res: any) => { setError(`Backend requeued ${res?.retried ?? res?.requeued ?? 0} dead letter(s) — each still needs a confirmed delivery to count as sent.`); load(true); }).catch(e => setError(e instanceof ApiError ? e.message : e.message))}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-orange-600/80 hover:bg-orange-500 text-[var(--ic-heading)] text-xs font-semibold"><RotateCcw size={14} /> Retry All Dead Letters (platform)</button>
+              )}
+            </div>
           </div>
+          {!isPlatform && <p className="text-[11px] text-[var(--ic-muted)]">Bulk DLQ flush is platform-admin only. Tenant admins can retry individual dead letters below.</p>}
           <div className="bg-[var(--ic-surface)] rounded-xl overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs uppercase text-[var(--ic-muted)] border-b border-[var(--ic-border)]">
-                <th className="px-4 py-3">Channel</th><th className="px-4 py-3">Recipient</th><th className="px-4 py-3">Subject</th>
+                <th className="px-4 py-3">Alert</th><th className="px-4 py-3">Channel</th><th className="px-4 py-3">Recipient</th><th className="px-4 py-3">Subject</th>
                 <th className="px-4 py-3">Severity</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Attempts</th>
-                <th className="px-4 py-3">Last Error</th><th className="px-4 py-3">Sent</th><th className="px-4 py-3">Ack</th></tr></thead>
+                <th className="px-4 py-3">Last Error</th><th className="px-4 py-3">Sent</th><th className="px-4 py-3">Actions</th></tr></thead>
               <tbody>
-                {notifs.length === 0 && !loading && <tr><td colSpan={9} className="px-4 py-8 text-center text-[var(--ic-muted)]">No notifications dispatched yet — they appear here the moment real events flow in.</td></tr>}
+                {notifs.length === 0 && !loading && <tr><td colSpan={10} className="px-4 py-8 text-center text-[var(--ic-muted)]">No notifications dispatched yet — they appear here the moment real events flow in.</td></tr>}
                 {notifs.map(n => (
                   <tr key={n.id} className="border-b border-[var(--ic-border)]">
+                    <td className="px-4 py-3 text-xs">{n.alert_uid
+                      ? <button onClick={() => navigate(`/client-admin/alerts/${n.alert_id ?? n.alert_uid}`)} className="font-mono text-cyan-400 hover:underline">{n.alert_uid}</button>
+                      : <span className="text-[var(--ic-muted)]">—</span>}</td>
                     <td className="px-4 py-3 text-[var(--ic-text)]">{chIcon(n.channel)} {n.channel.replace('_', ' ')}</td>
                     <td className="px-4 py-3 text-[var(--ic-muted)] font-mono text-xs">{n.recipient}</td>
                     <td className="px-4 py-3 text-[var(--ic-heading)] max-w-64 truncate">{n.subject}</td>
@@ -452,11 +493,17 @@ const NotificationEnginePage: React.FC = () => {
                     <td className="px-4 py-3 text-[var(--ic-muted)]">{n.attempts}</td>
                     <td className="px-4 py-3 text-red-400 text-xs max-w-40 truncate">{n.last_error || '—'}</td>
                     <td className="px-4 py-3 text-[var(--ic-muted)] text-xs">{fmt(n.sent_at)}</td>
-                    <td className="px-4 py-3 text-xs">
+                    <td className="px-4 py-3 text-xs space-x-2 whitespace-nowrap">
+                      {n.status === 'dead_letter' && (
+                        <button disabled={retryingId === n.id} onClick={() => retryOne(n.id)}
+                          className="inline-flex items-center gap-1 text-orange-300 hover:underline disabled:opacity-50">
+                          {retryingId === n.id ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />} Retry
+                        </button>
+                      )}
                       {n.acked_by ? <span className="text-emerald-400">✓ {n.acked_by}</span>
                         : ['sent', 'delivered'].includes(n.status)
                           ? <button onClick={() => alertsApi.ackNotification(n.id).then(() => load(true))} className="text-cyan-400 hover:underline">Ack</button>
-                          : '—'}
+                          : null}
                     </td>
                   </tr>
                 ))}
