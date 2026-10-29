@@ -1,9 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { Shield, AlertTriangle, Target, TrendingDown, TrendingUp, Clock, CheckCircle2, XCircle, Zap } from 'lucide-react';
+import { Shield, AlertTriangle, Target, TrendingDown, Clock, Zap } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
-import { mockRiskScore, mockAlerts, mockNISTMapping, mockAlertTimeline, mockThreatTrend } from '../data/mockData';
+import { mockRiskScore, mockAlerts, mockAlertTimeline, mockThreatTrend } from '../data/mockData';
 import { computeDemoStats, isDemoWorldInstalled } from '../data/demoWorld';
 import { isDemoMode } from '../services/demoMode';
+import DashboardWidget, {
+  WidgetLayoutProvider,
+  ResetLayoutButton,
+  CustomizeHint,
+  type WidgetLayoutEntry,
+} from '../components/DashboardWidget';
+
+const DEFAULT_LAYOUT: WidgetLayoutEntry[] = [
+  { id: 'kpi-alerts', colSpan: 1, collapsed: false },
+  { id: 'kpi-threats', colSpan: 1, collapsed: false },
+  { id: 'kpi-compliance', colSpan: 1, collapsed: false },
+  { id: 'kpi-remediated', colSpan: 1, collapsed: false },
+  { id: 'risk-gauge', colSpan: 1, collapsed: false },
+  { id: 'recent-alerts', colSpan: 2, collapsed: false },
+  { id: 'alert-volume', colSpan: 2, collapsed: false },
+  { id: 'threat-trend', colSpan: 1, collapsed: false },
+];
 
 function RiskGauge({ score }: { score: number }) {
   const [animatedScore, setAnimatedScore] = useState(0);
@@ -71,91 +88,102 @@ export default function DashboardPage() {
   }, []);
 
   return (
-    <div className="p-4 lg:p-6 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Security Operations Dashboard</h1>
-          <p className="text-[var(--ic-muted)] text-sm mt-1">Real-time threat monitoring & predictive analytics</p>
-        </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--ic-surface-2)] border border-[var(--ic-border)]">
-          <Clock className="w-3.5 h-3.5 text-[var(--ic-muted)]" />
-          <span className="text-xs text-[var(--ic-muted)]">Last updated: {new Date().toLocaleTimeString()}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2"><AlertTriangle className="w-4 h-4 text-red-400" /><span className="text-xs text-[var(--ic-muted)]">Open Alerts</span></div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{mockAlerts.filter(a => a.status === 'open').length}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2"><Target className="w-4 h-4 text-orange-400" /><span className="text-xs text-[var(--ic-muted)]">Active Threats</span></div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{counts.activeThreats}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2"><Shield className="w-4 h-4 text-green-400" /><span className="text-xs text-[var(--ic-muted)]">Compliance</span></div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{mockRiskScore.compliance}%</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2"><Zap className="w-4 h-4 text-cyan-400" /><span className="text-xs text-[var(--ic-muted)]">Auto-Remediated</span></div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{counts.autoRemediated}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-          <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">Predictive Risk Score</h3>
-          <RiskGauge score={mockRiskScore.overall} />
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 lg:col-span-2">
-          <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">Recent Security Alerts</h3>
-          <div className="space-y-2 max-h-80 overflow-y-auto">
-            {mockAlerts.slice(0, 5).map(alert => (
-              <div key={alert.id} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
-                <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
-                  alert.severity === 'critical' ? 'bg-cyber-red animate-pulse' :
-                  alert.severity === 'high' ? 'bg-cyber-orange' : 'bg-cyber-yellow'
-                }`} />
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-[var(--ic-heading)]">{alert.title}</p>
-                  <div className="flex items-center gap-3 mt-1">
-                    <span className="text-xs text-[var(--ic-muted)]">{alert.source}</span>
-                    <span className="text-xs text-[var(--ic-muted)]">•</span>
-                    <span className="text-xs text-[var(--ic-muted)]">{new Date(alert.timestamp).toLocaleTimeString()}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
+    <WidgetLayoutProvider pageKey="soc-dashboard" defaultLayout={DEFAULT_LAYOUT}>
+      <div className="p-4 lg:p-6 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Security Operations Dashboard</h1>
+            <p className="text-[var(--ic-muted)] text-sm mt-1">Real-time threat monitoring & predictive analytics</p>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <CustomizeHint />
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--ic-surface-2)] border border-[var(--ic-border)]">
+              <Clock className="w-3.5 h-3.5 text-[var(--ic-muted)]" />
+              <span className="text-xs text-[var(--ic-muted)]">Last updated: {new Date().toLocaleTimeString()}</span>
+            </div>
+            <ResetLayoutButton pageKey="soc-dashboard" defaultLayout={DEFAULT_LAYOUT} />
           </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-          <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">24h Alert Volume</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={mockAlertTimeline}>
-              <defs><linearGradient id="alertGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#00d4ff" stopOpacity={0.3}/><stop offset="95%" stopColor="#00d4ff" stopOpacity={0}/></linearGradient></defs>
-              <XAxis dataKey="time" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-              <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(0,212,255,0.2)', borderRadius: '8px', fontSize: '12px' }} />
-              <Area type="monotone" dataKey="alerts" stroke="#00d4ff" fill="url(#alertGrad)" strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-          <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">Threat Detection vs Blocked</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={mockThreatTrend}>
-              <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-              <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(0,212,255,0.2)', borderRadius: '8px', fontSize: '12px' }} />
-              <Bar dataKey="threats" fill="#ff3366" radius={[4, 4, 0, 0]} opacity={0.8} />
-              <Bar dataKey="blocked" fill="#00ff88" radius={[4, 4, 0, 0]} opacity={0.8} />
-            </BarChart>
-          </ResponsiveContainer>
+        {/* Everything is one reorderable, resizable widget grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
+          <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-6 h-6 text-red-400" />
+              <p className="text-3xl font-bold text-[var(--ic-heading)]">
+                {mockAlerts.filter(a => a.status === 'open').length}
+              </p>
+            </div>
+          </DashboardWidget>
+          <DashboardWidget id="kpi-threats" title="Active Threats" spanOptions={[1, 2]}>
+            <div className="flex items-center gap-2">
+              <Target className="w-6 h-6 text-orange-400" />
+              <p className="text-3xl font-bold text-[var(--ic-heading)]">{counts.activeThreats}</p>
+            </div>
+          </DashboardWidget>
+          <DashboardWidget id="kpi-compliance" title="Compliance" spanOptions={[1, 2]}>
+            <div className="flex items-center gap-2">
+              <Shield className="w-6 h-6 text-green-400" />
+              <p className="text-3xl font-bold text-[var(--ic-heading)]">{mockRiskScore.compliance}%</p>
+            </div>
+          </DashboardWidget>
+          <DashboardWidget id="kpi-remediated" title="Auto-Remediated" spanOptions={[1, 2]}>
+            <div className="flex items-center gap-2">
+              <Zap className="w-6 h-6 text-cyan-400" />
+              <p className="text-3xl font-bold text-[var(--ic-heading)]">{counts.autoRemediated}</p>
+            </div>
+          </DashboardWidget>
+
+          <DashboardWidget id="risk-gauge" title="Predictive Risk Score">
+            <RiskGauge score={mockRiskScore.overall} />
+          </DashboardWidget>
+
+          <DashboardWidget id="recent-alerts" title="Recent Security Alerts" spanOptions={[2, 3]}>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {mockAlerts.slice(0, 5).map(alert => (
+                <div key={alert.id} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--ic-surface-2)]">
+                  <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                    alert.severity === 'critical' ? 'bg-cyber-red animate-pulse' :
+                    alert.severity === 'high' ? 'bg-cyber-orange' : 'bg-cyber-yellow'
+                  }`} />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-[var(--ic-heading)]">{alert.title}</p>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-xs text-[var(--ic-muted)]">{alert.source}</span>
+                      <span className="text-xs text-[var(--ic-muted)]">•</span>
+                      <span className="text-xs text-[var(--ic-muted)]">{new Date(alert.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </DashboardWidget>
+
+          <DashboardWidget id="alert-volume" title="24h Alert Volume" spanOptions={[1, 2, 3]}>
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={mockAlertTimeline}>
+                <defs><linearGradient id="alertGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#00d4ff" stopOpacity={0.3}/><stop offset="95%" stopColor="#00d4ff" stopOpacity={0}/></linearGradient></defs>
+                <XAxis dataKey="time" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(0,212,255,0.2)', borderRadius: '8px', fontSize: '12px' }} />
+                <Area type="monotone" dataKey="alerts" stroke="#00d4ff" fill="url(#alertGrad)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </DashboardWidget>
+
+          <DashboardWidget id="threat-trend" title="Threat Detection vs Blocked" spanOptions={[1, 2, 3]}>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={mockThreatTrend}>
+                <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(0,212,255,0.2)', borderRadius: '8px', fontSize: '12px' }} />
+                <Bar dataKey="threats" fill="#ff3366" radius={[4, 4, 0, 0]} opacity={0.8} />
+                <Bar dataKey="blocked" fill="#00ff88" radius={[4, 4, 0, 0]} opacity={0.8} />
+              </BarChart>
+            </ResponsiveContainer>
+          </DashboardWidget>
         </div>
       </div>
-    </div>
+    </WidgetLayoutProvider>
   );
 }
