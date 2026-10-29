@@ -38,6 +38,7 @@ from app.schemas import (
     BulkAlertActionIn, AlertNoteIn, AlertNoteResponse, AlertEventResponse,
     AlertPageResponse, AlertDetailResponse, NotificationRetryResult,
     EventEvidenceSummary, EventEvidenceDetail,
+    AlertCorrelationResponse, AlertCorrelationMember,
 )
 from app.services import notifications as nv
 from app.services import evidence as ev
@@ -270,6 +271,83 @@ async def alert_detail(alert_id: int,
         db, org_id=alert.org_id, alert_uid=alert.uid)
     detail.evidence = [EventEvidenceSummary.model_validate(x) for x in evs]
     return detail
+
+
+@router.get("/alerts/correlation/groups", response_model=list[AlertCorrelationResponse])
+async def alert_correlation_groups(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    org_id: int | None = Query(None),
+    limit_groups: int = Query(12, ge=1, le=25),
+):
+    """Tenant-scoped list of the most recent NON-TRIVIAL correlation groups
+    (>1 live member sharing dedup_key + window_epoch). Powers the workspace
+    relationship canvas; edge evidence is composed from these persisted fields.
+    """
+    eff = _scope_org(current_user, org_id)
+    pol = await nv.get_grouping_policy(db)
+    grp_q = (
+        select(Alert.org_id, Alert.dedup_key, Alert.window_epoch,
+               func.count().label("c"))
+        .where(Alert.dedup_key.isnot(None))
+        .group_by(Alert.org_id, Alert.dedup_key, Alert.window_epoch)
+        .having(func.count() > 1)
+        .order_by(func.max(Alert.created_at).desc())
+        .limit(limit_groups)
+    )
+    if eff is not None:
+        grp_q = grp_q.where(Alert.org_id == eff)
+    groups = (await db.execute(grp_q)).all()
+    out: list[AlertCorrelationResponse] = []
+    for g in groups:
+        members = (await db.execute(
+            select(Alert).where(
+                Alert.org_id == g.org_id,
+                Alert.dedup_key == g.dedup_key,
+                Alert.window_epoch == g.window_epoch,
+            ).order_by(Alert.created_at.desc()).limit(30)
+        )).scalars().all()
+        out.append(AlertCorrelationResponse(
+            dedup_key=g.dedup_key, window_epoch=int(g.window_epoch or 0),
+            window_minutes=pol["window_minutes"],
+            members=[AlertCorrelationMember.model_validate(m) for m in members]))
+    return out
+
+
+@router.get("/alerts/{alert_id}/correlation", response_model=AlertCorrelationResponse)
+async def alert_correlation(alert_id: int,
+                            current_user: User = Depends(get_current_user),
+                            db: AsyncSession = Depends(get_db)):
+    """§6E related-alert graph data for ONE alert — persisted grouping only.
+
+    Membership rule (never invented client-side): same tenant (enforced by
+    _get_alert_or_40x + explicit org predicate), same fingerprint `dedup_key`
+    stamped by correlate(), same `window_epoch`. An unstamped alert (candidate
+    that never joined a group) honestly returns zero members.
+    """
+    alert = await _get_alert_or_40x(db, alert_id, current_user)
+    pol = await nv.get_grouping_policy(db)
+    if not alert.dedup_key:
+        return AlertCorrelationResponse(
+            dedup_key=None, window_epoch=alert.window_epoch or 0,
+            window_minutes=pol["window_minutes"], members=[])
+    rows = (await db.execute(
+        select(Alert)
+        .where(
+            Alert.org_id == alert.org_id,
+            Alert.dedup_key == alert.dedup_key,
+            Alert.window_epoch == (alert.window_epoch or 0),
+            Alert.id != alert.id,
+        )
+        .order_by(Alert.created_at.desc()).limit(50)
+    )).scalars().all()
+    return AlertCorrelationResponse(
+        dedup_key=alert.dedup_key,
+        window_epoch=alert.window_epoch or 0,
+        window_minutes=pol["window_minutes"],
+        members=[AlertCorrelationMember.model_validate(r) for r in rows])
+
+
 
 
 @router.patch("/alerts/{alert_id}", response_model=AlertResponse)
