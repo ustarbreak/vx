@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer,
   BarChart, Bar, CartesianGrid, Cell, Legend,
@@ -8,7 +8,10 @@ import {
   AlertTriangle, RefreshCw, Shield, Target, Timer, Activity, Server, Database, Info,
 } from 'lucide-react';
 import ServiceGate from '../components/ServiceGate';
+import { RelationshipGraph, type RGNode, type RGEdge } from '../components/RelationshipGraph';
 import { isDemoMode } from '../services/demoMode';
+import { fetchIndicatorMatches, type IndicatorMatch } from '../services/threatIntel';
+import { alertsApi, type AlertRow } from '../services/api';
 import {
   fetchAnalyticsOverview, RANGE_PRESETS, windowForPreset, fmtMinutes,
   AnalyticsOverview,
@@ -40,12 +43,106 @@ function KpiCard({ icon, label, value, sub, tone = 'text-[var(--ic-heading)]' }:
   );
 }
 
+// ---------------------------------------------------------------------------
+// Correlation Explorer (§6C). Nodes/edges come ONLY from persisted records:
+//  • alerts (GET /api/alerts — server-side correlated groups via resource)
+//  • incidents (via /api/analytics/overview scope + /threat-intel/matches,
+//    which joins IoC ⇄ incident ⇄ asset ⇄ related alert UIDs server-side)
+// Cross-filtering: selecting a severity/category in the charts above filters
+// the graph nodes; clicking an alert node pivots to the Alerts workspace.
+// No anomaly scores, no inferred edges.
+// ---------------------------------------------------------------------------
+function CorrelationExplorer({ sevFilter }: { sevFilter: string | null }) {
+  const navigate = useNavigate();
+  const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
+  const [matches, setMatches] = useState<IndicatorMatch[] | null>(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([alertsApi.list().catch(() => [] as AlertRow[]), fetchIndicatorMatches().catch(() => [] as IndicatorMatch[])])
+      .then(([a, m]) => { if (!cancelled) { setAlerts(a); setMatches(m); } })
+      .catch(e => { if (!cancelled) setErr(String(e?.message ?? e)); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const { nodes, edges } = useMemo(() => {
+    const n = new Map<string, RGNode>(); const e: RGEdge[] = [];
+    if (!alerts || !matches) return { nodes: [], edges: [] };
+    // Group alerts by resource — this is the backend's own correlation key
+    // (same resource ⇒ same storm group / correlated_count on the row).
+    const byRes = new Map<string, AlertRow[]>();
+    alerts.forEach(a => { if (a.resource) (byRes.get(a.resource) ?? byRes.set(a.resource, []).get(a.resource)!).push(a); });
+    [...byRes.entries()].filter(([, list]) => list.length > 1).slice(0, 12).forEach(([res, list]) => {
+      const resId = `asset:${res}`;
+      n.set(resId, { id: resId, label: res, kind: 'asset' });
+      list.slice(0, 6).forEach(a => {
+        if (sevFilter && a.severity !== sevFilter) return;
+        const aid = `alert:${a.uid}`;
+        n.set(aid, { id: aid, label: a.uid, kind: 'alert', severity: a.severity, meta: { uid: a.uid } });
+        e.push({ source: aid, target: resId, evidence: `Alert ${a.uid} recorded against resource ${res} (server correlation key)` });
+      });
+    });
+    // Incident ⇄ indicator ⇄ alert joins supplied by /threat-intel/matches.
+    matches.slice(0, 40).forEach(m => {
+      if (sevFilter && m.severity !== sevFilter) return;
+      const iid = `inc:${m.incident_uid}`;
+      n.set(iid, { id: iid, label: m.incident_uid, kind: 'incident', severity: m.severity, meta: { uid: m.incident_uid } });
+      const indId = `ind:${m.indicator}`;
+      n.set(indId, { id: indId, label: m.indicator, kind: 'indicator', severity: m.severity });
+      e.push({ source: indId, target: iid, evidence: `IoC attached to incident ${m.incident_uid} during IR triage` });
+      m.assets.forEach(a => {
+        const aid2 = `asset:${a}`;
+        if (!n.has(aid2)) n.set(aid2, { id: aid2, label: a, kind: 'asset' });
+        e.push({ source: iid, target: aid2, evidence: `Affected asset recorded on ${m.incident_uid}` });
+      });
+      m.related_alert_uids.forEach(u => {
+        const alid = `alert:${u}`;
+        if (!n.has(alid)) n.set(alid, { id: alid, label: u, kind: 'alert' });
+        e.push({ source: alid, target: iid, evidence: `Alert correlated to ${m.incident_uid} by shared resource (backend join)` });
+      });
+    });
+    return { nodes: [...n.values()], edges: e };
+  }, [alerts, matches, sevFilter]);
+
+  if (err) return (
+    <div className="bg-[var(--ic-surface)] border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
+      <AlertTriangle className="w-4 h-4" /> Correlation sources unreachable: {err}
+    </div>
+  );
+  if (!alerts || !matches) return <div className="h-24 rounded-xl bg-[var(--ic-surface)] border border-[var(--ic-border)] animate-pulse" />;
+
+  return (
+    <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 space-y-3">
+      <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider flex items-center gap-2">
+        <Database className="w-4 h-4 text-cyan-400" /> Correlation explorer
+      </h3>
+      <p className="text-[10px] text-[var(--ic-muted)]">
+        Relationships shown only where persisted records link them: alert→resource (correlation key), IoC→incident (IR triage), incident→asset, alert→incident (backend join). {sevFilter ? `Cross-filtered to severity “${sevFilter}”.` : 'Select a severity bar above to cross-filter.'}
+      </p>
+      {nodes.length === 0 ? (
+        <p className="text-xs text-[var(--ic-muted)] py-6 text-center">No correlated records in scope{sevFilter ? ` for severity “${sevFilter}”` : ''}. Edges appear when the backend actually links events — none are inferred.</p>
+      ) : (
+        <RelationshipGraph nodes={nodes} edges={edges} height={360} maxNodes={150}
+          title="Correlation explorer graph of alerts, assets, indicators and incidents"
+          onOpen={node => {
+            if (node.kind === 'alert') navigate(`/client-admin/alerts?q=${encodeURIComponent(node.label)}`);
+            else if (node.kind === 'incident') navigate(`/incidents?q=${encodeURIComponent(node.label)}`);
+            else if (node.kind === 'asset') navigate(`/client-admin/monitored-devices?q=${encodeURIComponent(node.label)}`);
+          }} />
+      )}
+    </div>
+  );
+}
+
 function AnalyticsContent() {
   const [rangeKey, setRangeKey] = useState('7d');
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [error, setError] = useState('');
   const [reloadTick, setReloadTick] = useState(0);
+  // Cross-filter selected via the severity chart (§6C intelligent-graph rule).
+  const [sevSel, setSevSel] = useState<string | null>(null);
 
   const load = useCallback(() => {
     const preset = RANGE_PRESETS.find(p => p.key === rangeKey) ?? RANGE_PRESETS[1];
@@ -197,13 +294,28 @@ function AnalyticsContent() {
                   <XAxis type="number" stroke="#475569" fontSize={10} allowDecimals={false} tickLine={false} axisLine={false} />
                   <YAxis type="category" dataKey="sev" stroke="#94a3b8" fontSize={11} width={70} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(34,211,238,0.3)', borderRadius: '8px', fontSize: '12px' }} />
-                  <Bar dataKey="n" name="Events" radius={[0, 4, 4, 0]}>
-                    {sevBars.map(b => <Cell key={b.sev} fill={SEV_COLORS[b.sev] ?? '#64748b'} />)}
+                  <Bar dataKey="n" name="Events" radius={[0, 4, 4, 0]}
+                     onClick={(entry: any) => { const sev = entry?.payload?.sev; if (sev) setSevSel(s => (s === sev ? null : sev)); }}>
+                    {sevBars.map(b => <Cell key={b.sev} fill={SEV_COLORS[b.sev] ?? '#64748b'} stroke={sevSel === b.sev ? '#f8fafc' : 'none'} strokeWidth={sevSel === b.sev ? 2 : 0} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
+              <div className="flex flex-wrap items-center gap-1.5 mt-2 text-[10px]">
+                <span className="text-[var(--ic-muted)]">Click a bar to cross-filter the correlation explorer:</span>
+                {sevBars.map(b => (
+                  <button key={b.sev} onClick={() => setSevSel(s => (s === b.sev ? null : b.sev))}
+                    aria-pressed={sevSel === b.sev}
+                    className={`px-2 py-0.5 rounded-full border uppercase font-bold ${sevSel === b.sev ? 'border-slate-200 text-white bg-slate-600/40' : 'border-[var(--ic-border)] text-[var(--ic-muted)] hover:text-[var(--ic-text)]'}`}>
+                    {b.sev}
+                  </button>
+                ))}
+                {sevSel && <button onClick={() => setSevSel(null)} className="text-cyan-400 underline">clear filter</button>}
+              </div>
             </div>
           </div>
+
+          {/* §6C — Correlation Explorer over persisted, backend-linked records */}
+          <CorrelationExplorer sevFilter={sevSel} />
 
           {/* Detection categories + affected assets drill-down */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

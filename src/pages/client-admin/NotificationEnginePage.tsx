@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, Cell,
+} from 'recharts';
 import { useNavigate } from 'react-router-dom';
 import {
   Radio, RefreshCw, Plus, Trash2, Zap, ShieldAlert, Bell, Mail, MessageSquare,
@@ -258,6 +261,91 @@ const SimulateAlertModal: React.FC<{ onClose: () => void; onDone: () => void; is
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
+// §6E — Notification volume over time. Buckets are computed client-side ONLY
+// from the persisted NotificationRow.created_at values returned by
+// GET /api/notifications (hourly buckets for ranges ≤48h, daily otherwise).
+// Stacked bars = per-channel counts (sum == bucket total); the line = failed
+// rows (dead_letter/failed/retrying), so totals and failures stay readable
+// together. Empty buckets are drawn as real zeros of the window, never
+// back-filled with synthetic data.
+// ---------------------------------------------------------------------------
+const NOTIF_CHANNEL_COLORS: Record<string, string> = {
+  email: '#22d3ee', sms: '#a855f7', webhook: '#f97316', in_app: '#34d399', push: '#eab308', console: '#64748b',
+};
+const NOTIF_FAIL_STATUSES = ['dead_letter', 'failed', 'retrying'];
+
+const VolumeOverTimeChart: React.FC<{ notifs: NotificationRow[] }> = ({ notifs }) => {
+  const [rangeH, setRangeH] = useState<24 | 48 | 168 | 720>(720); // hours
+  const bucketMs = rangeH <= 48 ? 3_600_000 : 86_400_000;         // hourly vs daily
+
+  const { rows, channels, total } = useMemo(() => {
+    const now = Date.now();
+    const start = now - rangeH * 3_600_000;
+    const nb = Math.max(1, Math.ceil((now - start) / bucketMs));
+    const idxOf = (t: number) => Math.floor((t - start) / bucketMs);
+    const chans = new Set<string>();
+    const buckets: { label: string; failed: number; total: number; byCh: Record<string, number> }[] =
+      Array.from({ length: nb }, (_, i) => {
+        const d = new Date(start + i * bucketMs);
+        const label = bucketMs === 3_600_000
+          ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return { label, failed: 0, total: 0, byCh: {} };
+      });
+    let counted = 0;
+    notifs.forEach(n => {
+      const t = Date.parse(n.created_at);
+      if (Number.isNaN(t) || t < start) return;
+      const i = idxOf(t);
+      if (i < 0 || i >= nb) return;
+      counted++;
+      chans.add(n.channel);
+      const b = buckets[i];
+      b.total += 1;
+      b.byCh[n.channel] = (b.byCh[n.channel] ?? 0) + 1;
+      if (NOTIF_FAIL_STATUSES.includes(n.status)) b.failed += 1;
+    });
+    const rows = buckets.map(b => ({ ...b, ...(bucketMs === 3_600_000 ? {} : {}) , ...b.byCh, byCh: undefined } as any));
+    void counted;
+    return { rows, channels: [...chans], total: counted };
+  }, [notifs, rangeH]);
+
+  return (
+    <div className="bg-[var(--ic-surface-2)] rounded-xl p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <h3 className="flex items-center gap-2 text-sm font-bold text-[var(--ic-heading)]"><BarChart3 size={16} className="text-cyan-400" />Notification volume over time</h3>
+        <div className="flex items-center gap-1.5">
+          {([[24, '24 h'], [48, '48 h'], [168, '7 days'], [720, '30 days']] as const).map(([h, lbl]) => (
+            <button key={h} onClick={() => setRangeH(h)} aria-pressed={rangeH === h}
+              className={`px-2 py-0.5 rounded-md text-[11px] border ${rangeH === h ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300' : 'border-[var(--ic-border)] text-[var(--ic-muted)] hover:text-[var(--ic-text)]'}`}>{lbl}</button>
+          ))}
+        </div>
+      </div>
+      <p className="text-[10px] text-[var(--ic-muted)] mb-3">
+        {total} notification{total === 1 ? '' : 's'} in window · stacked bars = channel breakdown (sum equals the bucket total) · line = failed/dead-letter rows.
+        Bucketed from persisted created_at timestamps ({bucketMs === 3_600_000 ? 'hourly' : 'daily'} UTC buckets).
+      </p>
+      {total === 0 ? (
+        <p className="text-xs text-[var(--ic-muted)] py-10 text-center">No notifications recorded in this window — the chart shows the true empty state instead of sample data.</p>
+      ) : (
+        <ResponsiveContainer width="100%" height={240}>
+          <ComposedChart data={rows}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis dataKey="label" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+            <YAxis stroke="#475569" fontSize={10} allowDecimals={false} tickLine={false} axisLine={false} />
+            <Tooltip contentStyle={{ background: '#0f1629', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 8, fontSize: 12 }}
+              formatter={(v: any, name: any) => [v, String(name)]} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            {channels.map(ch => (
+              <Bar key={ch} dataKey={ch} stackId="vol" fill={NOTIF_CHANNEL_COLORS[ch] ?? '#64748b'} name={`${ch}`} radius={[0, 0, 0, 0]} />
+            ))}
+            <Line type="monotone" dataKey="failed" name="failed / DLQ" stroke="#ef4444" strokeWidth={2} dot={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+};
 
 const NotificationEnginePage: React.FC = () => {
   const { user } = useAuth();
@@ -515,7 +603,10 @@ const NotificationEnginePage: React.FC = () => {
 
       {/* ANALYTICS */}
       {tab === 'analytics' && (
-        <div className="grid md:grid-cols-3 gap-4">
+        <div className="space-y-4">
+          {/* §6E — volume-over-time chart over the persisted notification rows */}
+          <VolumeOverTimeChart notifs={notifs} />
+          <div className="grid md:grid-cols-3 gap-4">
           <Panel title="By Severity" icon={<BarChart3 size={16} className="text-cyan-400" />}>
             {Object.entries(analytics.by_severity || {}).map(([k, v]) => <Row key={k} k={k} v={String(v)} />)}
             {!Object.keys(analytics.by_severity || {}).length && <Empty />}
@@ -530,6 +621,7 @@ const NotificationEnginePage: React.FC = () => {
             <Row k="Suppressed (storms)" v={String(analytics.suppressed ?? 0)} />
             <Row k="Acknowledged" v={String(analytics.acked ?? 0)} />
           </Panel>
+          </div>
         </div>
       )}
 

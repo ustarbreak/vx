@@ -1,12 +1,100 @@
-import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Search, Skull, AlertOctagon, Clock, ChevronDown, ChevronUp, Target, Radar, Plug, PlugZap, Database, ExternalLink } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Search, Skull, AlertOctagon, Clock, ChevronDown, ChevronUp, Target, Radar, Plug, PlugZap, Database, ExternalLink, Network } from 'lucide-react';
 import { mockThreats } from '../data/mockData';
 import ServiceGate from '../components/ServiceGate';
+import { RelationshipGraph, type RGNode, type RGEdge } from '../components/RelationshipGraph';
 import {
   isDemoMode, fetchLiveThreats, fetchIndicatorMatches, fetchFeedsStatus, lookupIoc,
   type LiveThreat, type IndicatorMatch, type FeedsStatusResponse,
 } from '../services/threatIntel';
+
+// ---------------------------------------------------------------------------
+// Threat Intelligence Relationship Graph (§6D).
+// Data sources (no others): GET /api/threat-intel/matches (indicator ⇄
+// incident ⇄ asset ⇄ alert evidence links) + the feed threat list
+// (GET /api/threat-intel/threats | lookup enrichment, MITRE techniques as
+// shared nodes only when a source actually maps the indicator to them).
+// Every edge carries its provenance; nothing is inferred by name/subnet/time.
+// ---------------------------------------------------------------------------
+function IntelRelationshipGraph({ threats, matches }: { threats: any[]; matches: IndicatorMatch[] }) {
+  const navigate = useNavigate();
+  const [selKind, setSelKind] = useState<'all' | 'matched'>('all');
+
+  const { nodes, edges } = useMemo(() => {
+    const n = new Map<string, RGNode>();
+    const e: RGEdge[] = [];
+    const addNode = (node: RGNode) => { if (!n.has(node.id)) n.set(node.id, node); };
+    // Indicators matched to this tenant's environment — verified evidence edges.
+    const scoped = selKind === 'matched' ? matches : matches;
+    scoped.forEach(m => {
+      const indId = `ind:${m.indicator}`;
+      addNode({ id: indId, label: m.indicator, kind: 'indicator', severity: m.severity, meta: { match: m } });
+      addNode({ id: `inc:${m.incident_uid}`, label: m.incident_uid, kind: 'incident', severity: m.severity, meta: { uid: m.incident_uid } });
+      e.push({ source: indId, target: `inc:${m.incident_uid}`, evidence: `IoC recorded on incident ${m.incident_uid} (${m.status ?? '—'})` });
+      m.assets.forEach(a => {
+        addNode({ id: `asset:${a}`, label: a, kind: 'asset' });
+        e.push({ source: indId, target: `asset:${a}`, evidence: `Asset listed among affected assets of ${m.incident_uid}` });
+      });
+      m.related_alert_uids.forEach(u => {
+        addNode({ id: `alert:${u}`, label: u, kind: 'alert' });
+        e.push({ source: `inc:${m.incident_uid}`, target: `alert:${u}`, evidence: `Alert correlated to ${m.incident_uid} by resource match (server-side join)` });
+      });
+    });
+    // Feed indicators + their MITRE mappings (only when the source provides them).
+    threats.slice(0, 40).forEach(t => {
+      if (!t.ioc) return;
+      const indId = `ind:${t.ioc}`;
+      addNode({ id: indId, label: t.ioc, kind: 'indicator', severity: t.severity, meta: { threat: t } });
+      (t.mitreAttack ?? []).slice(0, 3).forEach((tech: string) => {
+        addNode({ id: `mitre:${tech}`, label: tech, kind: 'mitre' });
+        e.push({ source: indId, target: `mitre:${tech}`, evidence: `MITRE technique ${tech} mapped by source ${t.source}` });
+      });
+    });
+    return { nodes: [...n.values()], edges: e };
+  }, [threats, matches, selKind]);
+
+  const openNode = (node: RGNode) => {
+    if (node.kind === 'incident') navigate(`/incidents?q=${encodeURIComponent(String(node.meta?.uid ?? node.label))}`);
+    else if (node.kind === 'alert') navigate(`/client-admin/alerts?q=${encodeURIComponent(node.label)}`);
+    else if (node.kind === 'indicator') { /* selection already shows the drawer */ }
+  };
+
+  const selNode = nodes.find(x => x.kind === 'indicator' && (edges.some(ed => ed.source === x.id || ed.target === x.id)));
+
+  return (
+    <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider flex items-center gap-2">
+          <Network className="w-4 h-4 text-cyan-400" /> Indicator relationship graph
+        </h3>
+        <span className="text-[10px] text-[var(--ic-muted)]">
+          Edges = real records only ({matches.length} evidence link{matches.length === 1 ? '' : 's'} from /threat-intel/matches + source MITRE mappings)
+        </span>
+      </div>
+      {nodes.length === 0 ? (
+        <p className="text-xs text-[var(--ic-muted)] py-6 text-center">
+          No indicators with verifiable relationships in scope yet. The graph populates automatically when incidents carry IoCs or feed sources publish MITRE mappings — no nodes are invented.
+        </p>
+      ) : (
+        <RelationshipGraph nodes={nodes} edges={edges} height={380} onOpen={openNode} maxNodes={140}
+          title="Threat intelligence relationship graph" />
+      )}
+      {/* Drawer for the selected indicator (provenance + supporting records) */}
+      {selNode && selNode.meta?.match && (
+        <div className="border border-[var(--ic-border)] rounded-lg p-3 text-xs bg-[var(--ic-surface-2)]/50">
+          <p className="font-mono text-cyan-300">{String(selNode.label)}</p>
+          <p className="text-[var(--ic-muted)] mt-1">
+            Provenance: observed on incident <Link className="text-purple-400" to={`/incidents?q=${encodeURIComponent(selNode.meta.match.incident_uid)}`}>{selNode.meta.match.incident_uid}</Link>
+            {' '}· category {selNode.meta.match.category ?? '—'} · status {selNode.meta.match.status ?? '—'}
+            {selNode.meta.match.observed_at && <> · first recorded {new Date(selNode.meta.match.observed_at).toLocaleString()}</>}
+          </p>
+        </div>
+      )}
+      {void selKind}
+    </div>
+  );
+}
 
 const severityColors: Record<string, { bg: string; text: string; border: string }> = {
   critical: { bg: 'bg-red-500/10', text: 'text-red-400', border: 'border-red-500/20' },
@@ -163,6 +251,15 @@ function ThreatsContent() {
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupErr, setLookupErr] = useState('');
 
+  // Evidence links shared with the relationship graph (§6D) — same fetch that
+  // powers MatchedIndicatorsPanel's endpoint, lifted so both views stay in sync.
+  const [graphMatches, setGraphMatches] = useState<IndicatorMatch[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchIndicatorMatches().then(m => { if (!cancelled) setGraphMatches(m); }).catch(() => { /* honest empty graph */ });
+    return () => { cancelled = true; };
+  }, []);
+
   const baseList: any[] = !isDemoMode() && liveThreats && liveThreats.length > 0 ? liveThreats : mockThreats;
 
   useEffect(() => {
@@ -225,6 +322,9 @@ function ThreatsContent() {
       </div>
 
       {!isDemoMode() && <FeedStatusPanel />}
+
+      {/* §6D — Threat Intelligence Relationship Graph (verified evidence only) */}
+      <IntelRelationshipGraph threats={baseList} matches={graphMatches} />
 
       <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
         <div className="relative">

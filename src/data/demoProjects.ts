@@ -25,10 +25,14 @@ export interface DemoProject {
   time_spent_seconds: number;
   timer_running: boolean;
   created_by: string;
-  milestones: { id: number; title: string; done: boolean }[];
+  milestones: { id: number; title: string; done: boolean; planned_at?: string | null }[];
 }
 
-const M = (id: number, title: string, done = false) => ({ id, title, done });
+// Deterministic demo milestone. `planned` is an ISO date string or null —
+// null deliberately exercises the "no planned date" honest state of the
+// Gantt timeline (§6G). Never randomised: demo scenarios must be stable.
+const M = (id: number, title: string, done = false, planned: string | null = null) =>
+  ({ id, title, done, planned_at: planned });
 
 export const demoProjects: DemoProject[] = [
   // ---- OUR projects (platform side, "avec nous") --------------------------
@@ -39,7 +43,7 @@ export const demoProjects: DemoProject[] = [
     manager_email: 'y.elamrani@damanecash.ma', ticket_category: 'soc-damanecash',
     sla_hours: 480, time_spent_seconds: 1_512_000, timer_running: true,
     created_by: 'admin@infracentra.io',
-    milestones: [M(1, 'Audit périmètre & inventaire', true), M(2, 'Déploiement collecteurs (12 assets)', true), M(3, 'Règles de corrélation & triage IA', true), M(4, 'Playbooks isolation/blocage', false), M(5, 'Recette RSSI & go-live', false)],
+    milestones: [M(1, 'Audit périmètre & inventaire', true, '2026-08-10T09:00:00Z'), M(2, 'Déploiement collecteurs (12 assets)', true, '2026-08-31T09:00:00Z'), M(3, 'Règles de corrélation & triage IA', true, '2026-09-21T09:00:00Z'), M(4, 'Playbooks isolation/blocage', false, '2026-10-19T09:00:00Z'), M(5, 'Recette RSSI & go-live', false, '2026-11-09T09:00:00Z')],
   },
   {
     id: 102, org_id: 2, name: 'Migration SD-WAN + Firewall Valoris System',
@@ -48,7 +52,7 @@ export const demoProjects: DemoProject[] = [
     manager_email: 'k.chraibi@valorissystem.ma', ticket_category: 'sdwan-valoris',
     sla_hours: 720, time_spent_seconds: 971_000, timer_running: false,
     created_by: 'admin@infracentra.io',
-    milestones: [M(6, 'Cartographie des sites', true), M(7, 'Overlay SD-WAN Casa–Tanger', true), M(8, 'Baseline firewall Rabat DC', false), M(9, 'Bascule pilote + rollback plan', false), M(10, 'SLA monitoring & clôture', false)],
+    milestones: [M(6, 'Cartographie des sites', true, '2026-09-05T09:00:00Z'), M(7, 'Overlay SD-WAN Casa–Tanger', true, '2026-09-26T09:00:00Z'), M(8, 'Baseline firewall Rabat DC', false, '2026-10-12T09:00:00Z'), M(9, 'Bascule pilote + rollback plan', false, null), M(10, 'SLA monitoring & clôture', false, '2026-12-07T09:00:00Z')],
   },
   {
     id: 103, org_id: 3, name: 'Campagne patching Q4 Vivalis Salaf',
@@ -57,7 +61,7 @@ export const demoProjects: DemoProject[] = [
     manager_email: 'h.tazi@vivalissalaf.ma', ticket_category: 'patching-vivalis',
     sla_hours: 160, time_spent_seconds: 0, timer_running: false,
     created_by: 'admin@infracentra.io',
-    milestones: [M(11, 'Scan pré-campagne', false), M(12, 'Vague serveurs', false), M(13, 'Vague endpoints', false), M(14, 'Rapport post-campagne', false)],
+    milestones: [M(11, 'Scan pré-campagne', false, '2026-11-02T09:00:00Z'), M(12, 'Vague serveurs', false, '2026-11-09T09:00:00Z'), M(13, 'Vague endpoints', false, null), M(14, 'Rapport post-campagne', false, '2026-11-30T09:00:00Z')],
   },
   // ---- CLIENT-side projects (their own, managed in our platform) ----------
   {
@@ -67,7 +71,7 @@ export const demoProjects: DemoProject[] = [
     manager_email: 'n.benali@damanecash.ma', ticket_category: 'portal-damanecash',
     sla_hours: 0, time_spent_seconds: 302_400, timer_running: false,
     created_by: 'demo@infracentra.io',
-    milestones: [M(15, 'Cahier des charges', true), M(16, 'Maquettes UX', true), M(17, 'Intégration API paiement', false), M(18, 'Tests & mise en prod', false)],
+    milestones: [M(15, 'Cahier des charges', true, '2026-07-15T09:00:00Z'), M(16, 'Maquettes UX', true, '2026-08-19T09:00:00Z'), M(17, 'Intégration API paiement', false, null), M(18, 'Tests & mise en prod', false, '2026-12-15T09:00:00Z')],
   },
   {
     id: 202, org_id: 2, name: 'Certification ISO 27001 (Valoris System)',
@@ -76,7 +80,7 @@ export const demoProjects: DemoProject[] = [
     manager_email: 'a.fassi@valorissystem.ma', ticket_category: 'iso-valoris',
     sla_hours: 1200, time_spent_seconds: 1_036_800, timer_running: false,
     created_by: 'soc@valorissystem.ma',
-    milestones: [M(19, 'Gap analysis', true), M(20, 'Plan de remédiation', true), M(21, 'Sensibilisation équipes', false), M(22, 'Audit blanc', false), M(23, 'Audit de certification', false)],
+    milestones: [M(19, 'Gap analysis', true, '2026-06-30T09:00:00Z'), M(20, 'Plan de remédiation', true, '2026-08-04T09:00:00Z'), M(21, 'Sensibilisation équipes', false, '2026-09-15T09:00:00Z'), M(22, 'Audit blanc', false, null), M(23, 'Audit de certification', false, null)],
   },
 ];
 

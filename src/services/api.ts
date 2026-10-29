@@ -208,6 +208,95 @@ export const tenantManagerApi = {
   platformAudit: () => api.get<{ id: number; action: string; detail: string; actor: string; created_at: string }[]>('/admin/audit-platform'),
 };
 
+// ---------------------------------------------------------------------------
+// Audit Log (mirrors backend/app/routers/audit.py — GET /api/audit/logs[/*])
+// Response shape = AuditLogResponse (app/schemas.py): actor_id, actor_name,
+// actor_role, org_id, action, resource, resource_id, details, ip_address,
+// outcome, timestamp, id. Demo Mode answers the same paths from demoStore.
+// ---------------------------------------------------------------------------
+export interface BackendAuditLog {
+  id: number;
+  actor_id: number | null;
+  actor_name: string;
+  actor_role: string;
+  org_id: number | null;
+  action: string;
+  resource: string;
+  resource_id: string;
+  details: string | null;
+  ip_address: string | null;
+  outcome: string;            // success | failure | blocked
+  timestamp: string;
+}
+
+export const auditApi = {
+  /** Platform-wide trail — platform_admin only (backend returns 403 otherwise). */
+  logs: (params?: { skip?: number; limit?: number; org_id?: number; actor_role?: string; outcome?: string }) => {
+    const qs = new URLSearchParams();
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && String(v) !== '') qs.set(k, String(v)); });
+    const s = qs.toString();
+    return api.get<BackendAuditLog[]>(`/audit/logs${s ? `?${s}` : ''}`);
+  },
+  /** Tenant-scoped trail for non-platform roles (GET /api/audit/logs/my-org). */
+  myOrgLogs: (params?: { skip?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && String(v) !== '') qs.set(k, String(v)); });
+    const s = qs.toString();
+    return api.get<BackendAuditLog[]>(`/audit/logs/my-org${s ? `?${s}` : ''}`);
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Entitlements (mirrors backend/app/routers/entitlements.py)
+// GET /api/entitlements/ → List[EntitlementResponse]; auth is server-side:
+// platform_admin sees all (optional ?org_id=), client roles see their own org.
+// ---------------------------------------------------------------------------
+export interface BackendEntitlement {
+  id: number;
+  org_id: number;
+  service_id: string;
+  enabled: boolean;
+  seat_count: number;
+  activated_at: string | null;
+  deactivated_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export const entitlementsApi = {
+  list: (orgId?: number) =>
+    api.get<BackendEntitlement[]>(`/entitlements/${orgId ? `?org_id=${orgId}` : ''}`),
+  check: (serviceId: string) =>
+    api.get<{ entitled: boolean; service_id: string }>(`/entitlements/check/${serviceId}`),
+};
+
+// ---------------------------------------------------------------------------
+// Users directory (mirrors backend/app/routers/users.py — GET /api/users/)
+// Response shape = UserResponse. Server enforces tenant scoping: client
+// roles always receive their own organization's users only.
+// ---------------------------------------------------------------------------
+export interface BackendUserRow {
+  id: number;
+  email: string;
+  name: string;
+  role: string;               // platform_admin | client_admin | client_user
+  org_id: number | null;
+  status: string;             // active | disabled
+  mfa_enabled: boolean;
+  last_login: string | null;
+  created_at: string;
+}
+
+export const usersDirectoryApi = {
+  list: (params?: { org_id?: number; skip?: number; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && String(v) !== '') qs.set(k, String(v)); });
+    const s = qs.toString();
+    return api.get<BackendUserRow[]>(`/users/${s ? `?${s}` : ''}`);
+  },
+};
+
 export const organizationsApi = {
   list: () => api.get<BackendOrganization[]>('/organizations/'),
   get: (id: number) => api.get<BackendOrganization>(`/organizations/${id}`),
@@ -779,7 +868,7 @@ export async function pushDemoEvents(orgId?: number): Promise<{ alerts: number; 
 //   kind 'internal' → OUR delivery projects with a client (platform side);
 //   kind 'client'   → the client's own projects (his side, incl. his clients).
 // ---------------------------------------------------------------------------
-export interface ProjectMilestone { id: number; title: string; done: boolean }
+export interface ProjectMilestone { id: number; title: string; done: boolean; planned_at?: string | null }
 export interface Project {
   id: number; org_id: number; name: string; description: string;
   kind: 'internal' | 'client'; status: string; priority: string;
@@ -820,10 +909,16 @@ export const projectsApi = {
     patch ? api.put<any>(`/projects/${id}/config`, patch) : api.get<any>(`/projects/${id}/config`),
   timer: (id: number, action: 'start' | 'pause' | 'resume' | 'stop') =>
     api.post<Project>(`/projects/${id}/timer/${action}`),
-  addMilestone: (id: number, title: string) =>
-    api.post<Project>(`/projects/${id}/milestones?title=${encodeURIComponent(title)}`),
+  addMilestone: (id: number, title: string, plannedAt?: string | null) =>
+    plannedAt !== undefined
+      ? api.post<ProjectMilestone>(`/projects/${id}/milestones`, { title, planned_at: plannedAt })
+      : api.post<ProjectMilestone>(`/projects/${id}/milestones?title=${encodeURIComponent(title)}`),
   toggleMilestone: (mid: number, done: boolean) =>
     api.patch<{ id: number; done: boolean }>('/projects/milestones/' + mid, { done }),
+  /** Set (or clear with null) a milestone's planned date — Gantt §6G editor. */
+  setMilestonePlanned: (mid: number, plannedAt: string | null) =>
+    api.patch<{ id: number; title: string; done: boolean; planned_at: string | null }>(
+      '/projects/milestones/' + mid, { planned_at: plannedAt }),
   attachments: (id: number) => api.get<ProjectAttachment[]>(`/projects/${id}/attachments`),
   addAttachment: (id: number, data: { name: string; kind: string; content?: string; file_b64?: string; mime_type?: string }) =>
     api.post<ProjectAttachment>(`/projects/${id}/attachments`, data),

@@ -835,6 +835,122 @@ const fakeAi = (title: string, priority: string, category: string) => {
 };
 
 // ---------------------------------------------------------------------------
+// AUDIT / USERS / ENTITLEMENTS stores (Demo Mode) — module level, declared
+// AFTER every base store (incidents, alerts, tickets, scans, grants, orgs).
+// The demoStore object below is defined at the END of this module so these
+// consts are initialised before any request can reach handle().
+// Shapes mirror backend routers audit.py / users.py / entitlements.py exactly.
+// ---------------------------------------------------------------------------
+type DemoAuditRow = { id: number; actor_id: number | null; actor_name: string; actor_role: string;
+  org_id: number | null; action: string; resource: string; resource_id: string; details: string | null;
+  ip_address: string | null; outcome: string; timestamp: string };
+let auditSeq = 1;
+const auditTrail: DemoAuditRow[] = [];
+let auditSeeded = false;
+function pushAuditRow(a: Omit<DemoAuditRow, 'id'>) { auditTrail.unshift({ id: auditSeq++, ...a }); if (auditTrail.length > 400) auditTrail.pop(); }
+function seedAuditTrail() {
+  if (auditSeeded) return;
+  auditSeeded = true;
+  const DEMO_IP = '203.0.113.10'; // TEST-NET-3 — documentation range, never a real client IP
+  const actorFor = (email: string): { id: number | null; name: string; role: string } => {
+    const ti = demoTechnicians.findIndex(x => x.email === email);
+    if (ti >= 0) { const t = demoTechnicians[ti]; return { id: 100 + ti + 1, name: t.name, role: t.role === 'client_admin' ? 'client_admin' : 'client_user' }; }
+    if (email === 'ops@infracentra.io') return { id: 1, name: 'Nadia Okafor', role: 'platform_admin' };
+    if (email === 'finance@infracentra.io') return { id: 2, name: 'Raj Patel', role: 'platform_admin' };
+    if (email === 'system') return { id: null, name: 'System', role: 'platform_admin' };
+    return { id: null, name: email, role: 'client_user' };
+  };
+  for (const p of platformAudit) {
+    const ac = actorFor(p.actor);
+    pushAuditRow({ actor_id: ac.id, actor_name: ac.name, actor_role: ac.role, org_id: null,
+      action: p.action, resource: 'Platform', resource_id: String(p.id), details: p.detail,
+      ip_address: DEMO_IP, outcome: 'success', timestamp: p.created_at });
+  }
+  for (const inc of incidents) {
+    const ac = inc.assignee ? actorFor(inc.assignee) : { id: null, name: 'alert-engine', role: 'system' };
+    pushAuditRow({ actor_id: ac.id, actor_name: ac.name ?? 'alert-engine', actor_role: ac.role, org_id: inc.org_id,
+      action: 'incident.created', resource: 'Incident', resource_id: inc.uid,
+      details: `Incident « ${inc.title} » (${inc.severity}) opened from correlated SIEM evidence`, ip_address: null,
+      outcome: 'success', timestamp: inc.created_at ?? iso(60) });
+    if (inc.status !== 'open') {
+      pushAuditRow({ actor_id: ac.id, actor_name: ac.name ?? 'analyst', actor_role: ac.role, org_id: inc.org_id,
+        action: 'incident.updated', resource: 'Incident', resource_id: inc.uid,
+        details: `Status moved open → ${inc.status}`, ip_address: null, outcome: 'success', timestamp: inc.updated_at ?? inc.created_at });
+    }
+  }
+  for (const a of alerts.slice(0, 12)) {
+    pushAuditRow({ actor_id: null, actor_name: `${a.source ?? 'siem'}-engine`, actor_role: 'system', org_id: a.org_id ?? a.orgId ?? null,
+      action: 'alert.generated', resource: 'Alert', resource_id: a.uid ?? String(a.id),
+      details: a.title ?? 'Correlation rule produced a new alert', ip_address: null, outcome: 'success', timestamp: a.timestamp ?? a.created_at ?? iso(30) });
+  }
+  for (const t of tickets.slice(0, 10)) {
+    const ac = t.assignee ? actorFor(t.assignee) : { id: null, name: 'service-desk', role: 'system' };
+    pushAuditRow({ actor_id: ac.id, actor_name: ac.name ?? 'service-desk', actor_role: ac.role, org_id: t.org_id ?? t.orgId ?? null,
+      action: 'ticket.created', resource: 'Ticket', resource_id: t.uid, details: `Ticket « ${t.title} » (${t.priority}) created from ${t.source ?? 'portal'}`,
+      ip_address: DEMO_IP, outcome: 'success', timestamp: t.created_at });
+  }
+  for (const sc of scans) {
+    pushAuditRow({ actor_id: 1, actor_name: sc.created_by ?? 'ops@infracentra.io', actor_role: 'platform_admin', org_id: sc.org_id,
+      action: 'discovery.completed', resource: 'DiscoveryScan', resource_id: String(sc.id),
+      details: `Scan ${sc.network_cidr} finished (${sc.status}) — ${sc.discovered}/${sc.total_hosts} hosts responded`,
+      ip_address: null, outcome: sc.status === 'failed' || sc.status === 'completed_with_warnings' ? 'failure' : 'success',
+      timestamp: sc.finished_at ?? sc.started_at ?? iso(500) });
+  }
+  for (const [orgId, g] of Object.entries(grantsStore)) {
+    for (const [svc, rec] of Object.entries(g as Record<string, any>)) {
+      pushAuditRow({ actor_id: 1, actor_name: rec.granted_by ?? 'ops@infracentra.io', actor_role: 'platform_admin', org_id: Number(orgId),
+        action: 'entitlement.updated', resource: 'Entitlement', resource_id: svc,
+        details: `Service « ${svc} » ${rec.enabled ? 'granted' : 'revoked'}${rec.override_plan ? ' (plan override)' : ''}`,
+        ip_address: DEMO_IP, outcome: 'success', timestamp: rec.updated_at ?? iso(100) });
+    }
+  }
+  auditTrail.sort((x, z) => String(z.timestamp).localeCompare(String(x.timestamp)));
+}
+
+// Users directory — derived from the SAME technicians roster AuthContext uses
+// in demo sessions (ids stable across reloads), plus two platform accounts.
+type DemoUserRow = { id: number; email: string; name: string; role: string; org_id: number | null;
+  status: string; mfa_enabled: boolean; last_login: string | null; created_at: string };
+const usersDirectory: DemoUserRow[] = [
+  { id: 1, email: 'ops@infracentra.io', name: 'Nadia Okafor', role: 'platform_admin', org_id: null, status: 'active', mfa_enabled: true, last_login: iso(0.7), created_at: iso(400000) },
+  { id: 2, email: 'finance@infracentra.io', name: 'Raj Patel', role: 'platform_admin', org_id: null, status: 'active', mfa_enabled: true, last_login: iso(5), created_at: iso(380000) },
+  ...demoTechnicians.map((t, i) => ({
+    id: 100 + i + 1, email: t.email, name: t.name,
+    role: t.role === 'client_admin' ? 'client_admin' : 'client_user',
+    org_id: t.orgId, status: 'active', mfa_enabled: t.role !== 'service-desk',
+    last_login: iso((i + 1) * 3), created_at: iso(200000 - i * 1000),
+  })),
+];
+
+// Entitlements — composed from tenant plan limits + live grants (grantsStore),
+// exactly like the backend composes entitlement rows from provisioning.
+type DemoEntitlementRow = { id: number; org_id: number; service_id: string; enabled: boolean; seat_count: number;
+  activated_at: string | null; deactivated_at: string | null; notes: string | null; created_at: string; updated_at: string | null };
+const PLAN_SERVICES: Record<string, string[]> = {
+  STARTER: ['asset-discovery', 'monitored-devices', 'notifications', 'security-analytics'],
+  PRO: ['asset-discovery', 'monitored-devices', 'notifications', 'security-analytics', 'threat-intelligence', 'alerts', 'incident-response', 'soar-automation', 'my-services', 'projects', 'compliance-reporting', 'advanced-ticketing'],
+  SOUVERAIN: ['asset-discovery', 'monitored-devices', 'notifications', 'security-analytics', 'threat-intelligence', 'alerts', 'incident-response', 'soar-automation', 'my-services', 'projects', 'compliance-reporting', 'advanced-ticketing', 'patch-management', 'backup-dr', 'vulnerability-scanning', 'dns-filtering'],
+};
+const entitlementsTable: DemoEntitlementRow[] = (() => {
+  const rows: DemoEntitlementRow[] = []; let eid = 1;
+  for (const o of orgs) {
+    const plan = String((o as any).planTier ?? 'STARTER').toUpperCase();
+    const granted = grantsStore[String(o.id)] ?? {};
+    const services = new Set([...(PLAN_SERVICES[plan] ?? PLAN_SERVICES.STARTER), ...Object.keys(granted)]);
+    for (const svc of services) {
+      const g = (granted as Record<string, any>)[svc];
+      const enabled = g ? !!g.enabled : (PLAN_SERVICES[plan] ?? []).includes(svc);
+      rows.push({ id: eid++, org_id: o.id, service_id: svc, enabled,
+        seat_count: enabled ? ((o as any).seatLimit ?? 20) : 0,
+        activated_at: enabled ? iso(100000 - eid) : null, deactivated_at: !enabled && g ? iso(100) : null,
+        notes: g?.override_plan ? 'Granted by platform admin (plan override)' : null,
+        created_at: iso(100000), updated_at: g?.updated_at ?? null });
+    }
+  }
+  return rows;
+})();
+
+// ---------------------------------------------------------------------------
 // The mock router used by api.ts when Demo Mode is ON.
 // ---------------------------------------------------------------------------
 export const demoStore = {
@@ -1612,18 +1728,29 @@ export const demoStore = {
         return delay(serializeProject(pr) as any) as unknown as T;
       }
       if (parts[2] === 'milestones' && method === 'POST') {
-        pr.milestones.push({ id: milestoneSeq++, title: query.get('title') ?? b.title ?? 'Jalon', done: false });
-        return delay(serializeProject(pr) as any) as unknown as T;
+        // Backend parity (routers/projects.py add_milestone): accepts either a
+        // ?title= query or a MilestoneIn body { title, done, planned_at }.
+        const m = {
+          id: milestoneSeq++,
+          title: query.get('title') ?? b.title ?? 'Jalon',
+          done: false,
+          planned_at: b.planned_at ?? null,
+        };
+        pr.milestones.push(m);
+        return delay({ ...m } as any) as unknown as T;
       }
-      // PATCH /projects/milestones/{mid} — toggle a milestone (backend parity)
+      // PATCH /projects/milestones/{mid} — toggle done / set planned date
+      // (backend parity: explicit null in model_fields_set clears the date).
       if (parts[1] === 'milestones' && method === 'PATCH') {
         const mid = Number(parts[2]);
         for (const p0 of projectsStore) {
           const m = p0.milestones.find((x: any) => x.id === mid);
           if (m) {
             if (!isPlatform && p0.org_id !== callerOrgId()) throw httpErr(403, 'Cross-tenant access denied');
-            m.done = b.done ?? !m.done;
-            return delay({ id: m.id, done: m.done } as any) as unknown as T;
+            if (b.done !== undefined) m.done = !!b.done; else if (query.get('done') !== null) m.done = query.get('done') === 'true'; else m.done = !m.done;
+            if (b && Object.prototype.hasOwnProperty.call(b, 'planned_at')) m.planned_at = b.planned_at ?? null;
+            if (b.title) m.title = b.title;
+            return delay({ id: m.id, title: m.title, done: m.done, planned_at: m.planned_at ?? null } as any) as unknown as T;
           }
         }
         throw httpErr(404, 'Demo: milestone not found');
@@ -2256,7 +2383,74 @@ export const demoStore = {
       }
     }
 
+    // ---- Audit log (mirrors GET /api/audit/logs + /logs/my-org) ------------
+    if (root === 'audit' && (parts[1] === 'logs' || parts[1] === 'actors' || parts[1] === 'resources')) {
+      seedAuditTrail();
+      const s = demoSession();
+      const isPlatform = s.role === 'platform_admin';
+      // Backend audit.py: /logs requires platform_admin; clients use /logs/my-org.
+      if (parts[1] === 'logs' && parts[2] !== 'my-org' && !isPlatform) {
+        throw httpErr(403, 'Plateforme uniquement — les clients consultent /audit/logs/my-org');
+      }
+      let list = [...auditTrail];
+      if (!isPlatform || parts[2] === 'my-org') {
+        const myOrg = callerOrgIdSafe();
+        list = list.filter(r => myOrg === null ? true : r.org_id === myOrg);
+      } else if (query.get('org_id')) {
+        list = list.filter(r => String(r.org_id) === query.get('org_id'));
+      }
+      if (parts[1] === 'actors') return delay([...new Set(list.map(r => r.actor_name))] as any) as unknown as T;
+      if (parts[1] === 'resources') return delay([...new Set(list.map(r => r.resource))] as any) as unknown as T;
+      const roleF = query.get('actor_role'); if (roleF) list = list.filter(r => r.actor_role === roleF);
+      const outF = query.get('outcome'); if (outF) list = list.filter(r => r.outcome === outF);
+      const resF = query.get('resource'); if (resF) list = list.filter(r => r.resource.toLowerCase() === resF.toLowerCase());
+      const actF = query.get('action'); if (actF) list = list.filter(r => r.action.toLowerCase().includes(actF.toLowerCase()));
+      const qf = (query.get('q') ?? '').toLowerCase();
+      if (qf) list = list.filter(r => `${r.actor_name} ${r.action} ${r.resource} ${r.resource_id} ${r.details ?? ''}`.toLowerCase().includes(qf));
+      const since = query.get('since'); if (since) list = list.filter(r => r.timestamp >= since);
+      const until = query.get('until'); if (until) list = list.filter(r => r.timestamp <= until);
+      const skip = Math.max(0, Number(query.get('skip') ?? 0));
+      const limit = Math.min(500, Math.max(1, Number(query.get('limit') ?? 100)));
+      return delay(list.slice(skip, skip + limit) as any) as unknown as T;
+    }
+
+    // ---- Users directory (mirrors GET /api/users/ — users.py scoping) -------
+    if (root === 'users' && method === 'GET') {
+      const s = demoSession();
+      let list = usersDirectory;
+      if (s.role !== 'platform_admin') {
+        const myOrg = callerOrgIdSafe();
+        list = list.filter(u => myOrg === null ? true : u.org_id === myOrg);
+      } else if (query.get('org_id')) {
+        list = list.filter(u => String(u.org_id) === query.get('org_id'));
+      }
+      const skip = Math.max(0, Number(query.get('skip') ?? 0));
+      const limit = Math.min(500, Math.max(1, Number(query.get('limit') ?? 100)));
+      return delay(list.slice(skip, skip + limit) as any) as unknown as T;
+    }
+
+    // ---- Entitlements (mirrors GET /api/entitlements/ — entitlements.py) ----
+    if (root === 'entitlements' && method === 'GET') {
+      const s = demoSession();
+      let list = entitlementsTable;
+      if (parts[1] === 'check' && parts[2]) {
+        const svc = decodeURIComponent(parts[2]);
+        const row = list.find(e => e.service_id === svc);
+        return delay({ entitled: !!row?.enabled, service_id: svc } as any) as unknown as T;
+      }
+      if (s.role !== 'platform_admin') {
+        const myOrg = callerOrgIdSafe();
+        list = list.filter(e => myOrg === null ? true : e.org_id === myOrg);
+      } else if (parts[1] && /^\d+$/.test(parts[1])) {
+        list = list.filter(e => String(e.org_id) === parts[1]);
+      } else if (query.get('org_id')) {
+        list = list.filter(e => String(e.org_id) === query.get('org_id'));
+      }
+      return delay(list as any) as unknown as T;
+    }
+
     // ---- Security Analytics (mirrors GET /api/analytics/overview) ----------
+
     if (root === 'analytics' && parts[1] === 'overview' && method === 'GET') {
       return delay(demoAnalyticsOverview(query) as any) as unknown as T;
     }

@@ -630,6 +630,9 @@ class ProjectMilestone(Base):
     title = Column(String(200), nullable=False)
     done = Column(Boolean, default=False)
     order_idx = Column(Integer, default=0)
+    # Planned date for the milestone (Gantt §6G). Nullable on purpose: the
+    # timeline renders "no planned date" instead of inventing one.
+    planned_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
