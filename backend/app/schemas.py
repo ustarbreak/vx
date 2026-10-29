@@ -460,6 +460,34 @@ class AlertPageResponse(BaseModel):
     pages: int
 
 
+class AlertCorrelationMember(BaseModel):
+    """One alert belonging to the SAME correlation group as the requested alert.
+
+    Membership is server-derived ONLY from persisted grouping state:
+      * same tenant (org_id — implicit: the whole query is tenant-scoped),
+      * same fingerprint `dedup_key` (stamped by correlate() when a row became
+        a group survivor; NEVER recomputed client-side),
+      * same grouping window `window_epoch`.
+    The edge evidence text is built from those persisted fields only.
+    """
+    id: int
+    uid: str
+    title: str
+    severity: str
+    status: str
+    resource: Optional[str] = None
+    created_at: datetime
+    correlated_count: int = 1
+
+
+class AlertCorrelationResponse(BaseModel):
+    """§6E related-alert graph payload for ONE alert (tenant-scoped)."""
+    dedup_key: Optional[str] = None        # null -> alert never joined a group
+    window_epoch: int = 0
+    window_minutes: int = 60               # active GroupingPolicy (auditable)
+    members: List[AlertCorrelationMember] = []
+
+
 class AlertDetailResponse(AlertResponse):
     """Detail view: related detections/incidents/tickets + notes + history."""
     related_incidents: List[dict] = []     # real Incident rows referencing this alert
