@@ -170,7 +170,7 @@ async def get_project(pid: int, current_user: User = Depends(get_current_user),
     done_ms = sum(1 for m in ms if m.done)
     return {
         **_serialize(p),
-        "milestones": [{"id": m.id, "title": m.title, "done": m.done} for m in ms],
+        "milestones": [_ms_out(m) for m in ms],
         "progress_pct": round(100 * done_ms / len(ms)) if ms else (100 if p.status == "completed" else 0),
         "tickets": {
             "total": len(tickets), "open": len(open_t),
@@ -224,29 +224,55 @@ async def timer(pid: int, action: str, current_user: User = Depends(get_current_
 # ---------------------------------------------------------------------------
 # Milestones
 # ---------------------------------------------------------------------------
+class MilestoneIn(BaseModel):
+    """Milestone payload. planned_at is optional; absence is rendered as
+    'no planned date' in the Gantt timeline — never back-filled with a guess."""
+    title: str | None = None
+    done: bool | None = None
+    planned_at: datetime | None = None
+
+
+def _ms_out(m: ProjectMilestone) -> dict:
+    return {
+        "id": m.id, "title": m.title, "done": bool(m.done),
+        "planned_at": (m.planned_at.isoformat() if m.planned_at else None),
+    }
+
+
 @router.post("/{pid}/milestones", status_code=201)
-async def add_milestone(pid: int, title: str, current_user: User = Depends(get_current_user),
+async def add_milestone(pid: int, title: str | None = None, body: MilestoneIn | None = None,
+                        current_user: User = Depends(get_current_user),
                         db: AsyncSession = Depends(get_db)):
     p = await _get_project(pid, current_user, db)
+    t = title or (body.title if body else None) or "Jalon"
     idx = (await db.execute(select(func.count(ProjectMilestone.id))
                             .where(ProjectMilestone.project_id == p.id))).scalar() or 0
-    m = ProjectMilestone(project_id=p.id, title=title, order_idx=idx)
+    m = ProjectMilestone(project_id=p.id, title=t, order_idx=idx,
+                         planned_at=(body.planned_at if body else None))
     db.add(m)
     await db.commit()
     await db.refresh(m)
-    return {"id": m.id, "title": m.title, "done": m.done}
+    return _ms_out(m)
 
 
 @router.patch("/milestones/{mid}")
-async def toggle_milestone(mid: int, done: bool, current_user: User = Depends(get_current_user),
+async def toggle_milestone(mid: int, done: bool | None = None, body: MilestoneIn | None = None,
+                           current_user: User = Depends(get_current_user),
                            db: AsyncSession = Depends(get_db)):
     m = (await db.execute(select(ProjectMilestone).where(ProjectMilestone.id == mid))).scalars().first()
     if not m:
         raise HTTPException(404, "Milestone not found")
     await _get_project(m.project_id, current_user, db)  # tenant guard
-    m.done = done
+    d = done if done is not None else (body.done if body else None)
+    if d is not None:
+        m.done = d
+    if body and "planned_at" in body.model_fields_set:
+        m.planned_at = body.planned_at
+    if body and body.title:
+        m.title = body.title
     await db.commit()
-    return {"id": m.id, "done": m.done}
+    await db.refresh(m)
+    return _ms_out(m)
 
 
 # ---- attachments (documents that describe the project further) --------------

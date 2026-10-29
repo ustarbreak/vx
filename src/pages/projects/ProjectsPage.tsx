@@ -36,7 +36,114 @@ const SLA_CLS: Record<string, string> = {
   breached: 'text-red-400', met: 'text-emerald-400', breached_after_done: 'text-[var(--ic-muted)]',
 };
 
-// --- Phase 4 : destinataires membres + suggestions SLA (miroir démo/réel) ---
+// ---------------------------------------------------------------------------
+// Milestone Gantt timeline (§6G) — renders ONLY persisted dates:
+//   * bar span        : previous milestone planned_at → this planned_at
+//                       (first dated milestone starts at the project created_at;
+//                        an undated predecessor yields a "durée non planifiée"
+//                        single marker instead of an invented bar)
+//   * diamond marker  : planned_at
+//   * done / overdue  : shape + text label (never colour alone)
+//   * null planned_at : explicit "date de planification manquante" state
+// Editing writes through projectsApi.setMilestonePlanned → PATCH
+// /projects/milestones/{id} (backend-confirmed refresh after each save).
+// ---------------------------------------------------------------------------
+const MS_DAY = 86_400_000;
+
+function MilestoneTimeline({ detail, onSaved }: { detail: ProjectDetail; onSaved: () => void }) {
+  const ms = detail.milestones ?? [];
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  const rows = useMemo(() => ms.map(m => ({ ...m, t: m.planned_at ? new Date(m.planned_at).getTime() : null as number | null })), [ms]);
+  const dated = rows.filter(r => r.t !== null).sort((a, b) => (a.t! - b.t!));
+  const startMs = Math.min(...[detail.created_at ? new Date(detail.created_at).getTime() : Infinity, ...dated.map(d => d.t!)]);
+  const endMs = Math.max(...[detail.due_at ? new Date(detail.due_at).getTime() : -Infinity, ...dated.map(d => d.t!), Date.now()], startMs + 7 * MS_DAY);
+  const span = Math.max(1, endMs - startMs);
+  const pct = (t: number) => Math.min(100, Math.max(0, ((t - startMs) / span) * 100));
+  const fmtD = (t: number) => new Date(t).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+
+  // Bar start for a dated milestone: the nearest earlier dated milestone,
+  // else the project creation date. Undated milestones get no bar.
+  const barStart = (r: typeof rows[number]): number | null => {
+    if (r.t === null) return null;
+    const prevs = dated.filter(d => d.t! < r.t!);
+    if (prevs.length) return prevs[prevs.length - 1].t!;
+    return Number.isFinite(startMs) && startMs < r.t ? startMs : null;
+  };
+
+  const ticks = Array.from({ length: 5 }, (_, i) => startMs + (span * i) / 4);
+
+  const savePlanned = async (mid: number, value: string) => {
+    setBusyId(mid); setErrMsg(null);
+    try {
+      await projectsApi.setMilestonePlanned(mid, value ? new Date(value).toISOString() : null);
+      onSaved();
+    } catch (e: any) { setErrMsg(e?.message ?? 'Enregistrement impossible'); }
+    finally { setBusyId(null); }
+  };
+
+  if (!ms.length) {
+    return <p className="text-sm text-[var(--ic-muted)] italic">Aucun jalon enregistré pour ce projet.</p>;
+  }
+
+  return (
+    <div role="group" aria-label={`Frisque jalons — ${ms.length} jalons, ${dated.length} datés`}>
+      {/* date axis */}
+      <div className="relative h-4 mb-1 hidden sm:block" aria-hidden="true">
+        {ticks.map((t, i) => (
+          <span key={i} className="absolute -translate-x-1/2 text-[10px] text-[var(--ic-muted)]" style={{ left: `${pct(t)}%` }}>{fmtD(t)}</span>
+        ))}
+      </div>
+      <ul className="space-y-1.5">
+        {rows.map(r => {
+          const overdue = r.t !== null && !r.done && r.t < Date.now();
+          const bs = barStart(r);
+          return (
+            <li key={r.id} className="grid grid-cols-[minmax(9rem,1.2fr)_2fr_auto] gap-2 items-center text-xs">
+              <label className="flex items-center gap-2 cursor-pointer min-w-0">
+                <input type="checkbox" checked={!!r.done} onChange={() => { /* handled by parent list */ }} className="accent-cyan-500 sr-only" />
+                <span className={`truncate ${r.done ? 'line-through text-[var(--ic-muted)]' : 'text-[var(--ic-text)]'}`} title={r.title}>{r.title}</span>
+              </label>
+              {/* track */}
+              <div className="relative h-5 rounded bg-[var(--ic-surface)] overflow-hidden" aria-label={
+                r.t === null ? 'jalon sans date planifiée' : `planifié le ${new Date(r.t).toLocaleDateString('fr-FR')}${overdue ? ', en retard' : ''}`}>
+                {bs !== null && r.t !== null && (
+                  <span className="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-cyan-700/60"
+                    style={{ left: `${pct(bs)}%`, width: `${Math.max(0.5, pct(r.t) - pct(bs))}%` }} aria-hidden="true" />
+                )}
+                {r.t !== null ? (
+                  <span className={`absolute top-1/2 w-3 h-3 rotate-45 border ${r.done ? 'bg-emerald-500/80 border-emerald-300' : overdue ? 'bg-red-500/80 border-red-300' : 'bg-cyan-500/80 border-cyan-200'}`}
+                    style={{ left: `calc(${pct(r.t)}% - 6px)` }} aria-hidden="true" title={fmtD(r.t)} />
+                ) : (
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] text-[var(--ic-muted)] italic">non planifié</span>
+                )}
+              </div>
+              {/* editor + status chip */}
+              <span className="flex items-center gap-1.5 shrink-0">
+                <input type="date" aria-label={`Date planifiée pour ${r.title}`}
+                  value={r.t !== null ? new Date(r.t).toISOString().slice(0, 10) : ''}
+                  disabled={busyId === r.id}
+                  onChange={e => savePlanned(r.id, e.target.value)}
+                  className="bg-[var(--ic-surface-2)] rounded px-1.5 py-0.5 text-[11px] text-[var(--ic-heading)] border border-slate-700 disabled:opacity-50" />
+                {r.done
+                  ? <span className="text-emerald-400 font-medium">✓ fait</span>
+                  : overdue ? <span className="text-red-400 font-medium">⚠ retard</span>
+                  : r.t === null ? <span className="text-[var(--ic-muted)]">— date à fixer</span>
+                  : <span className="text-[var(--ic-muted)]">{fmtD(r.t!)}</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-2 text-[10px] text-[var(--ic-muted)]">
+        Losange = date planifiée persistée · barre = période entre deux jalons datés consécutifs · « non planifié » = aucune date enregistrée (jamais devinée).
+      </p>
+      {errMsg && <p className="mt-1 text-xs text-red-400" role="alert">{errMsg}</p>}
+    </div>
+  );
+}
+
 import { demoTechnicians, demoTenants } from '../../data/demoWorld';
 
 type MemberLite = { name: string; email: string; role: string };
@@ -373,8 +480,8 @@ export default function ProjectsPage() {
                   </>}
             </div>
             <div>
-              <h4 className="text-xs font-semibold text-[var(--ic-text)] uppercase mb-2">Jalons</h4>
-              <ul className="space-y-1">
+              <h4 className="text-xs font-semibold text-[var(--ic-text)] uppercase mb-2">Jalons — frisque (§6G)</h4>
+              <ul className="space-y-1 mb-3">
                 {selected.milestones.map(m => (
                   <li key={m.id}>
                     <label className="flex items-center gap-2 text-sm text-[var(--ic-text)] cursor-pointer">
@@ -384,6 +491,7 @@ export default function ProjectsPage() {
                   </li>
                 ))}
               </ul>
+              <MilestoneTimeline detail={selected} onSaved={() => openDetail(selected.id)} />
               <form onSubmit={e => { e.preventDefault(); const inp = (e.target as any).t; addMs(inp.value); inp.value = ''; }} className="flex gap-2 mt-2">
                 <input name="t" placeholder="Ajouter un jalon…" className="flex-1 bg-[var(--ic-surface)] rounded-lg px-3 py-1.5 text-sm text-[var(--ic-heading)] placeholder-slate-500" />
                 <button className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)] text-sm"><Plus className="w-4 h-4" /></button>
