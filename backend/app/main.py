@@ -21,6 +21,7 @@ from app.routers import analytics as analytics_router
 # Phase 4 — Tenant Manager avancé + Partner Program management
 from app.routers import tenant_manager, partners_admin
 from app.routers import agent as agent_router
+from app.routers import dashboard_layout
 from app.routers.settings import router as settings_router, router_playbooks
 from app.services.channel_settings import router as channels_router
 from app.services.mfa import router as mfa_router
@@ -118,6 +119,8 @@ app.include_router(discovery.router, prefix="/api")
 from app.routers import discovery_extra  # credential PATCH/test, infra graph, device hub & actions
 app.include_router(discovery_extra.router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+# Per-user customizable dashboard widget layouts (Overview & Live Proof, network…)
+app.include_router(dashboard_layout.router, prefix="/api")
 # Legacy in-memory playbooks router is superseded by the SOAR v2 API below.
 # It stays mounted (same URL shape) only for backward compatibility and now
 # requires authentication — see app/routers/settings.py.

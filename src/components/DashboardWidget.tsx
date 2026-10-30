@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { GripVertical, ChevronUp, ChevronDown, Maximize2, Minimize2, RotateCcw, X } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { isDemoMode } from '../services/demoMode';
 import {
   DndContext,
   PointerSensor,
@@ -65,10 +65,61 @@ export function widgetStorageKey(pageKey: string): string {
   return `ic-widget-layout:${pageKey}:${scope}`;
 }
 
+/* ------------------------------------------------------------------ */
+/* Layout persistence — localStorage cache + backend sync              */
+/* ------------------------------------------------------------------ */
+
+/** Server-side layout payload (see backend/app/routers/dashboard_layout.py). */
+export interface DashboardLayoutDto {
+  page_key: string;
+  layout: WidgetLayoutEntry[];
+  updated_at?: string | null;
+}
+
+async function loadSavedLayout(pageKey: string): Promise<WidgetLayoutEntry[] | null> {
+  // 1) Instant local cache (offline / first paint), 2) authoritative server copy.
+  const storageKey = widgetStorageKey(pageKey);
+  let cached: WidgetLayoutEntry[] | null = null;
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) cached = parsed as WidgetLayoutEntry[];
+    }
+  } catch { /* ignore */ }
+
+  if (!isDemoMode()) {
+    try {
+      const { dashboardLayoutApi } = await import('../services/api');
+      const dto = await dashboardLayoutApi.get(pageKey);
+      if (Array.isArray(dto?.layout) && dto.layout.length) return dto.layout;
+    } catch {
+      /* 404 (never saved) or backend unreachable → fall back to cache/defaults */
+    }
+  }
+  return cached;
+}
+
+function saveLayoutToBackend(pageKey: string, layout: WidgetLayoutEntry[]) {
+  if (isDemoMode()) return; // Demo Mode persists through localStorage only
+  import('../services/api')
+    .then(({ dashboardLayoutApi }) => dashboardLayoutApi.put(pageKey, layout))
+    .catch(() => { /* offline — localStorage cache stays authoritative until next change */ });
+}
+
+function deleteLayoutOnBackend(pageKey: string) {
+  if (isDemoMode()) return;
+  import('../services/api')
+    .then(({ dashboardLayoutApi }) => dashboardLayoutApi.del(pageKey))
+    .catch(() => { /* ignore */ });
+}
+
 /**
  * Wraps a dashboard/page whose widgets should be user-configurable.
- * The layout (order + size + collapse state) is persisted in localStorage
- * under `ic-widget-layout:{pageKey}` so each client keeps their own arrangement.
+ * The layout (order + size + collapse state) is persisted per user on the
+ * backend (/api/dashboard/layout/{page_key}) with localStorage kept as a
+ * fast offline cache, so each client keeps their own arrangement across
+ * devices and logouts.
  */
 export function WidgetLayoutProvider({
   pageKey,
@@ -96,6 +147,26 @@ export function WidgetLayoutProvider({
       return defaultLayout;
     }
   });
+  const hydratedRef = React.useRef(false);
+  const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Hydrate from the backend once per mount (server copy wins over cache).
+  useEffect(() => {
+    let cancelled = false;
+    loadSavedLayout(pageKey).then((saved) => {
+      if (cancelled || !saved) return;
+      hydratedRef.current = true;
+      setLayout((prev) => {
+        const known = saved.filter((w) => w.id.startsWith('cat-') || defaultLayout.some((d) => d.id === w.id));
+        const added = defaultLayout.filter((d) => !known.some((w) => w.id === d.id)).map((d) => ({ ...d }));
+        const merged = [...known, ...added];
+        const same = merged.length === prev.length && merged.every((m, i) => m.id === prev[i]?.id && m.colSpan === prev[i]?.colSpan && m.collapsed === prev[i]?.collapsed);
+        return same ? prev : merged;
+      });
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageKey]);
 
   // Re-read when another tab / component changed the saved layout.
   useEffect(() => {
@@ -125,7 +196,11 @@ export function WidgetLayoutProvider({
     } catch {
       /* storage unavailable (private mode etc.) — layout still works in-session */
     }
-  }, [storageKey, layout]);
+    // Debounced backend sync (skip the very first render's default layout).
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => saveLayoutToBackend(pageKey, layout), 800);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+  }, [storageKey, pageKey, layout]);
 
   return <LayoutContext.Provider value={{ layout, setLayout }}>{children}</LayoutContext.Provider>;
 }
@@ -527,6 +602,7 @@ export function ResetLayoutButton({
         } catch {
           /* ignore */
         }
+        deleteLayoutOnBackend(pageKey);
         setLayout(defaultLayout.map((d) => ({ ...d })));
       }}
       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--ic-muted)] border border-[var(--ic-border)] bg-[var(--ic-surface-2)] hover:text-cyan-400 hover:border-cyan-400/40 transition-colors"
