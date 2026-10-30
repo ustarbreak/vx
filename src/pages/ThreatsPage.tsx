@@ -4,6 +4,20 @@ import { Search, Skull, AlertOctagon, Clock, ChevronDown, ChevronUp, Target, Rad
 import { mockThreats } from '../data/mockData';
 import ServiceGate from '../components/ServiceGate';
 import { RelationshipGraph, type RGNode, type RGEdge } from '../components/RelationshipGraph';
+import DashboardWidget, {
+  WidgetLayoutProvider,
+  WidgetGrid,
+  ResetLayoutButton,
+  CustomizeHint,
+  type WidgetLayoutEntry,
+} from '../components/DashboardWidget';
+import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
+
+const THREATS_LAYOUT: WidgetLayoutEntry[] = [
+  { id: 'th-graph', colSpan: 3, collapsed: false },
+  { id: 'th-lookup', colSpan: 2, collapsed: false },
+  { id: 'th-feed', colSpan: 3, collapsed: false },
+];
 import {
   isDemoMode, fetchLiveThreats, fetchIndicatorMatches, fetchFeedsStatus, lookupIoc,
   type LiveThreat, type IndicatorMatch, type FeedsStatusResponse,
@@ -300,145 +314,165 @@ function ThreatsContent() {
   );
 
   return (
+    <WidgetLayoutProvider pageKey="threats" defaultLayout={THREATS_LAYOUT}>
     <div className="p-4 lg:p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Threat Intelligence</h1>
-        <p className="text-[var(--ic-muted)] text-sm mt-1">
-          {isDemoMode()
-            ? 'Simulated indicator dataset + local evidence links (Demo Mode)'
-            : 'On-demand lookups via AlienVault OTX and the configured MISP instance'}
-        </p>
-        {!isDemoMode() && (
-          <div className="mt-2 text-xs">
-            {feedStatus === 'loading' && <span className="text-cyan-400">● Fetching live feed from backend…</span>}
-            {feedStatus === 'ok' && (liveThreats?.length ?? 0) > 0 &&
-              <span className="text-emerald-400">● LIVE FEED — {liveThreats?.length ?? 0} events from the configured MISP instance</span>}
-            {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — showing reference dataset</span>}
-            {feedStatus === 'ok' && (liveThreats?.length ?? 0) === 0 &&
-              <span className="text-amber-400">● Backend reachable but no MISP instance configured — recent-feed results are empty by design (Settings → Integrations → MISP). Per-indicator lookups below still use OTX.</span>}
-          </div>
-        )}
-        {isDemoMode() && <p className="text-[10px] text-fuchsia-400/70 mt-1 uppercase tracking-wide">Demo Mode — simulated feed data</p>}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Threat Intelligence</h1>
+          <p className="text-[var(--ic-muted)] text-sm mt-1">
+            {isDemoMode()
+              ? 'Simulated indicator dataset + local evidence links (Demo Mode)'
+              : 'On-demand lookups via AlienVault OTX and the configured MISP instance'}
+          </p>
+          {!isDemoMode() && (
+            <div className="mt-2 text-xs">
+              {feedStatus === 'loading' && <span className="text-cyan-400">● Fetching live feed from backend…</span>}
+              {feedStatus === 'ok' && (liveThreats?.length ?? 0) > 0 &&
+                <span className="text-emerald-400">● LIVE FEED — {liveThreats?.length ?? 0} events from the configured MISP instance</span>}
+              {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — showing reference dataset</span>}
+              {feedStatus === 'ok' && (liveThreats?.length ?? 0) === 0 &&
+                <span className="text-amber-400">● Backend reachable but no MISP instance configured — recent-feed results are empty by design (Settings → Integrations → MISP). Per-indicator lookups below still use OTX.</span>}
+            </div>
+          )}
+          {isDemoMode() && <p className="text-[10px] text-fuchsia-400/70 mt-1 uppercase tracking-wide">Demo Mode — simulated feed data</p>}
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <CustomizeHint />
+          <AddWidgetButton pageKey="threats" defaultLayout={THREATS_LAYOUT} />
+          <ResetLayoutButton pageKey="threats" defaultLayout={THREATS_LAYOUT} />
+        </div>
       </div>
 
       {!isDemoMode() && <FeedStatusPanel />}
 
-      {/* §6D — Threat Intelligence Relationship Graph (verified evidence only) */}
-      <IntelRelationshipGraph threats={baseList} matches={graphMatches} />
+      <WidgetGrid>
+        {/* §6D — Threat Intelligence Relationship Graph (verified evidence only) */}
+        <DashboardWidget id="th-graph" title="Threat Relationship Graph" spanOptions={[2, 3]}
+          subtitle="Verified evidence links only — indicator ⇄ incident ⇄ asset ⇄ alert">
+          <IntelRelationshipGraph threats={baseList} matches={graphMatches} />
+        </DashboardWidget>
 
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--ic-muted)]" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') runLookup(); }}
-            placeholder="Search threats, or enter an IP / domain / URL / hash and press Enter for live enrichment…"
-            className="w-full pl-10 pr-28 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] placeholder-slate-600 focus:outline-none focus:border-cyan-500/50" />
-          <button onClick={runLookup} disabled={!search.trim() || lookupBusy}
-            className="absolute right-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/25 disabled:opacity-40">
-            {lookupBusy ? 'Looking up…' : 'Enrich IoC'}
-          </button>
-        </div>
-        {isDemoMode() && search.trim() && (
-          <p className="text-[10px] text-fuchsia-400/70 mt-2">Demo Mode: enrichment results below are simulated fixtures, not live external intelligence.</p>
-        )}
-        {lookupErr && (
-          <p className="text-xs text-red-400 mt-2 flex items-center gap-1"><AlertOctagon className="w-3.5 h-3.5" /> Lookup failed: {lookupErr}</p>
-        )}
-        {lookupState && (
-          <div className="mt-3 border-t border-[var(--ic-border)] pt-3">
-            <p className="text-xs font-semibold text-[var(--ic-heading)] mb-2">
-              Enrichment for <code className="font-mono text-cyan-300">{lookupState.ioc}</code> — {lookupState.count} result{lookupState.count === 1 ? '' : 's'}
-              {lookupState.count === 0 && <span className="text-[var(--ic-muted)] font-normal"> · no source reported this indicator (absence of intel is shown as-is, never guessed)</span>}
-            </p>
-            <ul className="space-y-1.5 max-h-48 overflow-auto">
-              {lookupState.threats.map((t, i) => {
-                const colors = severityColors[t.severity] ?? severityColors.info;
-                return (
-                  <li key={`${t.id}-${i}`} className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase ${colors.bg} ${colors.text}`}>{t.severity}</span>
-                    <span className="text-[var(--ic-text)] truncate max-w-[280px]">{t.title}</span>
-                    <span className="text-[var(--ic-muted)]">{t.source}</span>
-                    <span className="text-[var(--ic-muted)]">confidence {t.confidence}%</span>
-                    {(t.mitreAttack ?? []).slice(0, 3).map(m => <span key={m} className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[10px] font-mono">{m}</span>)}
-                  </li>
-                );
-              })}
-            </ul>
+        <DashboardWidget id="th-lookup" title="IoC Search & Enrichment" spanOptions={[1, 2, 3]}>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--ic-muted)]" />
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') runLookup(); }}
+              placeholder="Search threats, or enter an IP / domain / URL / hash and press Enter for live enrichment…"
+              className="w-full pl-10 pr-28 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] placeholder-slate-600 focus:outline-none focus:border-cyan-500/50" />
+            <button onClick={runLookup} disabled={!search.trim() || lookupBusy}
+              className="absolute right-2 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/25 disabled:opacity-40">
+              {lookupBusy ? 'Looking up…' : 'Enrich IoC'}
+            </button>
           </div>
-        )}
-      </div>
-
-      {!isDemoMode() && <MatchedIndicatorsPanel search={search} />}
-
-      <div className="space-y-3">
-        {filtered.map(threat => {
-          const colors = severityColors[threat.severity] ?? severityColors.info;
-          return (
-            <div key={threat.id} className={`bg-[var(--ic-surface)] border ${colors.border} rounded-xl overflow-hidden`}>
-              <div className="p-4 cursor-pointer" onClick={() => setExpandedId(expandedId === threat.id ? null : threat.id)}>
-                <div className="flex items-start gap-3">
-                  <div className={`p-2 rounded-lg ${colors.bg} flex-shrink-0`}>
-                    <Target className={`w-5 h-5 ${colors.text}`} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-sm font-semibold text-[var(--ic-heading)]">{threat.title}</h4>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${colors.bg} ${colors.text}`}>
-                        {threat.severity}
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] bg-[var(--ic-surface-2)] text-[var(--ic-muted)]">{threat.source}</span>
-                    </div>
-                    <p className="text-xs text-[var(--ic-muted)] mt-1">{threat.description}</p>
-                    <div className="flex items-center gap-4 mt-2 text-xs text-[var(--ic-muted)]">
-                      <span className="flex items-center gap-1"><Skull className="w-3 h-3" />{threat.iocType ?? 'indicator'}</span>
-                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{new Date(threat.timestamp).toLocaleString()}</span>
-                      <span>Confidence: <span className="font-medium text-[var(--ic-text)]">{threat.confidence}%</span></span>
-                    </div>
-                  </div>
-                  {expandedId === threat.id ? <ChevronUp className="w-4 h-4 text-[var(--ic-muted)]" /> : <ChevronDown className="w-4 h-4 text-[var(--ic-muted)]" />}
-                </div>
-              </div>
-              {expandedId === threat.id && (
-                <div className="px-4 pb-4 border-t border-[var(--ic-border)] pt-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-3 rounded-lg bg-[var(--ic-surface)]">
-                      <p className="text-xs text-[var(--ic-muted)] mb-1">IoC</p>
-                      <code className="text-xs text-cyan-300 font-mono break-all">{threat.ioc}</code>
-                    </div>
-                    <div className="p-3 rounded-lg bg-[var(--ic-surface)]">
-                      <p className="text-xs text-[var(--ic-muted)] mb-1">Affected Assets</p>
-                      <p className="text-lg font-bold text-[var(--ic-heading)]">{threat.affectedAssets}</p>
-                    </div>
-                  </div>
-                  <div className="mt-3 p-3 rounded-lg bg-[var(--ic-surface)]">
-                    <p className="text-xs text-[var(--ic-muted)] mb-2">MITRE ATT&CK</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(threat.mitreAttack ?? []).map(t => (
-                        <span key={t} className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-xs font-mono">{t}</span>
-                      ))}
-                      {(threat.mitreAttack ?? []).length === 0 && (
-                        <span className="text-xs text-[var(--ic-muted)]">No technique mapping provided by the source.</span>
-                      )}
-                    </div>
-                  </div>
-                  {/* Cross-page drill-down: does this indicator appear on OUR incidents? */}
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-                    <Link to={`/incidents?q=${encodeURIComponent(threat.ioc)}`}
-                      className="px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-300 border border-purple-500/25 hover:bg-purple-500/20 flex items-center gap-1.5">
-                      <AlertOctagon className="w-3.5 h-3.5" /> Check this IoC against incidents
-                    </Link>
-                    <Link to="/analytics"
-                      className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 hover:bg-cyan-500/20 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5" /> View detection trends
-                    </Link>
-                  </div>
-                </div>
-              )}
+          {isDemoMode() && search.trim() && (
+            <p className="text-[10px] text-fuchsia-400/70 mt-2">Demo Mode: enrichment results below are simulated fixtures, not live external intelligence.</p>
+          )}
+          {lookupErr && (
+            <p className="text-xs text-red-400 mt-2 flex items-center gap-1"><AlertOctagon className="w-3.5 h-3.5" /> Lookup failed: {lookupErr}</p>
+          )}
+          {lookupState && (
+            <div className="mt-3 border-t border-[var(--ic-border)] pt-3">
+              <p className="text-xs font-semibold text-[var(--ic-heading)] mb-2">
+                Enrichment for <code className="font-mono text-cyan-300">{lookupState.ioc}</code> — {lookupState.count} result{lookupState.count === 1 ? '' : 's'}
+                {lookupState.count === 0 && <span className="text-[var(--ic-muted)] font-normal"> · no source reported this indicator (absence of intel is shown as-is, never guessed)</span>}
+              </p>
+              <ul className="space-y-1.5 max-h-48 overflow-auto">
+                {lookupState.threats.map((t, i) => {
+                  const colors = severityColors[t.severity] ?? severityColors.info;
+                  return (
+                    <li key={`${t.id}-${i}`} className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase ${colors.bg} ${colors.text}`}>{t.severity}</span>
+                      <span className="text-[var(--ic-text)] truncate max-w-[280px]">{t.title}</span>
+                      <span className="text-[var(--ic-muted)]">{t.source}</span>
+                      <span className="text-[var(--ic-muted)]">confidence {t.confidence}%</span>
+                      {(t.mitreAttack ?? []).slice(0, 3).map(m => <span key={m} className="px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 text-[10px] font-mono">{m}</span>)}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-          );
-        })}
-      </div>
+          )}
+        </DashboardWidget>
+
+        {!isDemoMode() && <MatchedIndicatorsPanel search={search} />}
+
+        <DashboardWidget id="th-feed" title="Threat Feed" spanOptions={[2, 3]}
+          subtitle={`${filtered.length} indicator${filtered.length === 1 ? '' : 's'} — click a row to expand details`}>
+          <div className="space-y-3">
+            {filtered.map(threat => {
+              const colors = severityColors[threat.severity] ?? severityColors.info;
+              return (
+                <div key={threat.id} className={`bg-[var(--ic-surface-2)] border ${colors.border} rounded-xl overflow-hidden`}>
+                  <div className="p-4 cursor-pointer" onClick={() => setExpandedId(expandedId === threat.id ? null : threat.id)}>
+                    <div className="flex items-start gap-3">
+                      <div className={`p-2 rounded-lg ${colors.bg} flex-shrink-0`}>
+                        <Target className={`w-5 h-5 ${colors.text}`} />
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-sm font-semibold text-[var(--ic-heading)]">{threat.title}</h4>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${colors.bg} ${colors.text}`}>
+                            {threat.severity}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] bg-[var(--ic-surface)] text-[var(--ic-muted)]">{threat.source}</span>
+                        </div>
+                        <p className="text-xs text-[var(--ic-muted)] mt-1">{threat.description}</p>
+                        <div className="flex items-center gap-4 mt-2 text-xs text-[var(--ic-muted)]">
+                          <span className="flex items-center gap-1"><Skull className="w-3 h-3" />{threat.iocType ?? 'indicator'}</span>
+                          <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{new Date(threat.timestamp).toLocaleString()}</span>
+                          <span>Confidence: <span className="font-medium text-[var(--ic-text)]">{threat.confidence}%</span></span>
+                        </div>
+                      </div>
+                      {expandedId === threat.id ? <ChevronUp className="w-4 h-4 text-[var(--ic-muted)]" /> : <ChevronDown className="w-4 h-4 text-[var(--ic-muted)]" />}
+                    </div>
+                  </div>
+                  {expandedId === threat.id && (
+                    <div className="px-4 pb-4 border-t border-[var(--ic-border)] pt-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-3 rounded-lg bg-[var(--ic-surface)]">
+                          <p className="text-xs text-[var(--ic-muted)] mb-1">IoC</p>
+                          <code className="text-xs text-cyan-300 font-mono break-all">{threat.ioc}</code>
+                        </div>
+                        <div className="p-3 rounded-lg bg-[var(--ic-surface)]">
+                          <p className="text-xs text-[var(--ic-muted)] mb-1">Affected Assets</p>
+                          <p className="text-lg font-bold text-[var(--ic-heading)]">{threat.affectedAssets}</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 p-3 rounded-lg bg-[var(--ic-surface)]">
+                        <p className="text-xs text-[var(--ic-muted)] mb-2">MITRE ATT&CK</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(threat.mitreAttack ?? []).map(t => (
+                            <span key={t} className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-xs font-mono">{t}</span>
+                          ))}
+                          {(threat.mitreAttack ?? []).length === 0 && (
+                            <span className="text-xs text-[var(--ic-muted)]">No technique mapping provided by the source.</span>
+                          )}
+                        </div>
+                      </div>
+                      {/* Cross-page drill-down: does this indicator appear on OUR incidents? */}
+                      <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+                        <Link to={`/incidents?q=${encodeURIComponent(threat.ioc)}`}
+                          className="px-3 py-1.5 rounded-lg bg-purple-500/10 text-purple-300 border border-purple-500/25 hover:bg-purple-500/20 flex items-center gap-1.5">
+                          <AlertOctagon className="w-3.5 h-3.5" /> Check this IoC against incidents
+                        </Link>
+                        <Link to="/analytics"
+                          className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/25 hover:bg-cyan-500/20 flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" /> View detection trends
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </DashboardWidget>
+
+        {/* Catalog widgets added via “Add widget” render here */}
+        {AllCatalogEntries()}
+      </WidgetGrid>
     </div>
+    </WidgetLayoutProvider>
   );
 }
 

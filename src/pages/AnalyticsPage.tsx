@@ -16,6 +16,7 @@ import DashboardWidget, {
   CustomizeHint,
   type WidgetLayoutEntry,
 } from '../components/DashboardWidget';
+import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
 import { isDemoMode } from '../services/demoMode';
 import { fetchIndicatorMatches, type IndicatorMatch } from '../services/threatIntel';
 import { alertsApi, type AlertRow } from '../services/api';
@@ -211,6 +212,7 @@ function AnalyticsContent() {
             <RefreshCw className={`w-4 h-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
           </button>
           <CustomizeHint />
+          <AddWidgetButton pageKey="analytics" defaultLayout={ANALYTICS_LAYOUT} />
           <ResetLayoutButton pageKey="analytics" defaultLayout={ANALYTICS_LAYOUT} />
         </div>
       </div>
@@ -366,6 +368,9 @@ function AnalyticsContent() {
                 </ul>
               )}
           </DashboardWidget>
+
+          {/* Catalog widgets the user added via “Add widget” render here */}
+          {AllCatalogEntries()}
           </WidgetGrid>
 
           {/* §6C — Correlation Explorer over persisted, backend-linked records */}

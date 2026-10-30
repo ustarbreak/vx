@@ -951,6 +951,108 @@ const entitlementsTable: DemoEntitlementRow[] = (() => {
 })();
 
 // ---------------------------------------------------------------------------
+// Service dependency graph helpers (mirror of backend app/services/service_graph.py)
+// ---------------------------------------------------------------------------
+const DEMO_SVC_LABELS: Record<string, string> = {
+  'threat-intel': 'Threat Intelligence', compliance: 'Compliance Mapper',
+  'incident-response': 'Incident Response', analytics: 'Security Analytics',
+  soar: 'SOAR Automation', 'vuln-scanning': 'Vulnerability Scanning',
+  'patch-management': 'Patch Management', 'backup-dr': 'Backup & Disaster Recovery',
+  'endpoint-protection': 'Endpoint Protection (EDR/XDR)', 'email-security': 'Email Security',
+  'cloud-security': 'Cloud Security Posture (CSPM)', 'network-monitoring': 'Network Monitoring (NMS)',
+  'dns-filtering': 'DNS Filtering', 'firewall-mgmt': 'Firewall Management',
+  'vpn-gateway': 'Managed VPN Gateway', 'sd-wan': 'SD-WAN',
+  'asset-discovery': 'Asset Discovery', 'advanced-ticketing': 'Advanced Ticketing',
+};
+const DEMO_SVC_CATEGORY: Record<string, string> = {
+  'threat-intel': 'security', compliance: 'security', 'incident-response': 'security',
+  analytics: 'security', soar: 'security',
+  'vuln-scanning': 'psa', 'patch-management': 'psa', 'backup-dr': 'psa',
+  'endpoint-protection': 'psa', 'email-security': 'psa', 'cloud-security': 'psa',
+  'network-monitoring': 'networking', 'dns-filtering': 'networking',
+  'firewall-mgmt': 'networking', 'vpn-gateway': 'networking', 'sd-wan': 'networking',
+  'asset-discovery': 'networking', 'advanced-ticketing': 'psa',
+};
+
+function buildDemoServiceGraph(rows: DemoEntitlementRow[], orgId: number) {
+  const org = orgs.find(o => o.id === orgId);
+  const nodesMap: Record<string, any> = {};
+  for (const e of rows) {
+    nodesMap[e.service_id] = {
+      id: e.service_id,
+      label: DEMO_SVC_LABELS[e.service_id] ?? e.service_id,
+      category: DEMO_SVC_CATEGORY[e.service_id] ?? 'other',
+      status: e.enabled ? 'enabled' : 'disabled',
+      seat_count: e.seat_count ?? 0,
+      in_plan: true,
+      override: !!e.notes?.toLowerCase().includes('override'),
+      grant_enabled: null, activated_at: e.activated_at,
+    };
+  }
+  const present = new Set(Object.keys(nodesMap));
+  const edges: any[] = []; const missing: any[] = [];
+  for (const rule of SERVICE_DEPENDENCY_RULES) {
+    for (const up of rule.requires) {
+      if (!present.has(rule.service)) continue;
+      if (present.has(up)) {
+        edges.push({ from: up, to: rule.service, kind: 'declared', provisioned: true,
+          upstream_status: nodesMap[up].status, rationale: rule.rationale });
+      } else {
+        missing.push({ from: up, to: rule.service, kind: 'declared', provisioned: false,
+          upstream_label: DEMO_SVC_LABELS[up] ?? up, rationale: rule.rationale });
+      }
+    }
+  }
+  const downstreamIndex: Record<string, string[]> = {};
+  for (const e of edges) (downstreamIndex[e.from] ||= []).push(e.to);
+  return {
+    org: { id: orgId, name: org?.name ?? '', plan: String((org as any)?.planTier ?? 'STARTER').toLowerCase(), trial: false },
+    nodes: Object.values(nodesMap), edges, missing_dependencies: missing,
+    downstream_index: downstreamIndex,
+    counts: { services_total: Object.keys(nodesMap).length,
+      services_enabled: Object.values(nodesMap).filter(n => n.status === 'enabled').length,
+      edges_shown: edges.length, missing_dependencies: missing.length },
+    disclaimer: "Vue déclarative basée sur les lignes d'entitlements persistées — aucune télémétrie temps réel ; la présence d'un entitlement n'affirme jamais une santé opérationnelle.",
+  };
+}
+
+function buildDemoServiceChain(serviceId: string, present: Set<string>) {
+  const walkUp = (sid: string, visited: Set<string>): any[] => {
+    const chain: any[] = [];
+    for (const r of SERVICE_DEPENDENCY_RULES) {
+      if (r.service === sid) for (const req of r.requires) {
+        if (visited.has(req)) continue;
+        visited.add(req);
+        const sub = present.has(req) ? walkUp(req, visited) : [];
+        chain.push({ requires: req, rationale: r.rationale, provisioned: present.has(req),
+          depth: 1 + Math.max(0, ...sub.map(s => s.depth)), sub_chain: sub });
+      }
+    }
+    return chain;
+  };
+  const walkDown = (sid: string, visited: Set<string>): any[] => {
+    const out: any[] = [];
+    for (const r of SERVICE_DEPENDENCY_RULES) {
+      if (r.requires.includes(sid) && !visited.has(r.service)) {
+        visited.add(r.service);
+        out.push({ impacts: r.service, rationale: r.rationale, provisioned: present.has(r.service),
+          sub_chain: walkDown(r.service, visited) });
+      }
+    }
+    return out;
+  };
+  const ups = walkUp(serviceId, new Set());
+  const missing = [...new Set(ups.filter(u => !u.provisioned).map(u => u.requires))].sort();
+  return {
+    service_id: serviceId, entitled: present.has(serviceId),
+    direct_requires: SERVICE_DEPENDENCY_RULES.filter(r => r.service === serviceId)
+      .flatMap(r => r.requires.map(req => ({ requires: req, rationale: r.rationale, provisioned: present.has(req) }))),
+    upstream_chain: ups, downstream_impact: walkDown(serviceId, new Set()),
+    unprovisioned_requirements: missing,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The mock router used by api.ts when Demo Mode is ON.
 // ---------------------------------------------------------------------------
 export const demoStore = {
@@ -2437,6 +2539,36 @@ export const demoStore = {
         const svc = decodeURIComponent(parts[2]);
         const row = list.find(e => e.service_id === svc);
         return delay({ entitled: !!row?.enabled, service_id: svc } as any) as unknown as T;
+      }
+      if (parts[1] === 'graph' || parts[1] === 'chain') {
+        // Mirror of backend app/services/service_graph.py + routers/entitlements.py.
+        const orgRows = list.filter(e => (s.role !== 'platform_admin' ? true : query.get('org_id') ? e.org_id === Number(query.get('org_id')) : true));
+        const targetOrgId = s.role !== 'platform_admin'
+          ? callerOrgIdSafe() ?? 1
+          : (query.get('org_id') ? Number(query.get('org_id')) : (callerOrgIdSafe() ?? orgRows[0]?.org_id ?? 1));
+        const scoped = list.filter(e => e.org_id === targetOrgId);
+        const enabledSet = new Set(scoped.filter(e => e.enabled).map(e => e.service_id));
+        void enabledSet;
+        const present = new Set(scoped.map(e => e.service_id));
+        const _unusedLabels: Record<string, string> = {
+          'threat-intel': 'Threat Intelligence', compliance: 'Compliance Mapper',
+          'incident-response': 'Incident Response', analytics: 'Security Analytics',
+          soar: 'SOAR Automation', 'vuln-scanning': 'Vulnerability Scanning',
+          'patch-management': 'Patch Management', 'backup-dr': 'Backup & Disaster Recovery',
+          'endpoint-protection': 'Endpoint Protection (EDR/XDR)', 'email-security': 'Email Security',
+          'cloud-security': 'Cloud Security Posture (CSPM)', 'network-monitoring': 'Network Monitoring (NMS)',
+          'dns-filtering': 'DNS Filtering', 'firewall-mgmt': 'Firewall Management',
+          'vpn-gateway': 'Managed VPN Gateway', 'sd-wan': 'SD-WAN',
+          'asset-discovery': 'Asset Discovery', 'advanced-ticketing': 'Advanced Ticketing',
+        };
+
+        if (parts[1] === 'graph') {
+          const g = buildDemoServiceGraph(scoped, targetOrgId);
+          return delay(g as any) as unknown as T;
+        }
+        const svcId = decodeURIComponent(parts[2] ?? '');
+        const ch = buildDemoServiceChain(svcId, present);
+        return delay(ch as any) as unknown as T;
       }
       if (s.role !== 'platform_admin') {
         const myOrg = callerOrgIdSafe();

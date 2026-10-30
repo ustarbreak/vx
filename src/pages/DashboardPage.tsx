@@ -11,6 +11,7 @@ import DashboardWidget, {
   CustomizeHint,
   type WidgetLayoutEntry,
 } from '../components/DashboardWidget';
+import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
 
 const DEFAULT_LAYOUT: WidgetLayoutEntry[] = [
   { id: 'kpi-alerts', colSpan: 1, collapsed: false },
@@ -102,6 +103,7 @@ export default function DashboardPage() {
               <Clock className="w-3.5 h-3.5 text-[var(--ic-muted)]" />
               <span className="text-xs text-[var(--ic-muted)]">Last updated: {new Date().toLocaleTimeString()}</span>
             </div>
+            <AddWidgetButton pageKey="soc-dashboard" defaultLayout={DEFAULT_LAYOUT} />
             <ResetLayoutButton pageKey="soc-dashboard" defaultLayout={DEFAULT_LAYOUT} />
           </div>
         </div>
@@ -183,6 +185,9 @@ export default function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           </DashboardWidget>
+
+          {/* Catalog widgets the user added via “Add widget” render here */}
+          {AllCatalogEntries()}
         </WidgetGrid>
       </div>
     </WidgetLayoutProvider>

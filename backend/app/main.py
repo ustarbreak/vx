@@ -115,6 +115,8 @@ app.include_router(notifications.router, prefix="/api")
 app.include_router(security_map.router, prefix="/api")
 app.include_router(org_topology.router, prefix="/api")
 app.include_router(discovery.router, prefix="/api")
+from app.routers import discovery_extra  # credential PATCH/test, infra graph, device hub & actions
+app.include_router(discovery_extra.router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 # Legacy in-memory playbooks router is superseded by the SOAR v2 API below.
 # It stays mounted (same URL shape) only for backward compatibility and now

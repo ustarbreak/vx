@@ -6,7 +6,26 @@ import ValueEngineSection from '../../components/ValueEngineWidgets';
 import WorldAttackMap from '../../components/WorldAttackMap';
 import OrgTopologyMap from '../../components/OrgTopologyMap';
 import { agentApi, AgentProbeOut } from '../../services/api';
+import DashboardWidget, {
+  WidgetLayoutProvider,
+  WidgetGrid,
+  ResetLayoutButton,
+  CustomizeHint,
+  type WidgetLayoutEntry,
+} from '../../components/DashboardWidget';
+import { AddWidgetButton, AllCatalogEntries } from '../../components/WidgetCatalog';
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
+
+const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
+  { id: 'ca-posture', colSpan: 3, collapsed: false },
+  { id: 'ca-attackmap', colSpan: 2, collapsed: false },
+  { id: 'ca-topology', colSpan: 1, collapsed: false },
+  { id: 'ca-ops', colSpan: 2, collapsed: false },
+  { id: 'ca-infra', colSpan: 1, collapsed: false },
+  { id: 'ca-value', colSpan: 3, collapsed: false },
+  { id: 'ca-org', colSpan: 2, collapsed: false },
+  { id: 'ca-kpis', colSpan: 3, collapsed: false },
+];
 
 /** Reporting-period presets feeding valueApi.get(period) (YYYY-MM server-side). */
 const PERIOD_PRESETS: { label: string; months: number }[] = [

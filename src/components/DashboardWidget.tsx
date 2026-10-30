@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { GripVertical, ChevronUp, ChevronDown, Maximize2, Minimize2, RotateCcw } from 'lucide-react';
+import { GripVertical, ChevronUp, ChevronDown, Maximize2, Minimize2, RotateCcw, X } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import {
   DndContext,
   PointerSensor,
@@ -34,6 +35,36 @@ interface LayoutCtx {
 
 const LayoutContext = createContext<LayoutCtx | null>(null);
 
+/** Non-throwing accessor — used by catalog widgets that may render outside a provider. */
+export function useOptionalLayoutCtx(): LayoutCtx | null {
+  return useContext(LayoutContext);
+}
+
+/** Scope saved layouts per logged-in user so every account keeps its own dashboard. */
+let cachedScope = { key: '', scope: '' };
+function userScope(): string {
+  try {
+    const raw = localStorage.getItem('ic_demo_session');
+    if (raw) {
+      const u = JSON.parse(raw);
+      const id = u?.id ?? u?.email;
+      if (id) return String(id);
+    }
+  } catch {
+    /* ignore */
+  }
+  return 'anon';
+}
+
+export function widgetStorageKey(pageKey: string): string {
+  // Memoize per pageKey while the same session is active (scope is stable
+  // across a render pass; changes only on login/logout → remount).
+  const scope = userScope();
+  if (cachedScope.key === pageKey && cachedScope.scope === scope) return `ic-widget-layout:${pageKey}:${scope}`;
+  cachedScope = { key: pageKey, scope };
+  return `ic-widget-layout:${pageKey}:${scope}`;
+}
+
 /**
  * Wraps a dashboard/page whose widgets should be user-configurable.
  * The layout (order + size + collapse state) is persisted in localStorage
@@ -48,14 +79,15 @@ export function WidgetLayoutProvider({
   defaultLayout: WidgetLayoutEntry[];
   children: React.ReactNode;
 }) {
-  const storageKey = `ic-widget-layout:${pageKey}`;
+  const storageKey = widgetStorageKey(pageKey);
   const [layout, setLayout] = useState<WidgetLayoutEntry[]>(() => {
     try {
       const raw = localStorage.getItem(storageKey);
       if (!raw) return defaultLayout;
       const saved: WidgetLayoutEntry[] = JSON.parse(raw);
-      // Merge: keep saved order/size for known widgets, append brand-new ones.
-      const known = saved.filter((w) => defaultLayout.some((d) => d.id === w.id));
+      // Merge: keep saved order/size for known widgets + catalog widgets the
+      // user explicitly added (cat-* ids are not part of any defaultLayout).
+      const known = saved.filter((w) => w.id.startsWith('cat-') || defaultLayout.some((d) => d.id === w.id));
       const added = defaultLayout
         .filter((d) => !known.some((w) => w.id === d.id))
         .map((d) => ({ ...d }));
@@ -64,6 +96,28 @@ export function WidgetLayoutProvider({
       return defaultLayout;
     }
   });
+
+  // Re-read when another tab / component changed the saved layout.
+  useEffect(() => {
+    const onChanged = () => {
+      try {
+        const raw = localStorage.getItem(widgetStorageKey(pageKey));
+        if (!raw) return;
+        const saved: WidgetLayoutEntry[] = JSON.parse(raw);
+        setLayout((prev) => {
+          const missing = saved.filter((s) => !prev.some((p) => p.id === s.id));
+          return missing.length ? [...prev, ...missing] : prev;
+        });
+      } catch { /* ignore */ }
+    };
+    window.addEventListener('storage', onChanged);
+    window.addEventListener('ic-widgets-changed', onChanged);
+    return () => {
+      window.removeEventListener('storage', onChanged);
+      window.removeEventListener('ic-widgets-changed', onChanged);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageKey]);
 
   useEffect(() => {
     try {
@@ -110,6 +164,7 @@ function WidgetCard({
   subtitle,
   headerExtra,
   spanOptions,
+  removable,
   className,
   children,
   dragHandleProps,
@@ -122,6 +177,8 @@ function WidgetCard({
   subtitle?: string;
   headerExtra?: React.ReactNode;
   spanOptions: number[];
+  /** Show an ✕ remove button (catalog widgets added via "Add widget"). */
+  removable?: boolean;
   className: string;
   children: React.ReactNode;
   dragHandleProps?: Record<string, unknown>;
@@ -197,6 +254,14 @@ function WidgetCard({
             title={entry.collapsed ? 'Expand' : 'Collapse'} aria-label={entry.collapsed ? 'Expand widget' : 'Collapse widget'}>
             <span className="text-xs font-bold px-1">{entry.collapsed ? '+' : '−'}</span>
           </button>
+          {removable && (
+            <button type="button"
+              className={`${btn} hover:text-red-400`}
+              onClick={() => setLayout((prev) => prev.filter((w) => w.id !== entry.id))}
+              title="Remove this widget from the page" aria-label={`Remove ${title}`}>
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -219,6 +284,7 @@ function SortableDashboardWidget(props: {
   spanOptions: number[];
   className: string;
   headerExtra?: React.ReactNode;
+  removable?: boolean;
   children: React.ReactNode;
   entry: WidgetLayoutEntry;
   index: number;
@@ -267,6 +333,7 @@ export default function DashboardWidget({
   spanOptions = [1, 2, 3],
   className = '',
   headerExtra,
+  removable,
   children,
 }: {
   id: string;
@@ -276,6 +343,8 @@ export default function DashboardWidget({
   spanOptions?: number[];
   className?: string;
   headerExtra?: React.ReactNode;
+  /** Show ✕ remove control (defaults on for catalog widgets `cat-*`). */
+  removable?: boolean;
   children: React.ReactNode;
 }) {
   const { layout } = useLayoutCtx();
@@ -292,9 +361,40 @@ export default function DashboardWidget({
       spanOptions={spanOptions}
       className={className}
       headerExtra={headerExtra}
+      removable={removable ?? id.startsWith('cat-')}
     >
       {children}
     </WidgetCard>
+  );
+}
+
+/**
+ * Placeholder marker rendered inside a <WidgetGrid> for catalog widgets that
+ * the user added ("Add widget" button). It only shows up when its id is part
+ * of the current layout; WidgetGrid upgrades it into a sortable, removable
+ * card. The children are the widget body — evaluated lazily by the grid.
+ */
+export function CatalogEntryPlaceholder({
+  id,
+  title,
+  subtitle,
+  spanOptions,
+  children,
+}: {
+  id: string;
+  title?: string;
+  subtitle?: string;
+  spanOptions?: number[];
+  children: React.ReactNode;
+}) {
+  const ctx = useContext(LayoutContext);
+  if (!ctx || !ctx.layout.some((w) => w.id === id)) return null;
+  // Outside a WidgetGrid (no sortable upgrade) still render as a plain card.
+  const index = ctx.layout.findIndex((w) => w.id === id);
+  return (
+    <DashboardWidget id={id} title={title ?? id} subtitle={subtitle} spanOptions={spanOptions}>
+      {children}
+    </DashboardWidget>
   );
 }
 
@@ -351,20 +451,54 @@ export function WidgetGrid({
       <SortableContext items={ids} strategy={rectSortingStrategy}>
         <div className={gridClasses}>
           {React.Children.map(children, (child) => {
-            if (!React.isValidElement(child) || child.type !== DashboardWidget) return child;
-            const childId = (child.props as { id?: string }).id;
-            if (!childId) return child;
-            const index = ctx.layout.findIndex((w) => w.id === childId);
-            if (index === -1) return null;
-            return (
-              <SortableDashboardWidget
-                key={childId}
-                {...(child.props as any)}
-                id={childId}
-                entry={ctx.layout[index]}
-                index={index}
-              />
-            );
+            if (!React.isValidElement(child)) return child;
+            // DashboardWidget children are upgraded to sortable cards…
+            if (child.type === DashboardWidget) {
+              const childId = (child.props as { id?: string }).id;
+              if (!childId) return child;
+              const index = ctx.layout.findIndex((w) => w.id === childId);
+              if (index === -1) return null;
+              return (
+                <SortableDashboardWidget
+                  key={childId}
+                  {...(child.props as any)}
+                  id={childId}
+                  entry={ctx.layout[index]}
+                  index={index}
+                />
+              );
+            }
+            // …and <CatalogEntry id="cat-…"> placeholders render their own
+            // removable widget when present in the layout (null otherwise).
+            if ((child.type as any) === CatalogEntryPlaceholder) {
+              const cp = child.props as {
+                id?: string;
+                title?: string;
+                subtitle?: string;
+                spanOptions?: number[];
+                children: React.ReactNode;
+              };
+              const childId = cp.id;
+              if (!childId) return null;
+              const index = ctx.layout.findIndex((w) => w.id === childId);
+              if (index === -1) return null;
+              return (
+                <SortableDashboardWidget
+                  key={childId}
+                  id={childId}
+                  title={cp.title ?? childId}
+                  subtitle={cp.subtitle}
+                  spanOptions={cp.spanOptions ?? [1, 2, 3]}
+                  className=""
+                  removable
+                  entry={ctx.layout[index]}
+                  index={index}
+                >
+                  {cp.children}
+                </SortableDashboardWidget>
+              );
+            }
+            return child;
           })}
         </div>
       </SortableContext>
@@ -389,7 +523,7 @@ export function ResetLayoutButton({
       type="button"
       onClick={() => {
         try {
-          localStorage.removeItem(`ic-widget-layout:${pageKey}`);
+          localStorage.removeItem(widgetStorageKey(pageKey));
         } catch {
           /* ignore */
         }

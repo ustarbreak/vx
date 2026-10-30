@@ -1121,6 +1121,37 @@ class Playbook(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class DeviceAction(Base):
+    """Endpoint action requested from the Infrastructure graph (backup,
+    remote access / smart screen, shutdown, isolate).
+
+    Honesty rules:
+      * The API platform does NOT execute host commands directly — there is no
+        shell channel to arbitrary endpoints by design.
+      * `queued`  : durable request recorded for the goinfra agent collector to
+                    pick up on its next policy poll (agent-side enforcement).
+      * `manual`  : no agent channel exists for this device; a P1 ticket was
+                    created so a technician performs the action through their
+                    own tooling (RMM / IPMI / switch ACL). ticket_uid links it.
+      * `failed`  : the durable record could not be persisted — nothing happened.
+    Every transition is audited; the ledger is the source of truth, never the UI.
+    """
+    __tablename__ = "device_actions"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    uid = Column(String, unique=True, index=True, nullable=False)       # DVA-000123
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    device_id = Column(Integer, ForeignKey("discovered_devices.id"), nullable=False, index=True)
+    action = Column(String, nullable=False)                              # backup|remote_access|shutdown|isolate
+    mode = Column(String, default="execute")                             # simulate|execute
+    status = Column(String, default="queued", index=True)                # queued|manual|blocked|failed
+    reason = Column(Text, default="")                                    # honest explanation (no-agent, denied…)
+    detail = Column(JSON, default=dict)                                  # redacted context (ip, hostname)
+    ticket_uid = Column(String, nullable=True, index=True)               # linked TCK when routed to a human
+    requested_by = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class PlaybookRun(Base):
     """One execution of a playbook. `mode` separates simulation/preview from
     actual execution; terminal status is written ONLY after every step has
