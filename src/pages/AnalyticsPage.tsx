@@ -11,6 +11,7 @@ import ServiceGate from '../components/ServiceGate';
 import { RelationshipGraph, type RGNode, type RGEdge } from '../components/RelationshipGraph';
 import DashboardWidget, {
   WidgetLayoutProvider,
+  WidgetGrid,
   ResetLayoutButton,
   CustomizeHint,
   type WidgetLayoutEntry,
@@ -265,7 +266,7 @@ function AnalyticsContent() {
       {data && status === 'ok' && !empty && (
         <>
           {/* Everything below is one reorderable/resizable widget grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-12 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
+          <WidgetGrid>
           <DashboardWidget id="an-kpis" title="Key Metrics" spanOptions={[1, 2, 3]} subtitle="Every number traced to /api/analytics/overview fields">
           <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             <KpiCard icon={<Activity className="w-4 h-4 text-cyan-400" />} label="Events (stored alert rows)"
@@ -365,7 +366,7 @@ function AnalyticsContent() {
                 </ul>
               )}
           </DashboardWidget>
-          </div>
+          </WidgetGrid>
 
           {/* §6C — Correlation Explorer over persisted, backend-linked records */}
           <CorrelationExplorer sevFilter={sevSel} />

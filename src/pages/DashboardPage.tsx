@@ -6,6 +6,7 @@ import { computeDemoStats, isDemoWorldInstalled } from '../data/demoWorld';
 import { isDemoMode } from '../services/demoMode';
 import DashboardWidget, {
   WidgetLayoutProvider,
+  WidgetGrid,
   ResetLayoutButton,
   CustomizeHint,
   type WidgetLayoutEntry,
@@ -106,7 +107,7 @@ export default function DashboardPage() {
         </div>
 
         {/* Everything is one reorderable, resizable widget grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-12 lg:grid-cols-12 gap-4 lg:gap-6 items-start">
+        <WidgetGrid>
           <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
             <div className="flex items-center gap-2">
               <AlertTriangle className="w-6 h-6 text-red-400" />
@@ -182,7 +183,7 @@ export default function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           </DashboardWidget>
-        </div>
+        </WidgetGrid>
       </div>
     </WidgetLayoutProvider>
   );
