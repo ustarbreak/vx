@@ -132,6 +132,14 @@ DEMO_USER_SPECS = [
     {"email": "a.fassi@valorissystem.ma", "name": "A. Fassi", "role": "analyst", "org_id": 2},
     {"email": "h.tazi@vivalissalaf.ma", "name": "H. Tazi", "role": "technician", "org_id": 3},
     {"email": "demo@infracentra.io", "name": "Demo Client Admin", "role": "client_admin", "org_id": 1},
+    # Quick-Demo client admin accounts (DEMO_ACCOUNTS in AuthContext.tsx).
+    # Without these rows the login page's "Client Admin" buttons 401 against
+    # the real backend ("Account ... does not exist") — mirrored in
+    # demoWorld.ts demoTechnicians for Demo Mode.
+    {"email": "admin@damanecash.ma", "name": "Damanecash Admin", "role": "client_admin", "org_id": 1},
+    {"email": "ciso@damanecash.ma", "name": "Damanecash CISO", "role": "client_admin", "org_id": 1},
+    {"email": "soc@valorissystem.ma", "name": "Valoris SOC Manager", "role": "client_admin", "org_id": 2},
+    {"email": "it@vivalissalaf.ma", "name": "Vivalis Salaf IT Admin", "role": "client_admin", "org_id": 3},
 ]
 
 # demoDevices[] from demoWorld.ts — id, hostname, type, ip, status, location,

@@ -15,6 +15,13 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
+// Lazy registry for the <CatalogEntry/> component defined in WidgetCatalog.tsx.
+// A static `import { CatalogEntry }` here would create an import cycle
+// (WidgetCatalog already imports from this module), so WidgetCatalog registers
+// its component reference at load time and we compare against it via `any`
+// (React element `type` identity comparison is not expressible in TS).
+export const CATALOG_ENTRY_REF: { current: any } = { current: null };
+
 /* ------------------------------------------------------------------ */
 /* Layout state — shared per page via context so widgets can reorder,  */
 /* resize and collapse. Persisted in localStorage per client.          */
@@ -252,10 +259,7 @@ function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
     React.Children.forEach(n, (child) => {
       if (!React.isValidElement(child)) return;
       const t = child.type as unknown;
-      if (t === DashboardWidget || t === CatalogEntryPlaceholder) {
-        push((child.props as { id?: string }).id);
-      } else if (t === CatalogEntry) {
-        // <CatalogEntry id="cat-…"/> wraps a placeholder with the same id.
+      if (t === DashboardWidget || t === CatalogEntryPlaceholder || t === CATALOG_ENTRY_REF.current) {
         push((child.props as { id?: string }).id);
       } else if (typeof t !== 'string' && depth < 6) {
         walk((child.props as { children?: React.ReactNode }).children, depth + 1);
@@ -825,11 +829,29 @@ function SlotGrid({
   const byId = new Map<string, React.ReactElement>();
   React.Children.forEach(children, (child) => {
     if (!React.isValidElement(child)) return;
-    if (child.type === DashboardWidget || (child.type as any) === CatalogEntryPlaceholder) {
+    // DashboardWidget / CatalogEntryPlaceholder are declared directly in the
+    // page tree. <CatalogEntry/> (defined in WidgetCatalog.tsx, which imports
+    // this module — a static import back would be a cycle) is recognized via
+    // the CATALOG_ENTRY_REF registry and collected when it renders.
+    if (child.type === DashboardWidget || (child.type as any) === CatalogEntryPlaceholder || (child.type as any) === CATALOG_ENTRY_REF.current) {
       const cid = (child.props as { id?: string }).id;
       if (cid) byId.set(cid, child);
     }
   });
+
+  // When a placed slot references a widget whose element we couldn't collect
+  // (e.g. <CatalogEntry/> rendered inside SlotBoard's own subtree), ask for it
+  // through a window event that WidgetCatalog answers synchronously with the
+  // element it produced during its render pass.
+  const requestMissingElement = (widgetId: string) => {
+    let out: React.ReactElement | null = null;
+    try {
+      window.dispatchEvent(new CustomEvent('ic-widget-ensure-element', {
+        detail: { id: widgetId, resolve: (e: React.ReactElement | null) => { out = e; } },
+      }));
+    } catch { /* ignore */ }
+    if (out && !byId.has(widgetId)) byId.set(widgetId, out);
+  };
 
   const gridClasses = `${className}`.trim();
 
