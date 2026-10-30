@@ -17,6 +17,7 @@ import { AddWidgetButton, AllCatalogEntries } from '../../components/WidgetCatal
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
 
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
+  // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 6 / 12).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
   { id: 'ca-attackmap', colSpan: 2, collapsed: false },
   { id: 'ca-topology', colSpan: 1, collapsed: false },
@@ -181,41 +182,43 @@ export default function ClientAdminDashboardPage() {
       </DashboardWidget>
 
       <DashboardWidget id="ca-kpis" title="Key indicators" subtitle="Services · team · risk · compliance" spanOptions={[2, 3]}>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Shield className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Active Services</span>
+      {/* Inner responsive grid — four small KPI components, NOT a nested widget:
+          2 columns on mobile/tablet widths, 4 across when the card is wide. */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 min-w-0">
+        <div className="bg-[var(--ic-surface-2)] border border-[var(--ic-border)] rounded-lg p-3 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Shield className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+            <span className="text-xs text-[var(--ic-muted)] truncate">Active Services</span>
           </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{activeServices}</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">of {organization.entitlements.length} available</p>
+          <p className="text-xl sm:text-2xl font-bold text-[var(--ic-heading)] leading-tight">{activeServices}</p>
+          <p className="text-[11px] text-[var(--ic-muted)] mt-0.5 truncate">of {organization.entitlements.length} available</p>
         </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Users className="w-4 h-4 text-purple-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Team Members</span>
+        <div className="bg-[var(--ic-surface-2)] border border-[var(--ic-border)] rounded-lg p-3 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Users className="w-4 h-4 text-purple-400 flex-shrink-0" />
+            <span className="text-xs text-[var(--ic-muted)] truncate">Team Members</span>
           </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{organization.memberCount}</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">Active users</p>
+          <p className="text-xl sm:text-2xl font-bold text-[var(--ic-heading)] leading-tight">{organization.memberCount}</p>
+          <p className="text-[11px] text-[var(--ic-muted)] mt-0.5 truncate">Active users</p>
         </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp className="w-4 h-4 text-green-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Risk Score</span>
+        <div className="bg-[var(--ic-surface-2)] border border-[var(--ic-border)] rounded-lg p-3 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <TrendingUp className="w-4 h-4 text-green-400 flex-shrink-0" />
+            <span className="text-xs text-[var(--ic-muted)] truncate">Risk Score</span>
           </div>
-          <p className={`text-2xl font-bold ${
+          <p className={`text-xl sm:text-2xl font-bold leading-tight ${
             organization.riskScore <= 30 ? 'text-cyber-green' :
             organization.riskScore <= 60 ? 'text-cyber-yellow' : 'text-cyber-red'
           }`}>{organization.riskScore}</p>
-          <p className="text-xs text-cyber-green mt-1">-11% vs last month</p>
+          <p className="text-[11px] text-cyber-green mt-0.5 truncate">-11% vs last month</p>
         </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle2 className="w-4 h-4 text-green-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Compliance</span>
+        <div className="bg-[var(--ic-surface-2)] border border-[var(--ic-border)] rounded-lg p-3 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" />
+            <span className="text-xs text-[var(--ic-muted)] truncate">Compliance</span>
           </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{organization.complianceScore}%</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">NIST CSF 2.0</p>
+          <p className="text-xl sm:text-2xl font-bold text-[var(--ic-heading)] leading-tight">{organization.complianceScore}%</p>
+          <p className="text-[11px] text-[var(--ic-muted)] mt-0.5 truncate">NIST CSF 2.0</p>
         </div>
       </div>
       </DashboardWidget>

@@ -246,13 +246,25 @@ function useLayoutCtx(): LayoutCtx {
 
 export const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 
-/** Responsive width classes — parent grid is a 12-column grid. */
+/**
+ * Responsive width classes — the parent grid adapts its column count to the
+ * viewport (see `gridClasses` in <WidgetGrid>):
+ *   mobile  → 1 column  (every widget stacks full-width, nothing squeezed)
+ *   tablet  → 6 columns (span 1 = ½ row, span 2 = ⅔ row, span 3 = full row)
+ *   desktop → 12 columns (span 1 = ¼ row, span 2 = ⅔ row, span 3 = full row)
+ * A minimum span of 2/6 keeps widgets wide enough for readable KPIs, charts,
+ * tables and maps — no narrow slivers. `min-w-0` lets grid children shrink so
+ * wide content scrolls inside the card instead of overflowing it.
+ */
+const SPAN_CLASSES: Record<number, string> = {
+  1: 'md:col-span-3 lg:col-span-4',
+  2: 'md:col-span-4 lg:col-span-8',
+  3: 'md:col-span-6 lg:col-span-12',
+};
+
 function spanClassFor(colSpan: number) {
-  return colSpan === 3
-    ? 'sm:col-span-6 lg:col-span-12'
-    : colSpan === 2
-    ? 'sm:col-span-6 lg:col-span-8'
-    : 'sm:col-span-6 lg:col-span-4';
+  const n = clamp(Math.round(colSpan), 1, 3);
+  return `${SPAN_CLASSES[n]} min-w-0`;
 }
 
 const btn =
@@ -316,7 +328,7 @@ function WidgetCard({
 
   return (
     <div
-      className={`${spanClass} bg-[var(--ic-surface)] border rounded-xl p-6 transition-shadow duration-150 ${
+      className={`${spanClass} max-w-full overflow-hidden bg-[var(--ic-surface)] border rounded-xl p-4 sm:p-6 transition-shadow duration-150 ${
         isOver
           ? 'border-cyan-400 ring-2 ring-cyan-400/40'
           : isDragging
@@ -373,8 +385,10 @@ function WidgetCard({
         </div>
       </div>
 
-      {/* Body — hidden when collapsed */}
-      {!entry.collapsed && <div>{children}</div>}
+      {/* Body — hidden when collapsed. `overflow-x-auto` keeps wide content
+          (tables, charts, maps) inside the card: it scrolls within the widget
+          instead of overflowing the layout or squashing text. */}
+      {!entry.collapsed && <div className="min-w-0 overflow-x-auto">{children}</div>}
 
       {/* Hint shown only while collapsed */}
       {entry.collapsed && (
@@ -460,9 +474,9 @@ export default function DashboardWidget({
     // Rendered outside a WidgetLayoutProvider — degrade to a plain card so the
     // section is still visible in the grid instead of silently disappearing.
     return (
-      <div className="sm:col-span-6 lg:col-span-12 bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
+      <div className={`${spanClassFor(3)} max-w-full overflow-hidden bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 sm:p-6`}>
         <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">{title}</h3>
-        {children}
+        <div className="min-w-0 overflow-x-auto">{children}</div>
       </div>
     );
   }
@@ -580,7 +594,10 @@ export function WidgetGrid({
     });
   };
 
-  const gridClasses = `grid grid-cols-1 sm:grid-cols-6 lg:grid-cols-12 gap-4 lg:gap-6 items-start ${className}`.trim();
+  // Responsive CSS Grid: one column on mobile, adaptive columns on tablet
+  // (6-col track), multiple columns on desktop (12-col track). Widgets span
+  // 3/4/6/8/12 tracks depending on their size + breakpoint (see spanClassFor).
+  const gridClasses = `grid grid-cols-1 md:grid-cols-6 lg:grid-cols-12 gap-4 lg:gap-6 items-start ${className}`.trim();
 
   // Without a provider we can't do drag & drop — render the grid statically.
   if (!ctx) {
