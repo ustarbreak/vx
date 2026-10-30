@@ -126,10 +126,10 @@ function CorrelationExplorer({ sevFilter }: { sevFilter: string | null }) {
       <AlertTriangle className="w-4 h-4" /> Correlation sources unreachable: {err}
     </div>
   );
-  if (!alerts || !matches) return <div className="h-24 rounded-xl bg-[var(--ic-surface)] border border-[var(--ic-border)] animate-pulse" />;
+  if (!alerts || !matches) return <div className="h-24 rounded-xl animate-pulse bg-[var(--ic-surface-2)]" />;
 
   return (
-    <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 space-y-3">
+    <div className="space-y-3">
       <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider flex items-center gap-2">
         <Database className="w-4 h-4 text-cyan-400" /> Correlation explorer
       </h3>

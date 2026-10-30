@@ -16,13 +16,12 @@ import DashboardWidget, {
 import { AddWidgetButton, AllCatalogEntries } from '../../components/WidgetCatalog';
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
 
+// Only grid widgets are listed here. The bare widgets (attack map, topology,
+// ops summary, ingestion health, value engine) render their own cards outside
+// the slot grid — listing them here would create empty placeholder slots.
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
   // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 6 / 12).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
-  { id: 'ca-topology', colSpan: 1, collapsed: false },
-  { id: 'ca-ops', colSpan: 2, collapsed: false },
-  { id: 'ca-infra', colSpan: 1, collapsed: false },
-  { id: 'ca-value', colSpan: 3, collapsed: false },
   { id: 'ca-org', colSpan: 2, collapsed: false },
   { id: 'ca-kpis', colSpan: 3, collapsed: false },
 ];
@@ -134,27 +133,31 @@ export default function ClientAdminDashboardPage() {
       {/* Organizational Infrastructure Topology (GET /api/org-topology) —
           separate, complementary view: "what does my org look like and is it
           healthy?". Real registered sites + enrolled collectors only; network
-          links are never inferred. Demo fixtures only behind Demo Mode. */}
-      <DashboardWidget id="ca-topology" title="Infrastructure topology"
-        subtitle="Registered sites & enrolled collectors · ownership links only · click a node for details">
+          links are never inferred. Demo fixtures only behind Demo Mode.
+          Bare widget (same pattern as the attack map): OrgTopologyMap renders
+          its own card + toolbar, so no DashboardWidget chrome is layered on top. */}
+      <div data-widget-id="ca-topology">
         <OrgTopologyMap compact />
-      </DashboardWidget>
+      </div>
 
-      {/* E — Security operations summary with incident drill-down */}
-      <DashboardWidget id="ca-ops" title="Security operations summary" subtitle="Incident triage & drill-down" spanOptions={[2, 3]}>
+      {/* E — Security operations summary with incident drill-down.
+          OpsSummaryTable renders its own card — bare widget, no double layer. */}
+      <div data-widget-id="ca-ops">
         <OpsSummaryTable alerts={alerts} error={alertsError} onRefresh={refreshAlerts} />
-      </DashboardWidget>
+      </div>
 
-      {/* F — Infrastructure / ingestion health */}
-      <DashboardWidget id="ca-infra" title="Ingestion health" subtitle="Collector fleet & last event">
+      {/* F — Infrastructure / ingestion health.
+          InfraHealthCard renders its own card — bare widget, no double layer. */}
+      <div data-widget-id="ca-infra">
         <InfraHealthCard probes={probes} probesError={probesError} lastEventAt={lastEventAt} />
-      </DashboardWidget>
+      </div>
 
       {/* Merged: former "Overview" + "Value & Loyalty" → single Executive Dashboard.
-          Cards untouched; the header period selector drives the dependent view. */}
-      <DashboardWidget id="ca-value" title="Business value — live proof" subtitle="Proof Pack figures for the selected reporting period" spanOptions={[2, 3]}>
+          ValueEngineSection renders its own heading + individual cards — bare
+          widget outside the grid so no outer card duplicates them. */}
+      <div data-widget-id="ca-value">
         <ValueEngineSection key={`value-${period}-${refreshKey}`} orgId={orgNumericId} />
-      </DashboardWidget>
+      </div>
 
       <DashboardWidget id="ca-org" title="Organization" subtitle="Contract & tier context" spanOptions={[1, 2, 3]}>
       <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 -m-2">
