@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { GripVertical, ChevronUp, ChevronDown, Maximize2, Minimize2, RotateCcw, X } from 'lucide-react';
+import { GripVertical, Plus, X, RotateCcw } from 'lucide-react';
 import { isDemoMode } from '../services/demoMode';
 import {
   DndContext,
@@ -11,7 +11,6 @@ import {
 import {
   SortableContext,
   useSortable,
-  arrayMove,
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -228,13 +227,43 @@ export function WidgetLayoutProvider({
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [storageKey, pageKey, layout]);
 
+  // Widget ids declared by the <WidgetGrid> children — scanned once per mount
+  // so the slot board knows which widgets exist even before they render.
+  const declaredIds = React.useMemo(() => collectDeclaredWidgetIds(children), []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <LayoutContext.Provider value={{ layout, setLayout }}>
-      <PageKeyContext.Provider value={pageKey}>
-        <SlotBoard>{children}</SlotBoard>
-      </PageKeyContext.Provider>
-    </LayoutContext.Provider>
+    <PageKeyContext.Provider value={pageKey}>
+      <LayoutContext.Provider value={{ layout, setLayout }}>
+        <SlotBoard declaredIds={declaredIds}>{children}</SlotBoard>
+      </LayoutContext.Provider>
+    </PageKeyContext.Provider>
   );
+}
+
+/** Walk a page tree and gather every DashboardWidget / CatalogEntry id found. */
+function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const push = (id?: string) => {
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  };
+  const walk = (n: React.ReactNode, depth: number) => {
+    if (depth > 6 || n == null) return;
+    React.Children.forEach(n, (child) => {
+      if (!React.isValidElement(child)) return;
+      const t = child.type as unknown;
+      if (t === DashboardWidget || t === CatalogEntryPlaceholder) {
+        push((child.props as { id?: string }).id);
+      } else if (t === CatalogEntry) {
+        // <CatalogEntry id="cat-…"/> wraps a placeholder with the same id.
+        push((child.props as { id?: string }).id);
+      } else if (typeof t !== 'string' && depth < 6) {
+        walk((child.props as { children?: React.ReactNode }).children, depth + 1);
+      }
+    });
+  };
+  walk(node, 0);
+  return ids;
 }
 
 function useLayoutCtx(): LayoutCtx {
@@ -246,21 +275,11 @@ function useLayoutCtx(): LayoutCtx {
 }
 
 /* ------------------------------------------------------------------ */
-/* Draggable / resizable widget card                                   */
+/* Draggable widget card (fixed-size slots)                            */
 /* ------------------------------------------------------------------ */
 
 export const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
 
-/**
- * Responsive width classes — the parent grid adapts its column count to the
- * viewport (see `gridClasses` in <WidgetGrid>):
- *   mobile  → 1 column  (every widget stacks full-width, nothing squeezed)
- *   tablet  → 6 columns (span 1 = ½ row, span 2 = ⅔ row, span 3 = full row)
- *   desktop → 12 columns (span 1 = ¼ row, span 2 = ⅔ row, span 3 = full row)
- * A minimum span of 2/6 keeps widgets wide enough for readable KPIs, charts,
- * tables and maps — no narrow slivers. `min-w-0` lets grid children shrink so
- * wide content scrolls inside the card instead of overflowing it.
- */
 /**
  * Slot system (fixed-size cells): every widget occupies exactly ONE slot and
  * keeps its size at all times — resizing widgets is what used to reflow the
@@ -269,21 +288,6 @@ export const clamp = (n: number, min: number, max: number) => Math.min(max, Math
  *   mobile  → 1 slot per row · tablet → 2 slots per row · desktop → 3 slots/row.
  */
 export const GRID_COLS = 3;
-
-/**
- * Responsive width classes — kept for catalog widgets that still declare a
- * preferred width; in slot mode every widget renders one fixed-size slot.
- */
-const SPAN_CLASSES: Record<number, string> = {
-  1: 'md:col-span-3 lg:col-span-4',
-  2: 'md:col-span-4 lg:col-span-8',
-  3: 'md:col-span-6 lg:col-span-12',
-};
-
-function spanClassFor(colSpan: number) {
-  const n = clamp(Math.round(colSpan), 1, 3);
-  return `${SPAN_CLASSES[n]} min-w-0`;
-}
 
 /* ------------------------------------------------------------------ */
 /* Slot placement — widgets keep their size; only their slot index     */
@@ -379,14 +383,12 @@ function savePlacements(pageKey: string, placements: (string | null)[]) {
 const btn =
   'p-1 rounded-md text-[var(--ic-muted)] hover:text-cyan-400 hover:bg-[var(--ic-surface-2)] transition-colors disabled:hover:text-[var(--ic-muted)]';
 
-/** Presentational card chrome shared by sortable + static fallback modes. */
+/** Presentational card chrome shared by slot mode + static fallback modes. */
 function WidgetCard({
   entry,
-  index,
   title,
   subtitle,
   headerExtra,
-  spanOptions,
   removable,
   className,
   children,
@@ -395,11 +397,9 @@ function WidgetCard({
   isOver,
 }: {
   entry: WidgetLayoutEntry;
-  index: number;
   title: string;
   subtitle?: string;
   headerExtra?: React.ReactNode;
-  spanOptions: number[];
   /** Show an ✕ remove button (catalog widgets added via "Add widget"). */
   removable?: boolean;
   className: string;
@@ -409,10 +409,6 @@ function WidgetCard({
   isOver?: boolean;
 }) {
   const { setLayout } = useLayoutCtx();
-  const layoutLen = useContext(LayoutContext)?.layout.length ?? 0;
-  // Slot mode (SlotGrid board): widgets keep a fixed size and only change
-  // slot position, so the resize / move controls are hidden there.
-  const placement = useContext(BoardContext);
 
   const update = (patch: Partial<WidgetLayoutEntry>) =>
     setLayout((prev) => {
@@ -421,26 +417,13 @@ function WidgetCard({
       return prev.map((w) => (w.id === entry.id ? { ...w, ...patch } : w));
     });
 
-  const move = (dir: -1 | 1) =>
-    setLayout((prev) => {
-      const i = prev.findIndex((w) => w.id === entry.id);
-      if (i === -1) return prev;
-      const j = dir === -1 ? i - 1 : i + 1;
-      if (j < 0 || j >= prev.length) return prev;
-      return arrayMove(prev, i, j);
-    });
-
-  const cycleSize = () => {
-    const opts = spanOptions.filter((s) => s >= 1 && s <= 3);
-    const cur = opts.indexOf(entry.colSpan);
-    update({ colSpan: opts[(cur + 1) % opts.length] ?? opts[0] ?? 1 });
-  };
-
-  const spanClass = placement ? 'min-w-0' : spanClassFor(entry.colSpan);
-
+  // Slot board: every widget lives in one fixed-size slot. Dragging swaps
+  // slots — sizes never change and rows never collapse/reflow. The old
+  // resize / move controls are gone on purpose: they were what made the
+  // grid reflow ("one row fits, everything under it collapses").
   return (
     <div
-      className={`${spanClass} max-w-full overflow-hidden bg-[var(--ic-surface)] border rounded-xl p-4 sm:p-6 transition-shadow duration-150 ${
+      className={`min-w-0 max-w-full h-full flex flex-col overflow-hidden bg-[var(--ic-surface)] border rounded-xl p-4 sm:p-6 transition-shadow duration-150 ${
         isOver
           ? 'border-cyan-400 ring-2 ring-cyan-400/40'
           : isDragging
@@ -449,13 +432,13 @@ function WidgetCard({
       } ${className}`}
     >
       {/* Header row: drag handle + title + controls */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-4 flex-shrink-0">
         <button
           type="button"
           {...(dragHandleProps ?? {})}
           className={`${btn} cursor-grab active:cursor-grabbing touch-none -ml-1 flex-shrink-0 select-none`}
-          title="Drag to reposition this widget"
-          aria-label={`Drag to reorder ${title}`}
+          title="Drag to place this widget in another slot"
+          aria-label={`Drag to move ${title}`}
         >
           <GripVertical className="w-4 h-4 pointer-events-none" />
         </button>
@@ -463,29 +446,10 @@ function WidgetCard({
           <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider truncate">
             {title}
           </h3>
-          {subtitle && <p className="text-[11px] normal-case tracking-normal text-[var(--ic-muted)] mt-0.5">{subtitle}</p>}
+          {subtitle && <p className="text-[11px] normal-case tracking-normal text-[var(--ic-muted)] mt-0.5 truncate">{subtitle}</p>}
         </div>
         {headerExtra}
         <div className="flex items-center gap-0.5 flex-shrink-0">
-          {!placement && (
-            <>
-              <button type="button" className={btn} onClick={() => move(-1)} disabled={index === 0}
-                title="Move earlier" aria-label="Move widget earlier"
-                style={{ opacity: index === 0 ? 0.3 : 1 }}>
-                <ChevronUp className="w-4 h-4" />
-              </button>
-              <button type="button" className={btn} onClick={() => move(1)} disabled={index >= layoutLen - 1}
-                title="Move later" aria-label="Move widget later"
-                style={{ opacity: index >= layoutLen - 1 ? 0.3 : 1 }}>
-                <ChevronDown className="w-4 h-4" />
-              </button>
-              <button type="button" className={btn} onClick={cycleSize}
-                title={`Width: ${entry.colSpan}/3 columns — click to resize`}
-                aria-label="Resize widget">
-                {entry.colSpan > 1 ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
-            </>
-          )}
           <button type="button" className={btn} onClick={() => update({ collapsed: !entry.collapsed })}
             title={entry.collapsed ? 'Expand' : 'Collapse'} aria-label={entry.collapsed ? 'Expand widget' : 'Collapse widget'}>
             <span className="text-xs font-bold px-1">{entry.collapsed ? '+' : '−'}</span>
@@ -504,7 +468,7 @@ function WidgetCard({
       {/* Body — hidden when collapsed. `overflow-x-auto` keeps wide content
           (tables, charts, maps) inside the card: it scrolls within the widget
           instead of overflowing the layout or squashing text. */}
-      {!entry.collapsed && <div className="min-w-0 overflow-x-auto">{children}</div>}
+      {!entry.collapsed && <div className="min-w-0 flex-1 overflow-x-auto">{children}</div>}
 
       {/* Hint shown only while collapsed */}
       {entry.collapsed && (
@@ -546,7 +510,7 @@ export default function DashboardWidget({
     // Rendered outside a WidgetLayoutProvider — degrade to a plain card so the
     // section is still visible in the grid instead of silently disappearing.
     return (
-      <div className={`${spanClassFor(3)} max-w-full overflow-hidden bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 sm:p-6`}>
+      <div className="min-w-0 max-w-full overflow-hidden bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 sm:p-6">
         <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">{title}</h3>
         <div className="min-w-0 overflow-x-auto">{children}</div>
       </div>
@@ -791,14 +755,12 @@ function SlotWidgetCell({ slotIndex, widgetId }: { slotIndex: number; widgetId: 
     : { title: props.title ?? widgetId, subtitle: props.subtitle, spanOptions: props.spanOptions ?? [1], headerExtra: undefined, className: '', children: props.children };
 
   return (
-    <div ref={setNodeRef} style={style} data-slot-index={slotIndex}>
+    <div ref={setNodeRef} style={style} data-slot-index={slotIndex} className="min-w-0">
       <WidgetCard
         entry={entry}
-        index={index === -1 ? ctx.layout.length : index}
         title={cp.title ?? widgetId}
         subtitle={cp.subtitle}
         headerExtra={cp.headerExtra}
-        spanOptions={cp.spanOptions ?? [1]}
         removable={isPlainWidget ? cp.removable ?? widgetId.startsWith('cat-') : true}
         className=""
         dragHandleProps={{ ...attributes, ...listeners }}
