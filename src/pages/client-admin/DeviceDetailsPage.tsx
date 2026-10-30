@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import {
   discoveryApi, agentApi, ApiError,
-  DeviceDetailInfo, DiscoveredDevice, AgentProbeOut, AgentInventoryOut,
+  DeviceActionKind, DeviceActionResult, DeviceDetailInfo, DiscoveredDevice, AgentProbeOut, AgentInventoryOut,
 } from '../../services/api';
 import { demoDevices, demoTenants, type DemoDevice } from '../../data/demoWorld';
 import { isDemoMode } from '../../services/demoMode';
@@ -100,6 +100,24 @@ const DeviceDetailsPage: React.FC = () => {
   const [inventory, setInventory] = useState<AgentInventoryOut | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // ---- response actions modal (kill / isolate / remote screen / stats) ----
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState<DeviceActionKind | null>(null);
+  const [actionResults, setActionResults] = useState<Record<string, DeviceActionResult>>({});
+  const [actionError, setActionError] = useState('');
+
+  const runDeviceAction = useCallback(async (action: DeviceActionKind, reason?: string) => {
+    if (!deviceId) return;
+    setActionBusy(action); setActionError('');
+    try {
+      const numId = Number(decodeURIComponent(deviceId));
+      const res = await discoveryApi.deviceAction(numId, action, reason);
+      setActionResults(prev => ({ ...prev, [action]: res }));
+    } catch (ex: any) {
+      setActionError(ex instanceof ApiError ? ex.message : String(ex?.message ?? ex));
+    } finally { setActionBusy(null); }
+  }, [deviceId]);
 
   const load = useCallback(async () => {
     if (!deviceId) return;
@@ -226,7 +244,16 @@ const DeviceDetailsPage: React.FC = () => {
             <p className="text-gray-400 mt-0.5 text-sm">{view.ip} · {view.location ?? 'site not registered'} · {tenantName(view.orgId)}</p>
           </div>
         </div>
-        <button onClick={load} className="p-2 rounded-lg bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] text-[var(--ic-text)] border border-[var(--ic-border)]"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActionsOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-sm font-semibold border border-red-400/40"
+            title="Response actions for this device: kill switch, network isolation, remote screen, live monitoring statistics"
+          >
+            <ShieldAlert size={15} /> Device Actions
+          </button>
+          <button onClick={load} className="p-2 rounded-lg bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] text-[var(--ic-text)] border border-[var(--ic-border)]"><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></button>
+        </div>
       </div>
 
       {/* Evidence banner — exactly WHY this state is shown */}
@@ -363,9 +390,166 @@ const DeviceDetailsPage: React.FC = () => {
 
       {/* Site link */}
       <div className="text-xs text-gray-400 flex items-center gap-1"><MapPin size={12} /> Trace path: discovery scan → imported to CMDB → collector assignment → alerts correlated by hostname/IP.</div>
+
+      {actionsOpen && (
+        <DeviceActionsModal
+          view={view} collector={collector} inventory={inventory}
+          busy={actionBusy} results={actionResults} error={actionError}
+          onRun={runDeviceAction} onClose={() => setActionsOpen(false)}
+        />
+      )}
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Device Actions modal — every response/operations action for THIS device in
+// one place: kill switch, network isolation (+ restore), smart-screen remote
+// access and live monitoring statistics. Commands go through the backend
+// (POST /discovery/devices/{id}/actions/{action}) which queues them for the
+// enrolled collector; nothing here pretends an action already executed.
+// ---------------------------------------------------------------------------
+const DeviceActionsModal: React.FC<{
+  view: { hostname: string; ip: string; type: string; state: State };
+  collector: AgentProbeOut | null;
+  inventory: AgentInventoryOut | null;
+  busy: DeviceActionKind | null;
+  results: Record<string, DeviceActionResult>;
+  error: string;
+  onRun: (a: DeviceActionKind, reason?: string) => void;
+  onClose: () => void;
+}> = ({ view, collector, inventory, busy, results, error, onRun, onClose }) => {
+  const [tab, setTab] = useState<'response' | 'stats' | 'remote'>('response');
+  const hasCollector = !!collector;
+  const metrics = useDeviceMetrics(collector);
+
+  const destructiveBtn = 'w-full flex items-center gap-3 px-4 py-3 rounded-lg border text-left transition-colors';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-5 border-b border-[var(--ic-border)] sticky top-0 bg-[var(--ic-surface)]">
+          <div>
+            <h3 className="text-lg font-bold text-[var(--ic-heading)] flex items-center gap-2"><ShieldAlert size={18} className="text-red-400" /> Device actions</h3>
+            <p className="text-sm text-gray-400 mt-0.5">{view.hostname} · {view.ip} · <span className={`capitalize ${stateStyle[view.state].split(' ').slice(0, 2).join(' ')}`}>{view.state}</span></p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-[var(--ic-surface-2)] text-gray-400"><X size={18} /></button>
+        </div>
+
+        <div className="px-5 pt-3 flex gap-1 border-b border-[var(--ic-border)]">
+          {([['response', 'Response', ShieldAlert], ['stats', 'Monitoring stats', Activity], ['remote', 'Remote access', Monitor]] as const).map(([id, label, Ic]) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px flex items-center gap-2 ${tab === id ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-gray-400 hover:text-[var(--ic-heading)]'}`}>
+              <Ic size={14} /> {label}
+            </button>
+          ))}
+        </div>
+
+        {!hasCollector && tab !== 'stats' && (
+          <div className="mx-5 mt-4 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-xs text-amber-200">
+            <b>No enrolled collector on this host.</b> Commands are still recorded & audited, but the platform cannot enforce them remotely until a goinfra agent is deployed (<Link className="underline" to="/client-admin/agents">Collection Agents</Link>) or you act at the switch/firewall level.
+          </div>
+        )}
+        {error && <div className="mx-5 mt-4 bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-xs text-red-300">{error}</div>}
+
+        {tab === 'response' && (
+          <div className="p-5 space-y-3">
+            <button disabled={busy === 'kill'} onClick={() => onRun('kill', 'Kill switch requested from device page')}
+              className={`${destructiveBtn} border-red-500/40 bg-red-500/10 hover:bg-red-500/20 ${busy === 'kill' ? 'opacity-60 cursor-wait' : ''}`}>
+              <XCircle size={18} className="text-red-400 shrink-0" />
+              <span className="flex-1"><span className="block font-semibold text-[var(--ic-heading)]">Kill switch</span><span className="block text-xs text-gray-400">Immediately stop all processes and power down the host via its collector.</span></span>
+              {busy === 'kill' && <RefreshCw size={14} className="animate-spin text-red-300" />}
+            </button>
+            <button disabled={busy === 'isolate'} onClick={() => onRun('isolate', 'Network isolation requested from device page')}
+              className={`${destructiveBtn} border-orange-500/40 bg-orange-500/10 hover:bg-orange-500/20 ${busy === 'isolate' ? 'opacity-60 cursor-wait' : ''}`}>
+              <EyeOff size={18} className="text-orange-400 shrink-0" />
+              <span className="flex-1"><span className="block font-semibold text-[var(--ic-heading)]">Isolate from network</span><span className="block text-xs text-gray-400">Block all inbound/outbound traffic except the management channel. Contains active threats without killing the box.</span></span>
+              {busy === 'isolate' && <RefreshCw size={14} className="animate-spin text-orange-300" />}
+            </button>
+            <button disabled={busy === 'unisolate'} onClick={() => onRun('unisolate', 'Isolation release requested from device page')}
+              className={`${destructiveBtn} border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 ${busy === 'unisolate' ? 'opacity-60 cursor-wait' : ''}`}>
+              <CheckCircle size={18} className="text-emerald-400 shrink-0" />
+              <span className="flex-1"><span className="block font-semibold text-[var(--ic-heading)]">Restore connectivity</span><span className="block text-xs text-gray-400">Lift isolation and return the host to normal operation.</span></span>
+              {busy === 'unisolate' && <RefreshCw size={14} className="animate-spin text-emerald-300" />}
+            </button>
+            {(Object.entries(results) as [string, DeviceActionResult][]).map(([k, r]) => (
+              <div key={k} className={`rounded-lg p-3 text-xs border ${r.delivery === 'queued_for_probe' ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-200' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>
+                <b className="capitalize">{r.action.replace('_', ' ')}</b> — {r.delivery === 'queued_for_probe' ? 'queued for collector' : 'no enforcement channel'} · audit recorded. {r.note}
+              </div>
+            ))}
+            <p className="text-[11px] text-gray-500">Every command is tenant-scoped and written to the audit trail (device.&lt;action&gt;). Execution happens on the agent's next policy poll — the UI never claims success before that.</p>
+          </div>
+        )}
+
+        {tab === 'stats' && (
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                ['CPU', inventory?.payload?.cpu?.percent ?? null, '%'],
+                ['Memory', inventory?.payload?.memory?.percent ?? null, '%'],
+                ['Disk (worst)', inventory?.payload?.disks ? Math.max(...inventory.payload.disks.map(d => d.percent ?? 0)) : null, '%'],
+              ].map(([l, v, u]) => (
+                <div key={String(l)} className="bg-[var(--ic-surface-2)] rounded-lg p-3 text-center">
+                  <p className="text-2xl font-bold text-[var(--ic-heading)]">{v == null ? '—' : `${Math.round(Number(v))}${u}`}</p>
+                  <p className="text-xs text-gray-400">{l} (last snapshot)</p>
+                </div>
+              ))}
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-[var(--ic-heading)] mb-2">Live metric stream (last 24 h, real heartbeat samples)</p>
+              {metrics.loading ? <div className="h-28 bg-[var(--ic-surface-2)] animate-pulse rounded-lg" />
+                : metrics.points.length ? (
+                  <svg viewBox="0 0 300 80" className="w-full h-28 bg-[var(--ic-surface-2)] rounded-lg">
+                    <polyline fill="none" stroke="#22d3ee" strokeWidth="1.5"
+                      points={metrics.points.map((p, i) => `${(i / Math.max(1, metrics.points.length - 1)) * 300},${80 - Math.min(80, (p.cpu_percent ?? 0) * 0.8)}`).join(' ')} />
+                  </svg>
+                ) : <p className="text-xs text-gray-400 flex items-center gap-2"><EyeOff size={13} /> No metric samples stored{hasCollector ? ' yet for this collector.' : ' — no collector assigned.'}</p>}
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Link to="/client-admin/statistics/devices" className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)]">Full device statistics page</Link>
+              <Link to={`/client-admin/alerts?q=${encodeURIComponent(view.hostname || view.ip)}`} className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)]">Alert history for this device</Link>
+            </div>
+          </div>
+        )}
+
+        {tab === 'remote' && (
+          <div className="p-5 space-y-3">
+            <button disabled={busy === 'remote_screen'} onClick={() => onRun('remote_screen', 'Smart-screen session requested from device page')}
+              className={`${destructiveBtn} border-cyan-500/40 bg-cyan-500/10 hover:bg-cyan-500/20 ${busy === 'remote_screen' ? 'opacity-60 cursor-wait' : ''}`}>
+              <Monitor size={18} className="text-cyan-400 shrink-0" />
+              <span className="flex-1"><span className="block font-semibold text-[var(--ic-heading)]">Smart screen — request remote view</span><span className="block text-xs text-gray-400">Queues a screenshot / remote-view session on the collector; the operator receives it once the agent answers.</span></span>
+              {busy === 'remote_screen' && <RefreshCw size={14} className="animate-spin text-cyan-300" />}
+            </button>
+            {results.remote_screen && (
+              <div className={`rounded-lg p-3 text-xs border ${results.remote_screen.delivery === 'queued_for_probe' ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-200' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'}`}>{results.remote_screen.note}</div>
+            )}
+            <div className="flex flex-wrap gap-2 text-xs">
+              {collector && <Link to="/client-admin/agents" className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)]">Collector fleet status</Link>}
+              <Link to={`/client-admin/network?q=${encodeURIComponent(view.ip)}`} className="px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)]">Network telemetry for {view.ip}</Link>
+            </div>
+            <p className="text-[11px] text-gray-500">Interactive remote control requires an RDP/SSH gateway integration, which this deployment does not expose — the platform offers collector-backed smart-screen capture only, and says so honestly instead of faking a live desktop.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/** Loads the real metric stream for a matched collector (best-effort). */
+function useDeviceMetrics(collector: AgentProbeOut | null) {
+  const [points, setPoints] = useState<{ cpu_percent: number | null }[]>([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!collector) { setPoints([]); return; }
+    let alive = true;
+    setLoading(true);
+    agentApi.metrics(collector.id, 24)
+      .then(rows => { if (alive) setPoints(rows as any); })
+      .catch(() => { if (alive) setPoints([]); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [collector]);
+  return { points, loading };
+}
 
 const Badge: React.FC<{ ok?: boolean; children: React.ReactNode }> = ({ ok, children }) => (
   <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${ok ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-600/40 text-[var(--ic-text)]'}`}>{children}</span>

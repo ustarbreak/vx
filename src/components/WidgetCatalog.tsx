@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Plus, X, Search as SearchIcon, ShieldCheck, Server, Activity, Users, Building2,
+  Plus as PlusIcon, X as XIcon, Search as SearchIcon, ShieldCheck, Server, Activity, Users, Building2,
   Database, Zap, Wrench, Archive, Gauge, ListChecks, Radar, Inbox, FolderOpen,
 } from 'lucide-react';
 import { AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { CatalogEntryPlaceholder, useOptionalLayoutCtx, widgetStorageKey, type WidgetLayoutEntry } from './DashboardWidget';
+import { CatalogEntryPlaceholder, useOptionalLayoutCtx, widgetStorageKey, PageKeyContext, DefaultLayoutContext, type WidgetLayoutEntry } from './DashboardWidget';
 import {
   mockAlerts, mockRiskScore, mockNISTMapping, mockNetworkDevices, mockPatches, mockBackups,
 } from '../data/mockData';
@@ -826,7 +826,7 @@ export function AddWidgetButton({
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-500/10 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
         title="Add more widgets to this page"
       >
-        <Plus className="w-3.5 h-3.5" /> Add widget
+        <PlusIcon className="w-3.5 h-3.5" /> Add widget
       </button>
 
       {open && <AddWidgetModal onClose={() => setOpen(false)} />}

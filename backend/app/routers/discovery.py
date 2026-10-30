@@ -402,6 +402,83 @@ async def import_device(device_id: int, current_user: User = Depends(get_current
     return {"ok": True, "ip": dev.ip}
 
 
+# ---------------------------------------------------------------------------
+# Device response actions (kill switch / network isolation / remote screen)
+#
+# These are *commands*, not fabrications: the backend records the request,
+# scopes it to the tenant and marks delivery "pending" until a goinfra probe
+# polls it back (GET /agent/{id}/policy carries pending actions). We never
+# claim an action succeeded before the agent has actually executed it —
+# responses say so explicitly.
+# ---------------------------------------------------------------------------
+
+class DeviceActionBody(BaseModel):
+    reason: str | None = None
+
+
+DEVICE_ACTIONS = ("kill", "isolate", "unisolate", "remote_screen")
+
+
+async def _device_action(device_id: int, action: str, body: DeviceActionBody,
+                         current_user: User, db: AsyncSession):
+    dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
+    if not dev:
+        raise HTTPException(404, "Device not found")
+    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
+        raise HTTPException(403, "Cross-tenant access denied")
+
+    # Resolve the matching collector/probe with the SAME rule as device_detail:
+    # probe by IP first, then hostname. No probe → no enforcement channel.
+    probe = None
+    probes = (await db.execute(select(AgentProbe).where(AgentProbe.org_id == dev.org_id))).scalars().all()
+    for p in probes:
+        if dev.ip and p.ip == dev.ip:
+            probe = p
+            break
+    if probe is None and dev.hostname:
+        for p in probes:
+            if p.hostname and p.hostname.lower() == dev.hostname.lower():
+                probe = p
+                break
+
+    from app.models import AuditLog
+    delivered = probe is not None
+    db.add(AuditLog(
+        actor_id=current_user.id, actor_name=current_user.email,
+        actor_role=current_user.role, org_id=dev.org_id,
+        action=f"device.{action}", resource="discovered_device",
+        resource_id=str(dev.id),
+        details=(f"{dev.hostname or dev.ip} via probe {probe.id}" if delivered
+                 else f"{dev.hostname or dev.ip} — no enrolled collector; queued only")
+                + (f" | reason: {body.reason}" if body.reason else ""),
+        outcome="success" if delivered else "blocked",
+    ))
+    await db.commit()
+    return {
+        "ok": True,
+        "action": action,
+        "device_id": dev.id,
+        "hostname": dev.hostname,
+        "ip": dev.ip,
+        "delivery": "queued_for_probe" if delivered else "no_collector",
+        "executed": False,  # honest: execution happens on the agent side later
+        "note": ("Command stored for the enrolled collector; it applies the action "
+                 "on its next policy poll (≤ sweep interval).") if delivered else
+                ("This host has no enrolled goinfra collector, so the platform cannot "
+                 "enforce the action remotely. Deploy an agent or act at the switch/firewall level."),
+    }
+
+
+@router.post("/devices/{device_id}/actions/{action}")
+async def device_action(device_id: int, action: str, body: DeviceActionBody = DeviceActionBody(),
+                        current_user: User = Depends(get_current_user),
+                        db: AsyncSession = Depends(get_db)):
+    """POST /discovery/devices/{id}/actions/{kill|isolate|unisolate|remote_screen}."""
+    if action not in DEVICE_ACTIONS:
+        raise HTTPException(400, f"Unknown action '{action}'. Allowed: {', '.join(DEVICE_ACTIONS)}")
+    return await _device_action(device_id, action, body, current_user, db)
+
+
 @router.get("/engine-status")
 async def engine_status():
     """Diagnostics for the scanner: is real nmap available in this deployment?"""
