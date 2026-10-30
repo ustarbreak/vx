@@ -76,6 +76,15 @@ export const demoTechnicians: DemoTech[] = [
   { name: 'A. Fassi', email: 'a.fassi@valorissystem.ma', role: 'analyst', orgId: 2, skills: 'SIEM / Hunting' },
   { name: 'H. Tazi', email: 'h.tazi@vivalissalaf.ma', role: 'technician', orgId: 3, skills: 'Backup / Storage' },
   { name: 'demo@infracentra.io', email: 'demo@infracentra.io', role: 'client_admin', orgId: 1, skills: '—' },
+  // Client admins referenced by DEMO_ACCOUNTS (login page Quick Demo) and by
+  // the backend seeder (Settings → Seed demo tenant). They must exist here so
+  // demo-mode login resolves them with role client_admin — otherwise they fall
+  // through to resolveDemoUser's generic path or 401 on the real backend, and
+  // users "can't access the client admin account".
+  { name: 'Damanecash Admin', email: 'admin@damanecash.ma', role: 'client_admin', orgId: 1, skills: 'Administration' },
+  { name: 'Damanecash CISO', email: 'ciso@damanecash.ma', role: 'client_admin', orgId: 1, skills: 'Governance / Compliance' },
+  { name: 'Valoris SOC Manager', email: 'soc@valorissystem.ma', role: 'client_admin', orgId: 2, skills: 'SOC / Monitoring' },
+  { name: 'Vivalis Salaf IT Admin', email: 'it@vivalissalaf.ma', role: 'client_admin', orgId: 3, skills: 'IT Administration' },
 ];
 
 // ---- Devices / assets ------------------------------------------------------

@@ -14,6 +14,9 @@ import DashboardWidget, {
 import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
 
 const DEFAULT_LAYOUT: WidgetLayoutEntry[] = [
+  // colSpan is in thirds of the row (1/3, 2/3, full) — see spanClassFor():
+  // desktop uses a 12-track grid (4/8/12), tablet a 6-track grid (3/4/6),
+  // mobile always stacks widgets one per row.
   { id: 'kpi-alerts', colSpan: 1, collapsed: false },
   { id: 'kpi-threats', colSpan: 1, collapsed: false },
   { id: 'kpi-compliance', colSpan: 1, collapsed: false },
@@ -23,6 +26,27 @@ const DEFAULT_LAYOUT: WidgetLayoutEntry[] = [
   { id: 'alert-volume', colSpan: 2, collapsed: false },
   { id: 'threat-trend', colSpan: 1, collapsed: false },
 ];
+
+/** Compact KPI tile rendered inside its own widget card — icon + big number
+ *  side by side so it stays readable at the narrowest (¼-row) width. */
+function KpiTile({
+  icon,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  value: React.ReactNode;
+  tone: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 min-w-0">
+      <span className={`${tone} flex-shrink-0`}>{icon}</span>
+      <p className={`text-2xl sm:text-3xl font-bold text-[var(--ic-heading)] leading-tight truncate ${tone}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
 
 function RiskGauge({ score }: { score: number }) {
   const [animatedScore, setAnimatedScore] = useState(0);
@@ -108,37 +132,31 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Everything is one reorderable, resizable widget grid */}
+        {/* Every main section is an independent, draggable + resizable widget.
+            KPIs, charts and lists are each their own widget — never nested
+            inside one oversized card. */}
         <WidgetGrid>
           <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-6 h-6 text-red-400" />
-              <p className="text-3xl font-bold text-[var(--ic-heading)]">
-                {mockAlerts.filter(a => a.status === 'open').length}
-              </p>
-            </div>
+            <KpiTile icon={<AlertTriangle className="w-6 h-6" />} tone="text-red-400"
+              value={mockAlerts.filter(a => a.status === 'open').length} />
           </DashboardWidget>
           <DashboardWidget id="kpi-threats" title="Active Threats" spanOptions={[1, 2]}>
-            <div className="flex items-center gap-2">
-              <Target className="w-6 h-6 text-orange-400" />
-              <p className="text-3xl font-bold text-[var(--ic-heading)]">{counts.activeThreats}</p>
-            </div>
+            <KpiTile icon={<Target className="w-6 h-6" />} tone="text-orange-400"
+              value={counts.activeThreats} />
           </DashboardWidget>
           <DashboardWidget id="kpi-compliance" title="Compliance" spanOptions={[1, 2]}>
-            <div className="flex items-center gap-2">
-              <Shield className="w-6 h-6 text-green-400" />
-              <p className="text-3xl font-bold text-[var(--ic-heading)]">{mockRiskScore.compliance}%</p>
-            </div>
+            <KpiTile icon={<Shield className="w-6 h-6" />} tone="text-green-400"
+              value={`${mockRiskScore.compliance}%`} />
           </DashboardWidget>
           <DashboardWidget id="kpi-remediated" title="Auto-Remediated" spanOptions={[1, 2]}>
-            <div className="flex items-center gap-2">
-              <Zap className="w-6 h-6 text-cyan-400" />
-              <p className="text-3xl font-bold text-[var(--ic-heading)]">{counts.autoRemediated}</p>
-            </div>
+            <KpiTile icon={<Zap className="w-6 h-6" />} tone="text-cyan-400"
+              value={counts.autoRemediated} />
           </DashboardWidget>
 
           <DashboardWidget id="risk-gauge" title="Predictive Risk Score">
-            <RiskGauge score={mockRiskScore.overall} />
+            <div className="flex justify-center min-w-0 overflow-x-auto">
+              <RiskGauge score={mockRiskScore.overall} />
+            </div>
           </DashboardWidget>
 
           <DashboardWidget id="recent-alerts" title="Recent Security Alerts" spanOptions={[2, 3]}>

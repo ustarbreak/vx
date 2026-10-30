@@ -212,7 +212,11 @@ export const demoUsers: User[] = [
     id: `usr-org-${t.orgId}-${i}`,
     email: t.email,
     name: t.name,
-    role: (t.role === 'client_admin' ? 'client_admin' : t.role === 'analyst' || t.role === 'service-desk' ? 'client_user' : 'client_user') as User['role'],
+    // NOTE: the ternary MUST stay fully parenthesized. Written unparenthesized
+    // (`a ? b : c === d ? e : f`) JS binds `===` before the outer ternary, so
+    // every technician resolved to 'client_user' — client admins like
+    // admin@damanecash.ma were demoted and /client-admin/* access broke.
+    role: (t.role === 'client_admin' ? 'client_admin' : (t.role === 'analyst' || t.role === 'service-desk') ? 'client_user' : 'client_user') as User['role'],
     orgId: `org-dw-${t.orgId}`,
     status: 'active' as const,
     lastLogin: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
