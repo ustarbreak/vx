@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import Layout from './components/Layout';
@@ -120,6 +120,12 @@ function FullAccessRedirect() {
   return <Navigate to={to} replace />;
 }
 
+// Legacy link /platform/organizations/:id -> new tenant detail route /admin/tenants/:id
+function TenantDetailRedirect() {
+  const { orgId } = useParams();
+  return <Navigate to={`/admin/tenants/${orgId ?? ''}`} replace />;
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -216,9 +222,7 @@ function AppRoutes() {
         <Route path="client-admin/statistics/network" element={<NetworkStatistics />} />
         <Route path="client-admin/statistics/devices" element={<DeviceStatistics />} />
         <Route path="client-admin/statistics/performance" element={<PerformanceStatistics />} />
-        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetailsPage />} />
-        <Route path="client-admin/tickets" element={<Navigate to="/client-admin/advanced-tickets" replace />} />
-        
+        <Route path="client-admin/infrastructure/device/:deviceId" element={<DeviceDetailsPage />} />        
         {/* Service-specific pages */}
         <Route path="client-admin/email-security" element={<EmailSecurityPage />} />
         <Route path="client-admin/email-security/:alertId" element={<EmailSecurityPage />} />
@@ -253,6 +257,13 @@ function AppRoutes() {
         <Route path="client-admin/custom-playbooks" element={<Navigate to="/client-admin/playbooks" replace />} />
         <Route path="client-admin/value-and-loyalty" element={<Navigate to="/client-admin/dashboard" replace />} />
         <Route path="client-admin/overview" element={<Navigate to="/client-admin/dashboard" replace />} />
+        {/* Dead links found in AlertsPage / DeviceDetailsPage / IncidentsPage */}
+        <Route path="client-admin/incidents" element={<Navigate to="/incidents" replace />} />
+        <Route path="client-admin/incidents/:incidentUid" element={<Navigate to="/incidents" replace />} />
+        <Route path="client-admin/network" element={<Navigate to="/network" replace />} />
+        <Route path="advanced-ticketing" element={<Navigate to="/client-admin/advanced-tickets" replace />} />
+        <Route path="platform/organizations" element={<Navigate to="/admin/clients" replace />} />
+        <Route path="platform/organizations/:orgId" element={<TenantDetailRedirect />} />
         <Route path="client-admin/compliance-reports" element={<ComplianceReports />} />
         <Route path="reports" element={<ReportsPage />} />
 

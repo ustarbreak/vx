@@ -18,6 +18,7 @@ import {
   demoPlatformAudit,
 } from '../data/demoWorld';
 import { demoProjects } from '../data/demoProjects';
+import { SERVICE_DEPENDENCY_RULES } from '../data/serviceDependencies';
 import { partners, partnerProgramStats } from '../data/partnerWorld';
 import { demoRulesSeed, type DemoRule } from '../data/demoWorld';
 // Demo-only IoC enrichment fixtures for the Threat Intel pages. These are
@@ -2657,6 +2658,36 @@ export const demoStore = {
       }
     }
 
+
+    // ---- Dashboard widget layout (Demo Mode mirror of /api/dashboard/layout) ----
+    // Persisted in localStorage under the same keys the widget system uses, so
+    // Demo Mode customizations survive reloads without a backend.
+    if (root === 'dashboard' && parts[1] === 'layout' && parts[2]) {
+      const pageKey = decodeURIComponent(parts[2]);
+      // Same key shape as widgetStorageKey() in DashboardWidget.tsx (session id/email scope).
+      const lsKey = `ic-widget-layout:${pageKey}:${demoSession().email ?? demoSession().orgId ?? 'anon'}`;
+      const readLs = (): any[] => {
+        try {
+          const raw = localStorage.getItem(lsKey);
+          const parsed = raw ? JSON.parse(raw) : null;
+          return Array.isArray(parsed) ? parsed : [];
+        } catch { return []; }
+      };
+      if (method === 'GET') {
+        const layout = readLs();
+        if (!layout.length) throw httpErr(404, 'No saved layout for this page yet');
+        return delay({ page_key: pageKey, layout, updated_at: iso(0) } as any) as unknown as T;
+      }
+      if (method === 'PUT') {
+        const layout = Array.isArray(b?.layout) ? b.layout : [];
+        try { localStorage.setItem(lsKey, JSON.stringify(layout)); } catch { /* ignore */ }
+        return delay({ page_key: pageKey, layout, updated_at: iso(0) } as any) as unknown as T;
+      }
+      if (method === 'DELETE') {
+        try { localStorage.removeItem(lsKey); } catch { /* ignore */ }
+        return undefined as unknown as T;
+      }
+    }
 
     throw httpErr(404, `Demo mode: no simulated handler for ${method} /api${path}`);
   },

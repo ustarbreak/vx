@@ -1177,3 +1177,25 @@ class PlaybookRun(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class DashboardLayout(Base):
+    """Persisted per-user dashboard widget arrangement (order / size / collapse).
+
+    One row per (user, page_key); `layout` holds the JSON array of
+    {id, colSpan, collapsed} entries produced by the frontend WidgetLayoutProvider.
+    Tenant scoping is enforced through the owning user's org_id.
+    """
+    __tablename__ = "dashboard_layouts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    page_key = Column(String(64), nullable=False, index=True)
+    layout = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "page_key", name="uq_dashboard_layout_user_page"),
+    )

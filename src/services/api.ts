@@ -1260,3 +1260,28 @@ export const orgTopologyApi = {
   get: (opts: { orgId?: number } = {}) =>
     api.get<OrgTopologyPayload>(`/org-topology${opts.orgId ? `?org_id=${opts.orgId}` : ''}`),
 };
+
+// ---------------------------------------------------------------------------
+// Dashboard widget layout persistence — mirror of backend/app/routers/
+// dashboard_layout.py. Per-user, per-page arrangement (order / width /
+// collapse) for every customizable page (Overview & Live Proof, network…).
+// Demo Mode: answered locally by demoMode.ts through localStorage.
+// ---------------------------------------------------------------------------
+export interface WidgetLayoutEntryDto {
+  id: string;
+  colSpan: number;
+  collapsed: boolean;
+}
+export interface DashboardLayoutOut {
+  page_key: string;
+  layout: WidgetLayoutEntryDto[];
+  updated_at?: string | null;
+}
+
+export const dashboardLayoutApi = {
+  /** 404 when the user never customized this page → caller falls back to defaults. */
+  get: (pageKey: string) => api.get<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`),
+  put: (pageKey: string, layout: WidgetLayoutEntryDto[]) =>
+    api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout }),
+  del: (pageKey: string) => api.del<void>(`/dashboard/layout/${pageKey}`),
+};

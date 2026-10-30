@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../../src/context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
 import { Building2, Users, Shield, TrendingUp, CheckCircle2, RefreshCw } from 'lucide-react';
 import ValueEngineSection from '../../components/ValueEngineWidgets';
 import WorldAttackMap from '../../components/WorldAttackMap';
@@ -84,14 +84,16 @@ export default function ClientAdminDashboardPage() {
   };
 
   return (
+    <WidgetLayoutProvider pageKey="client-admin-dashboard" defaultLayout={CA_DASH_LAYOUT}>
     <div className="p-4 lg:p-6 space-y-6">
-      {/* A — Header with tenant context + site/period filters + quick actions */}
+      {/* A — Header with tenant context + site/period filters + quick actions + widget builder */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Client Administration — Overview</h1>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Client Administration — Overview & Live Proof</h1>
           <p className="text-[var(--ic-muted)] text-sm mt-1">Your posture, your team and the business value delivered this month — one page.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <CustomizeHint />
           <label className="text-xs text-[var(--ic-muted)]" htmlFor="dash-period">Reporting period</label>
           <select id="dash-period" value={periodIdx} onChange={(e) => setPeriodIdx(Number(e.target.value))}
             className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg px-3 py-1.5 text-xs text-[var(--ic-text)] focus:outline-none focus:border-cyan-500/60">
@@ -105,48 +107,56 @@ export default function ClientAdminDashboardPage() {
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh data
           </button>
+          <AddWidgetButton pageKey="client-admin-dashboard" defaultLayout={CA_DASH_LAYOUT} />
+          <ResetLayoutButton pageKey="client-admin-dashboard" defaultLayout={CA_DASH_LAYOUT} />
         </div>
       </div>
 
+      {/* Everything below is a customizable widget grid: drag ⠿ to reorder,
+          resize between 1–3 columns, collapse, and add catalog widgets via "+ Add widget". */}
+      <WidgetGrid>
       {/* D — Global security posture strip (real backend values, drill-downs) */}
-      <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
+      <DashboardWidget id="ca-posture" title="Security posture" subtitle="Live KPIs across your estate" spanOptions={[2, 3]}>
+        <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
+      </DashboardWidget>
 
       {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode) */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-widest">Worldwide attack map</h2>
-          <span className="text-[11px] text-[var(--ic-muted)]">Observed events · approximate geolocation · click an event to open the incident</span>
-        </div>
+      <DashboardWidget id="ca-attackmap" title="Worldwide attack map"
+        subtitle="Observed events · approximate geolocation · click an event to open the incident" spanOptions={[2, 3]}>
         <WorldAttackMap
           key={`${period}-${refreshKey}`}
           filters={mapWindow(PERIOD_PRESETS[periodIdx].months)}
           onSelectEvent={(e) => nav(`/client-admin/alerts/${e.id}`)}
         />
-      </section>
+      </DashboardWidget>
 
       {/* Organizational Infrastructure Topology (GET /api/org-topology) —
           separate, complementary view: "what does my org look like and is it
           healthy?". Real registered sites + enrolled collectors only; network
           links are never inferred. Demo fixtures only behind Demo Mode. */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-widest">Organizational infrastructure topology</h2>
-          <span className="text-[11px] text-[var(--ic-muted)]">Registered sites &amp; enrolled collectors · ownership links only · click a node for details</span>
-        </div>
+      <DashboardWidget id="ca-topology" title="Infrastructure topology"
+        subtitle="Registered sites & enrolled collectors · ownership links only · click a node for details">
         <OrgTopologyMap compact />
-      </section>
+      </DashboardWidget>
 
       {/* E — Security operations summary with incident drill-down */}
-      <OpsSummaryTable alerts={alerts} error={alertsError} onRefresh={refreshAlerts} />
+      <DashboardWidget id="ca-ops" title="Security operations summary" subtitle="Incident triage & drill-down" spanOptions={[2, 3]}>
+        <OpsSummaryTable alerts={alerts} error={alertsError} onRefresh={refreshAlerts} />
+      </DashboardWidget>
 
       {/* F — Infrastructure / ingestion health */}
-      <InfraHealthCard probes={probes} probesError={probesError} lastEventAt={lastEventAt} />
+      <DashboardWidget id="ca-infra" title="Ingestion health" subtitle="Collector fleet & last event">
+        <InfraHealthCard probes={probes} probesError={probesError} lastEventAt={lastEventAt} />
+      </DashboardWidget>
 
       {/* Merged: former "Overview" + "Value & Loyalty" → single Executive Dashboard.
           Cards untouched; the header period selector drives the dependent view. */}
-      <ValueEngineSection key={`value-${period}-${refreshKey}`} orgId={orgNumericId} />
+      <DashboardWidget id="ca-value" title="Business value — live proof" subtitle="Proof Pack figures for the selected reporting period" spanOptions={[2, 3]}>
+        <ValueEngineSection key={`value-${period}-${refreshKey}`} orgId={orgNumericId} />
+      </DashboardWidget>
 
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
+      <DashboardWidget id="ca-org" title="Organization" subtitle="Contract & tier context" spanOptions={[1, 2, 3]}>
+      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 -m-2">
         <div className="flex items-start gap-4">
           <div className={`w-14 h-14 rounded-xl flex items-center justify-center ${
             organization.tier === 'enterprise' ? 'bg-amber-500/10 text-amber-400' :
@@ -168,7 +178,9 @@ export default function ClientAdminDashboardPage() {
           </div>
         </div>
       </div>
+      </DashboardWidget>
 
+      <DashboardWidget id="ca-kpis" title="Key indicators" subtitle="Services · team · risk · compliance" spanOptions={[2, 3]}>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -206,6 +218,13 @@ export default function ClientAdminDashboardPage() {
           <p className="text-xs text-[var(--ic-muted)] mt-1">NIST CSF 2.0</p>
         </div>
       </div>
+      </DashboardWidget>
+
+      {/* User-added catalog widgets ("+ Add widget") render here as removable,
+          draggable cards — same grid, persisted like everything else. */}
+      {AllCatalogEntries()}
+      </WidgetGrid>
     </div>
+    </WidgetLayoutProvider>
   );
 }
