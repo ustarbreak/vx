@@ -692,7 +692,8 @@ export function AddWidgetButton({
     const def = catalogById.get(id);
     if (!def) return;
     if (ctx) {
-      ctx.setLayout((prev) => [...prev, { id, colSpan: 1, collapsed: false }]);
+      // Respect the widget's preferred default width from the catalog.
+      ctx.setLayout((prev) => [...prev, { id, colSpan: def.spanOptions?.[0] ?? 1, collapsed: false }]);
     } else {
       // No provider on this page — persist directly so the widget appears next load.
       const saved = readSavedIds(pageKey);

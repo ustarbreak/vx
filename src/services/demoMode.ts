@@ -18,6 +18,7 @@ import {
   demoPlatformAudit,
 } from '../data/demoWorld';
 import { demoProjects } from '../data/demoProjects';
+import { SERVICE_DEPENDENCY_RULES } from '../data/serviceDependencies';
 import { partners, partnerProgramStats } from '../data/partnerWorld';
 import { demoRulesSeed, type DemoRule } from '../data/demoWorld';
 // Demo-only IoC enrichment fixtures for the Threat Intel pages. These are
