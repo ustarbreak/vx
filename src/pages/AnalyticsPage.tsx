@@ -5,10 +5,18 @@ import {
   BarChart, Bar, CartesianGrid, Cell, Legend,
 } from 'recharts';
 import {
-  AlertTriangle, RefreshCw, Shield, Target, Timer, Activity, Server, Database, Info,
+  AlertTriangle, RefreshCw, Shield, Target, Timer, Activity, Database, Info,
 } from 'lucide-react';
 import ServiceGate from '../components/ServiceGate';
 import { RelationshipGraph, type RGNode, type RGEdge } from '../components/RelationshipGraph';
+import DashboardWidget, {
+  WidgetLayoutProvider,
+  WidgetGrid,
+  ResetLayoutButton,
+  CustomizeHint,
+  type WidgetLayoutEntry,
+} from '../components/DashboardWidget';
+import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
 import { isDemoMode } from '../services/demoMode';
 import { fetchIndicatorMatches, type IndicatorMatch } from '../services/threatIntel';
 import { alertsApi, type AlertRow } from '../services/api';
@@ -16,6 +24,14 @@ import {
   fetchAnalyticsOverview, RANGE_PRESETS, windowForPreset, fmtMinutes,
   AnalyticsOverview,
 } from '../services/analyticsApi';
+
+const ANALYTICS_LAYOUT: WidgetLayoutEntry[] = [
+  { id: 'an-kpis', colSpan: 3, collapsed: false },
+  { id: 'an-trend', colSpan: 2, collapsed: false },
+  { id: 'an-severity', colSpan: 1, collapsed: false },
+  { id: 'an-categories', colSpan: 1, collapsed: false },
+  { id: 'an-assets', colSpan: 2, collapsed: false },
+];
 
 const SEV_COLORS: Record<string, string> = {
   critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#3b82f6', info: '#64748b',
@@ -167,6 +183,7 @@ function AnalyticsContent() {
   const empty = status === 'ok' && data && data.events.total === 0 && data.detections.total === 0;
 
   return (
+    <WidgetLayoutProvider pageKey="analytics" defaultLayout={ANALYTICS_LAYOUT}>
     <div className="p-4 lg:p-6 space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -194,6 +211,9 @@ function AnalyticsContent() {
             className="p-1.5 rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface)] text-[var(--ic-muted)] hover:text-cyan-300">
             <RefreshCw className={`w-4 h-4 ${status === 'loading' ? 'animate-spin' : ''}`} />
           </button>
+          <CustomizeHint />
+          <AddWidgetButton pageKey="analytics" defaultLayout={ANALYTICS_LAYOUT} />
+          <ResetLayoutButton pageKey="analytics" defaultLayout={ANALYTICS_LAYOUT} />
         </div>
       </div>
 
@@ -247,8 +267,10 @@ function AnalyticsContent() {
 
       {data && status === 'ok' && !empty && (
         <>
-          {/* KPI row — every number traced to /api/analytics/overview fields */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Everything below is one reorderable/resizable widget grid */}
+          <WidgetGrid>
+          <DashboardWidget id="an-kpis" title="Key Metrics" spanOptions={[1, 2, 3]} subtitle="Every number traced to /api/analytics/overview fields">
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
             <KpiCard icon={<Activity className="w-4 h-4 text-cyan-400" />} label="Events (stored alert rows)"
               value={String(data.events.total)}
               sub={`${data.events.raw_events_weighted} raw incl. correlated duplicates (not counted as separate events)`} />
@@ -262,12 +284,11 @@ function AnalyticsContent() {
               value={fmtMinutes(data.detections.mttr_minutes)} tone={data.detections.mttr_minutes == null ? 'text-[var(--ic-muted)]' : 'text-[var(--ic-heading)]'}
               sub="mean created→resolved over resolved/closed incidents" />
           </div>
+          </DashboardWidget>
 
           {/* Trend + severity distribution */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-              <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-1">Historical trend (UTC)</h3>
-              <p className="text-[10px] text-[var(--ic-muted)] mb-4">Events = stored alert rows · Detections = deduped incidents — two compatible series, never summed together.</p>
+          <DashboardWidget id="an-trend" title="Historical trend (UTC)" spanOptions={[1, 2, 3]}
+            subtitle="Events = stored alert rows · Detections = deduped incidents — two compatible series, never summed together.">
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={trendData}>
                   <defs>
@@ -283,11 +304,10 @@ function AnalyticsContent() {
                   <Area type="monotone" dataKey="detections" name="Detections" stroke="#a855f7" fill="url(#detGrad)" strokeWidth={2} />
                 </AreaChart>
               </ResponsiveContainer>
-            </div>
+          </DashboardWidget>
 
-            <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-              <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-1">Severity distribution</h3>
-              <p className="text-[10px] text-[var(--ic-muted)] mb-4">Event rows by severity within the selected window.</p>
+          <DashboardWidget id="an-severity" title="Severity distribution" spanOptions={[1, 2, 3]}
+            subtitle="Event rows by severity within the selected window.">
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={sevBars} layout="vertical" margin={{ left: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
@@ -311,17 +331,11 @@ function AnalyticsContent() {
                 ))}
                 {sevSel && <button onClick={() => setSevSel(null)} className="text-cyan-400 underline">clear filter</button>}
               </div>
-            </div>
-          </div>
-
-          {/* §6C — Correlation Explorer over persisted, backend-linked records */}
-          <CorrelationExplorer sevFilter={sevSel} />
+          </DashboardWidget>
 
           {/* Detection categories + affected assets drill-down */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-              <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-1">Detection categories</h3>
-              <p className="text-[10px] text-[var(--ic-muted)] mb-4">Incident records grouped by category (deduped detections).</p>
+          <DashboardWidget id="an-categories" title="Detection categories" spanOptions={[1, 2, 3]}
+            subtitle="Incident records grouped by category (deduped detections).">
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={catBars}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
@@ -331,13 +345,10 @@ function AnalyticsContent() {
                   <Bar dataKey="n" name="Detections" fill="#a855f7" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+          </DashboardWidget>
 
-            <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-              <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-1 flex items-center gap-2">
-                <Server className="w-4 h-4 text-cyan-400" /> Affected assets (top {data.top_assets.length || '—'})
-              </h3>
-              <p className="text-[10px] text-[var(--ic-muted)] mb-3">By event volume in window. Links drill into the monitoring inventory and IR board.</p>
+          <DashboardWidget id="an-assets" title={`Affected assets (top ${data.top_assets.length || '—'})`} spanOptions={[1, 2, 3]}
+            subtitle="By event volume in window. Links drill into the monitoring inventory and IR board.">
               {data.top_assets.length === 0 ? (
                 <p className="text-xs text-[var(--ic-muted)] py-6 text-center">No asset-attributed events in this window.</p>
               ) : (
@@ -356,8 +367,14 @@ function AnalyticsContent() {
                   ))}
                 </ul>
               )}
-            </div>
-          </div>
+          </DashboardWidget>
+
+          {/* Catalog widgets the user added via “Add widget” render here */}
+          {AllCatalogEntries()}
+          </WidgetGrid>
+
+          {/* §6C — Correlation Explorer over persisted, backend-linked records */}
+          <CorrelationExplorer sevFilter={sevSel} />
 
           <p className="text-[10px] text-[var(--ic-muted)]">
             Metric definitions: events = Alert rows scoped to this organization; detections = Incident rows (deduplicated lifecycle records);
@@ -367,6 +384,7 @@ function AnalyticsContent() {
         </>
       )}
     </div>
+    </WidgetLayoutProvider>
   );
 }
 

@@ -4,11 +4,107 @@ from sqlalchemy import select
 from typing import List
 from datetime import datetime
 from app.database import get_db
-from app.models import Entitlement, Organization, User, AuditLog
+from app.models import Entitlement, Organization, User, AuditLog, TenantServiceGrant
 from app.schemas import EntitlementCreate, EntitlementUpdate, EntitlementResponse
 from app.core.security import get_current_user, require_role
 
 router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
+
+
+@router.get("/graph")
+async def get_service_graph(
+    org_id: int = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Service dependency graph built ONLY from persisted entitlement rows.
+
+    Client users see their own org's graph; platform admins may pass org_id.
+    Nodes = Entitlement/TenantServiceGrant records; edges = declared rules
+    rendered only when both endpoints exist; unprovisioned upstreams are
+    surfaced honestly in `missing_dependencies` (never hidden, never faked).
+    """
+    from app.services.service_graph import build_service_graph
+
+    if current_user.role == "platform_admin":
+        target_org = org_id or current_user.org_id
+        if not target_org:
+            raise HTTPException(status_code=400, detail="org_id required for platform admins without an organization")
+    else:
+        if org_id and org_id != current_user.org_id:
+            raise HTTPException(status_code=403, detail="Cannot read another organization's graph")
+        target_org = current_user.org_id
+
+    graph = await build_service_graph(db, target_org)
+    if graph.get("error") == "organization_not_found":
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return graph
+
+
+@router.get("/chain/{service_id}")
+async def get_service_chain(
+    service_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Full link-chain for one service: every transitive upstream requirement
+    (with provisioned/missing flag) and every downstream service impacted by
+    it — computed on the tenant's real entitlement rows."""
+    from app.services.service_graph import SERVICE_DEPENDENCY_RULES
+
+    org_id = current_user.org_id
+    if current_user.role == "platform_admin" and not org_id:
+        raise HTTPException(status_code=400, detail="Platform admin must query via /graph?org_id=")
+
+    rows = (await db.execute(
+        select(Entitlement).where(Entitlement.org_id == org_id)
+    )).scalars().all()
+    grants = (await db.execute(
+        select(TenantServiceGrant).where(TenantServiceGrant.org_id == org_id)
+    )).scalars().all()
+    present = {e.service_id for e in rows} | {g.service_id for g in grants}
+
+    upstream_rules = [r for r in SERVICE_DEPENDENCY_RULES if r["service"] == service_id]
+
+    def walk_up(sid: str, visited: set) -> list:
+        chain = []
+        for r in SERVICE_DEPENDENCY_RULES:
+            if r["service"] == sid and r["requires"] not in visited:
+                visited.add(r["requires"])
+                sub = walk_up(r["requires"], visited) if r["requires"] in present else []
+                chain.append({
+                    "requires": r["requires"],
+                    "rationale": r["rationale"],
+                    "provisioned": r["requires"] in present,
+                    "depth": 1 + (max([s["depth"] for s in sub], default=0)),
+                    "sub_chain": sub,
+                })
+        return chain
+
+    def walk_down(sid: str, visited: set) -> list:
+        out = []
+        for r in SERVICE_DEPENDENCY_RULES:
+            if r["requires"] == sid and r["service"] not in visited:
+                visited.add(r["service"])
+                out.append({
+                    "impacts": r["service"],
+                    "rationale": r["rationale"],
+                    "provisioned": r["service"] in present,
+                    "sub_chain": walk_down(r["service"], visited),
+                })
+        return out
+
+    missing = [u["requires"] for u in walk_up(service_id, set()) if not u["provisioned"]]
+    return {
+        "service_id": service_id,
+        "entitled": service_id in present,
+        "direct_requires": upstream_rules and [{"requires": r["requires"], "rationale": r["rationale"],
+                                                "provisioned": r["requires"] in present}
+                                               for r in upstream_rules] or [],
+        "upstream_chain": walk_up(service_id, set()),
+        "downstream_impact": walk_down(service_id, set()),
+        "unprovisioned_requirements": sorted(set(missing)),
+    }
 
 
 @router.get("/", response_model=List[EntitlementResponse])

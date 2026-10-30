@@ -269,7 +269,43 @@ export const entitlementsApi = {
     api.get<BackendEntitlement[]>(`/entitlements/${orgId ? `?org_id=${orgId}` : ''}`),
   check: (serviceId: string) =>
     api.get<{ entitled: boolean; service_id: string }>(`/entitlements/check/${serviceId}`),
+  /** Backend-computed dependency graph (nodes = persisted entitlement rows). */
+  graph: (orgId?: number) =>
+    api.get<ServiceGraph>(`/entitlements/graph${orgId ? `?org_id=${orgId}` : ''}`),
+  /** Full link-chain for one service: transitive upstream + downstream impact. */
+  chain: (serviceId: string) =>
+    api.get<ServiceChain>(`/entitlements/chain/${encodeURIComponent(serviceId)}`),
 };
+
+export interface ServiceGraphNode {
+  id: string; label: string; category: string; status: 'enabled' | 'disabled';
+  seat_count: number; in_plan: boolean; override: boolean;
+  grant_enabled: boolean | null; activated_at: string | null;
+}
+export interface ServiceGraphEdge {
+  from: string; to: string; kind: string; provisioned: boolean;
+  upstream_status?: string; upstream_label?: string; rationale: string;
+}
+export interface ServiceGraph {
+  org: { id: number; name: string; plan: string; trial: boolean };
+  nodes: ServiceGraphNode[];
+  edges: ServiceGraphEdge[];
+  missing_dependencies: ServiceGraphEdge[];
+  downstream_index: Record<string, string[]>;
+  counts: { services_total: number; services_enabled: number; edges_shown: number; missing_dependencies: number };
+  disclaimer: string;
+}
+export interface ServiceChainNode {
+  requires?: string; impacts?: string; rationale: string;
+  provisioned: boolean; depth?: number; sub_chain: any[];
+}
+export interface ServiceChain {
+  service_id: string; entitled: boolean;
+  direct_requires: { requires: string; rationale: string; provisioned: boolean }[];
+  upstream_chain: ServiceChainNode[];
+  downstream_impact: ServiceChainNode[];
+  unprovisioned_requirements: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Users directory (mirrors backend/app/routers/users.py — GET /api/users/)
