@@ -19,7 +19,6 @@ import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts }
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
   // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 6 / 12).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
-  { id: 'ca-attackmap', colSpan: 2, collapsed: false },
   { id: 'ca-topology', colSpan: 1, collapsed: false },
   { id: 'ca-ops', colSpan: 2, collapsed: false },
   { id: 'ca-infra', colSpan: 1, collapsed: false },
@@ -113,22 +112,23 @@ export default function ClientAdminDashboardPage() {
         </div>
       </div>
 
+      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode).
+          Bare widget, declared OUTSIDE the slot grid: WorldAttackMap renders its own card +
+          header ("Worldwide Threat Map"), so no DashboardWidget chrome is layered on top of it. */}
+      <div data-widget-id="ca-attackmap">
+        <WorldAttackMap
+          key={`${period}-${refreshKey}`}
+          filters={mapWindow(PERIOD_PRESETS[periodIdx].months)}
+          onSelectEvent={(e) => nav(`/client-admin/alerts/${e.id}`)}
+        />
+      </div>
+
       {/* Everything below is a customizable widget grid: drag ⠿ to reorder,
           resize between 1–3 columns, collapse, and add catalog widgets via "+ Add widget". */}
       <WidgetGrid>
       {/* D — Global security posture strip (real backend values, drill-downs) */}
       <DashboardWidget id="ca-posture" title="Security posture" subtitle="Live KPIs across your estate" spanOptions={[2, 3]}>
         <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
-      </DashboardWidget>
-
-      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode) */}
-      <DashboardWidget id="ca-attackmap" title="Worldwide attack map"
-        subtitle="Observed events · approximate geolocation · click an event to open the incident" spanOptions={[2, 3]}>
-        <WorldAttackMap
-          key={`${period}-${refreshKey}`}
-          filters={mapWindow(PERIOD_PRESETS[periodIdx].months)}
-          onSelectEvent={(e) => nav(`/client-admin/alerts/${e.id}`)}
-        />
       </DashboardWidget>
 
       {/* Organizational Infrastructure Topology (GET /api/org-topology) —
