@@ -1275,13 +1275,17 @@ export interface WidgetLayoutEntryDto {
 export interface DashboardLayoutOut {
   page_key: string;
   layout: WidgetLayoutEntryDto[];
+  /** Catalogue widget ids the user explicitly added (survives re-login). */
+  added_catalog?: string[];
+  /** Free-flow visual order of widget ids on the page. */
+  order?: string[];
   updated_at?: string | null;
 }
 
 export const dashboardLayoutApi = {
   /** 404 when the user never customized this page → caller falls back to defaults. */
   get: (pageKey: string) => api.get<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`),
-  put: (pageKey: string, layout: WidgetLayoutEntryDto[]) =>
-    api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout }),
+  put: (pageKey: string, layout: WidgetLayoutEntryDto[], addedCatalog?: string[], order?: string[]) =>
+    api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout, added_catalog: addedCatalog ?? [], order: order ?? [] }),
   del: (pageKey: string) => api.del<void>(`/dashboard/layout/${pageKey}`),
 };

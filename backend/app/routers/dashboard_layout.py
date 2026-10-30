@@ -34,16 +34,40 @@ class LayoutEntry(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     colSpan: int = Field(default=1, ge=1, le=3)
     collapsed: bool = False
+    # Free pixel height set by edge-resizing the widget (optional).
+    heightPx: int | None = Field(default=None, ge=80, le=4000)
 
 
 class LayoutPut(BaseModel):
     layout: list[LayoutEntry] = Field(max_length=MAX_WIDGETS)
+    # Catalogue (`cat-*`) widget ids the user explicitly added on this page.
+    added_catalog: list[str] = Field(default_factory=list, max_length=MAX_WIDGETS)
+    # Free-flow visual order of widget ids (drag & drop arrangement).
+    order: list[str] = Field(default_factory=list, max_length=MAX_WIDGETS * 2)
 
 
 def _check_page_key(page_key: str) -> None:
     if not PAGE_KEY_RE.match(page_key):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             f"Invalid page key '{page_key}'")
+
+
+def _normalize_doc(stored) -> dict:
+    """Return the response shape for a stored layout document.
+
+    New rows store an envelope object {layout, added_catalog, order}; legacy
+    rows stored a bare list of entries — both are accepted here so no data
+    migration is required.
+    """
+    if isinstance(stored, list):
+        return {"layout": stored, "added_catalog": [], "order": []}
+    if isinstance(stored, dict):
+        return {
+            "layout": stored.get("layout") or [],
+            "added_catalog": stored.get("added_catalog") or [],
+            "order": stored.get("order") or [],
+        }
+    return {"layout": [], "added_catalog": [], "order": []}
 
 
 async def _get_row(db: AsyncSession, user: User, page_key: str) -> DashboardLayout | None:
@@ -69,7 +93,7 @@ async def get_dashboard_layout(
         # Honest "never saved yet" state — the frontend falls back to the
         # page default layout (and localStorage cache) on 404.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No saved layout for this page yet")
-    return {"page_key": page_key, "layout": row.layout or [], "updated_at": row.updated_at}
+    return {"page_key": page_key, "updated_at": row.updated_at, **_normalize_doc(row.layout)}
 
 
 @router.put("/layout/{page_key}")
@@ -81,18 +105,25 @@ async def put_dashboard_layout(
 ):
     """Upsert the widget layout (called debounced by the frontend on any change)."""
     _check_page_key(page_key)
-    entries = [e.model_dump() for e in payload.layout]
+    entries = [e.model_dump(exclude_none=True) for e in payload.layout]
+    # Store everything in the single JSON column as an envelope object; older
+    # rows saved a bare list, which GET/PUT below still accept transparently.
+    doc = {
+        "layout": entries,
+        "added_catalog": list(dict.fromkeys(payload.added_catalog)),
+        "order": list(dict.fromkeys(payload.order)),
+    }
     row = await _get_row(db, current_user, page_key)
     if row is None:
         row = DashboardLayout(user_id=current_user.id, org_id=current_user.org_id,
-                              page_key=page_key, layout=entries)
+                              page_key=page_key, layout=doc)
         db.add(row)
     else:
-        row.layout = entries
+        row.layout = doc
         row.org_id = current_user.org_id  # keep denormalised tenant in sync
     await db.commit()
     await db.refresh(row)
-    return {"page_key": page_key, "layout": row.layout, "updated_at": row.updated_at}
+    return {"page_key": page_key, **_normalize_doc(row.layout)}
 
 
 @router.delete("/layout/{page_key}", status_code=status.HTTP_204_NO_CONTENT)

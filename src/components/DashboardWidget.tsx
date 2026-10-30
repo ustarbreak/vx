@@ -1,6 +1,10 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { GripVertical, Plus, X, RotateCcw } from 'lucide-react';
 import { isDemoMode } from '../services/demoMode';
+// Static import of the catalogue picker. WidgetCatalog only imports plain
+// functions/constants from this module (no hooks at eval time), so this edge
+// of the cycle is safe — both modules fully resolve before any render.
+import { AddWidgetModal } from './WidgetCatalog';
 import {
   DndContext,
   PointerSensor,
@@ -83,29 +87,6 @@ export function widgetAddedCatalogKey(pageKey: string): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* Server-side slot placement (backend parity for drag & drop)         */
-/* ------------------------------------------------------------------ */
-
-/** Slot arrangement stored alongside the layout on the backend. */
-const slotsOf = (layout: WidgetLayoutEntry[]): (string | null)[] | undefined => {
-  const raw = (layout as any).slots;
-  return Array.isArray(raw) ? (raw as (string | null)[]) : undefined;
-};
-
-async function loadSavedSlots(pageKey: string): Promise<(string | null)[] | null> {
-  if (isDemoMode()) return null;
-  try {
-    const { dashboardLayoutApi } = await import('../services/api');
-    const dto = await dashboardLayoutApi.get(pageKey);
-    const slots = slotsOf((dto?.layout ?? []) as any) ?? ((dto as any)?.slots);
-    return Array.isArray(slots) && slots.some((s) => typeof s === 'string') ? (slots as (string | null)[]) : null;
-  } catch {
-    /* 404 / offline → localStorage cache stays authoritative */
-    return null;
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /* Layout persistence — localStorage cache + backend sync              */
 /* ------------------------------------------------------------------ */
 
@@ -113,10 +94,21 @@ async function loadSavedSlots(pageKey: string): Promise<(string | null)[] | null
 export interface DashboardLayoutDto {
   page_key: string;
   layout: WidgetLayoutEntry[];
+  /** Catalogue (`cat-*`) widget ids the user explicitly added on this page. */
+  added_catalog?: string[];
+  /** Free-flow visual order of widget ids across the page's boards. */
+  order?: string[];
   updated_at?: string | null;
 }
 
-async function loadSavedLayout(pageKey: string): Promise<WidgetLayoutEntry[] | null> {
+/** Legacy helper: an old server copy may have carried the order inside the
+ *  layout array itself as a non-enumerable `slots` property. */
+const slotsOf = (layout: unknown): (string | null)[] | undefined => {
+  const raw = (layout as any)?.slots;
+  return Array.isArray(raw) ? (raw as (string | null)[]) : undefined;
+};
+
+async function loadSavedLayout(pageKey: string): Promise<{ layout: WidgetLayoutEntry[]; addedCatalog?: string[] } | null> {
   // 1) Instant local cache (offline / first paint), 2) authoritative server copy.
   const storageKey = widgetStorageKey(pageKey);
   let cached: WidgetLayoutEntry[] | null = null;
@@ -132,19 +124,28 @@ async function loadSavedLayout(pageKey: string): Promise<WidgetLayoutEntry[] | n
     try {
       const { dashboardLayoutApi } = await import('../services/api');
       const dto = await dashboardLayoutApi.get(pageKey);
-      if (Array.isArray(dto?.layout) && dto.layout.length) return dto.layout;
+      // Backend payload is the layout array itself; user-added catalogue ids
+      // are kept in a parallel `added_catalog` list (see saveLayoutToBackend).
+      const added: string[] = Array.isArray((dto as any)?.added_catalog) ? (dto as any).added_catalog : [];
+      if (Array.isArray(dto?.layout)) return { layout: dto.layout, addedCatalog: added };
     } catch {
       /* 404 (never saved) or backend unreachable → fall back to cache/defaults */
     }
   }
-  return cached;
+  return cached ? { layout: cached } : null;
 }
 
-function saveLayoutToBackend(pageKey: string, layout: WidgetLayoutEntry[]) {
+async function saveLayoutToBackend(
+  pageKey: string,
+  layout: WidgetLayoutEntry[],
+  addedCatalog: string[],
+  order?: string[],
+) {
   if (isDemoMode()) return; // Demo Mode persists through localStorage only
-  import('../services/api')
-    .then(({ dashboardLayoutApi }) => dashboardLayoutApi.put(pageKey, layout))
-    .catch(() => { /* offline — localStorage cache stays authoritative until next change */ });
+  try {
+    const { dashboardLayoutApi } = await import('../services/api');
+    await dashboardLayoutApi.put(pageKey, layout, addedCatalog, order);
+  } catch { /* offline — localStorage cache stays authoritative until next change */ }
 }
 
 function deleteLayoutOnBackend(pageKey: string) {
@@ -181,11 +182,16 @@ export function WidgetLayoutProvider({
     try { localStorage.setItem(addedCatalogKey, JSON.stringify(ids)); } catch { /* ignore */ }
   }
 
-  function mergeWithDefaults(saved: WidgetLayoutEntry[]): WidgetLayoutEntry[] {
-    const addedCat = new Set(readAddedCatalog());
+  function mergeWithDefaults(saved: WidgetLayoutEntry[], addedOverride?: string[]): WidgetLayoutEntry[] {
+    const addedCat = new Set(addedOverride ?? readAddedCatalog());
     const known = saved.filter(
       (w) => w.id.startsWith('cat-') ? addedCat.has(w.id) : defaultLayout.some((d) => d.id === w.id),
     );
+    // Merge the persisted "explicitly added" list into local tracking so a
+    // catalogue widget added on another device survives here too.
+    if (addedOverride && addedOverride.length) {
+      rememberAddedCatalog(Array.from(new Set([...readAddedCatalog(), ...addedOverride])));
+    }
     const added = defaultLayout
       .filter((d) => !known.some((w) => w.id === d.id))
       .map((d) => ({ ...d }));
@@ -215,7 +221,7 @@ export function WidgetLayoutProvider({
       if (cancelled || !saved) return;
       hydratedRef.current = true;
       setLayout((prev) => {
-        const merged = mergeWithDefaults(saved);
+        const merged = mergeWithDefaults(saved.layout, saved.addedCatalog);
         // Also keep any widget currently rendered on the page that the server
         // copy doesn't know about (e.g. newly added catalog widgets) — never
         // let hydration silently drop visible content.
@@ -261,43 +267,57 @@ export function WidgetLayoutProvider({
     // Debounced backend sync (skip the very first render's default layout).
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
+      const payload: WidgetLayoutEntry[] = layout.map((w) => ({ ...w }));
+      // Persist which catalogue widgets the user explicitly added + the live
+      // free-flow order, so add/remove/drag/resize all round-trip through the
+      // backend on every device.
       const board = boardRef.current;
-      const payload: any = layout.map((w) => ({ ...w }));
-      // Persist the slot arrangement alongside the layout so drag & drop,
-      // edge-resize and add/remove all round-trip through the backend.
-      if (board) (payload as any).slots = board.placements;
-      saveLayoutToBackend(pageKey, payload);
+      saveLayoutToBackend(
+        pageKey,
+        payload,
+        layout.filter((w) => w.id.startsWith('cat-')).map((w) => w.id),
+        board ? normalizeOrder(board.placements) : undefined,
+      );
     }, 800);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [storageKey, pageKey, layout]);
 
-  /** Live slot-board state, registered by <SlotBoard>, for backend sync. */
+  /** Live order-board state, registered by <SlotBoard>, for backend sync. */
   const boardRef = React.useRef<{ placements: (string | null)[]; setPlacements: (p: (string | null)[]) => void } | null>(null);
 
-  // Hydrate the slot arrangement from the server once per mount (the PUT
-  // payload carries `slots`, so drag & drop positions have backend parity).
+  // Hydrate the widget ORDER from the server once per mount. The layout PUT
+  // payload carries `order` (see saveLayoutToBackend below), so drag & drop
+  // positions have full backend parity across devices.
   useEffect(() => {
     let cancelled = false;
-    loadSavedSlots(pageKey).then((saved) => {
-      if (cancelled || !saved) return;
-      const b = boardRef.current;
-      if (b) b.setPlacements(saved);
-    });
+    if (isDemoMode()) return;
+    import('../services/api')
+      .then(({ dashboardLayoutApi }) => dashboardLayoutApi.get(pageKey))
+      .then((dto: any) => {
+        if (cancelled || !dto) return;
+        const savedOrder = dto?.order ?? slotsOf(dto?.layout);
+        if (Array.isArray(savedOrder) && savedOrder.some((s: unknown) => typeof s === 'string')) {
+          boardRef.current?.setPlacements(savedOrder as (string | null)[]);
+        }
+      })
+      .catch(() => { /* 404 / offline → localStorage order stays authoritative */ });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageKey]);
 
   // Widget ids declared by the <WidgetGrid> children — scanned once per mount
-  // so the slot board knows which widgets exist even before they render.
+  // so the board knows which widgets exist even before they render.
   const declaredIds = React.useMemo(() => collectDeclaredWidgetIds(children), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <PageKeyContext.Provider value={pageKey}>
-      <LayoutContext.Provider value={{ layout, setLayout }}>
-        <BoardRefContext.Provider value={boardRef}>
-          <SlotBoard declaredIds={declaredIds}>{children}</SlotBoard>
-        </BoardRefContext.Provider>
-      </LayoutContext.Provider>
+      <DefaultLayoutContext.Provider value={defaultLayout}>
+        <LayoutContext.Provider value={{ layout, setLayout }}>
+          <BoardRefContext.Provider value={boardRef}>
+            <SlotBoard declaredIds={declaredIds}>{children}</SlotBoard>
+          </BoardRefContext.Provider>
+        </LayoutContext.Provider>
+      </DefaultLayoutContext.Provider>
     </PageKeyContext.Provider>
   );
 }
