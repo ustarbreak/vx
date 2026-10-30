@@ -438,9 +438,7 @@ export default function Layout() {
         const expanded = openGroups[key] || collapsed;
         const groupActive = entryRoutes(item).some(r => isItemActive(r));
         return (
-          <div key={key} className="relative group/group"
-            onMouseEnter={() => setOpenGroups(g => ({ ...g, [key]: true }))}
-            onMouseLeave={() => setOpenGroups(g => ({ ...g, [key]: false }))}>
+          <div key={key} className="relative group/group">
             <button
               onClick={() => setOpenGroups(g => ({ ...g, [key]: !g[key] }))}
               aria-expanded={expanded}
