@@ -2664,7 +2664,7 @@ export const demoStore = {
     if (root === 'dashboard' && parts[1] === 'layout' && parts[2]) {
       const pageKey = decodeURIComponent(parts[2]);
       // Same key shape as widgetStorageKey() in DashboardWidget.tsx (session id/email scope).
-      const lsKey = `ic-widget-layout:${pageKey}:${demoSession().id ?? demoSession().email ?? 'anon'}`;
+      const lsKey = `ic-widget-layout:${pageKey}:${demoSession().email ?? demoSession().orgId ?? 'anon'}`;
       const readLs = (): any[] => {
         try {
           const raw = localStorage.getItem(lsKey);

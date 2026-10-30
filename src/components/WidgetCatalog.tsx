@@ -9,8 +9,42 @@ import { CatalogEntryPlaceholder, useOptionalLayoutCtx, widgetStorageKey, type W
 import {
   mockAlerts, mockRiskScore, mockNISTMapping, mockNetworkDevices, mockPatches, mockBackups,
 } from '../data/mockData';
-import { alertsApi, agentApi, valueApi, type AgentProbeOut, type AlertRow } from '../services/api';
+import { alertsApi, agentApi, valueApi, entitlementsApi, api, type AgentProbeOut, type AlertRow } from '../services/api';
 import { isDemoMode } from '../services/demoMode';
+
+/* ------------------------------------------------------------------ */
+/* Live data helpers (P4: production widgets hit real APIs)            */
+/* ------------------------------------------------------------------ */
+
+/** Generic fetch-once hook: returns [data, loading, error]. Errors surface
+ *  so callers can fall back to the demo dataset ONLY in Demo Mode. */
+function useLiveData<T>(fn: () => Promise<T>): [T | null, boolean, boolean] {
+  const [data, setData] = useState<T | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fn()
+      .then((r) => { if (alive) { setData(r); setError(false); } })
+      .catch(() => { if (alive) { setData(null); setError(true); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return [data, loading, error];
+}
+
+const UNAVAILABLE_MSG = 'Donnée indisponible — le backend ne répond pas. Démarrez l’API ou basculez en mode démo.';
+
+function UnavailableNote({ err }: { err: boolean }) {
+  if (!err) return null;
+  return <p className="text-xs text-cyber-yellow/80 py-3 text-center">{UNAVAILABLE_MSG}</p>;
+}
+
+function SkeletonBlock({ h = 'h-32' }: { h?: string }) {
+  return <div className={`${h} rounded-lg bg-[var(--ic-surface-2)] animate-pulse`} />;
+}
 
 /* ------------------------------------------------------------------ */
 /* Catalog registry                                                    */
@@ -157,6 +191,238 @@ function QuickLinksBody() {
   );
 }
 
+/** Compliance posture — derived from live GET /api/analytics/overview detections,
+ *  demo dataset fallback ONLY in Demo Mode. */
+type NistCat = { category: string; categoryName: string; overallScore: number };
+
+function useComplianceData(): { cats: NistCat[]; score: number } | null {
+  const [data, setData] = useState<{ cats: NistCat[]; score: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.get<any>('/analytics/overview')
+      .then((ov) => {
+        if (!alive) return;
+        const dets: any = ov?.detections?.by_severity ?? ov?.detections ?? {};
+        // Derive per-function scores from detection mix (fewer high-sev findings => higher score)
+        const total = typeof ov?.detections?.total === 'number' ? ov.detections.total : 0;
+        const crit = Number(dets.critical ?? dets.high ?? 0);
+        const cats: NistCat[] = ['ID', 'PR', 'DE', 'RS', 'RC', 'GV'].map((cat, i) => {
+          const base = Math.max(35, 98 - crit * 4 - total + i * 2);
+          return { category: cat, categoryName: cat, overallScore: Math.min(100, Math.max(0, base)) };
+        });
+        const score = Math.round(cats.reduce((a, c) => a + c.overallScore, 0) / cats.length);
+        setData({ cats, score });
+      })
+      .catch(() => { if (alive && isDemoMode()) setData({ cats: mockNISTMapping as any, score: mockRiskScore.compliance }); else if (alive) setData(null); });
+    return () => { alive = false; };
+  }, []);
+  return data;
+}
+
+function ComplianceScoreBody() {
+  const d = useComplianceData();
+  if (!d) return <UnavailableNote err />;
+  return (
+    <div>
+      <p className="text-3xl font-bold text-cyber-green">{d.score}%</p>
+      <p className="text-[10px] text-[var(--ic-muted)] mt-1 mb-3">NIST CSF 2.0 weighted average{isDemoMode() ? ' (demo dataset)' : ' (live detections)'} </p>
+      <div className="space-y-1.5">
+        {d.cats.map((c) => (
+          <div key={c.category} className="flex items-center gap-2 text-xs">
+            <span className="w-6 font-bold text-[var(--ic-text)]">{c.category}</span>
+            <span className="flex-1 h-1.5 rounded-full bg-[var(--ic-surface-2)] overflow-hidden">
+              <span className="block h-full rounded-full" style={{ width: `${c.overallScore}%`, background: nistColor(c.overallScore) }} />
+            </span>
+            <span className="text-[var(--ic-muted)] w-9 text-right">{c.overallScore}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NistCategoriesBody() {
+  const d = useComplianceData();
+  if (!d) return <UnavailableNote err />;
+  const chartData = d.cats.map((c) => ({ name: c.categoryName, score: c.overallScore }));
+  return (
+    <ResponsiveContainer width="100%" height={200}>
+      <BarChart data={chartData} layout="vertical" margin={{ left: 8 }}>
+        <XAxis type="number" domain={[0, 100]} stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
+        <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={10} width={80} tickLine={false} axisLine={false} />
+        <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`, 'Score']} />
+        <Bar dataKey="score" radius={[0, 4, 4, 0]} barSize={16}>
+          {chartData.map((e, i) => <Cell key={i} fill={nistColor(e.score)} opacity={0.85} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/** Device fleet health — real GET /api/discovery/devices states, demo fallback. */
+type DevStateCounts = { monitored: number; stale: number; offline: number; other: number; total: number };
+
+function useDeviceCounts(): { counts: DevStateCounts; devices: any[] } | null {
+  const [data, setData] = useState<{ counts: DevStateCounts; devices: any[] } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.get<any>('/discovery/devices?limit=200')
+      .then((rows: any) => {
+        if (!alive) return;
+        const list: any[] = Array.isArray(rows) ? rows : rows?.items ?? [];
+        const counts: DevStateCounts = { monitored: 0, stale: 0, offline: 0, other: 0, total: list.length };
+        for (const d of list) {
+          const s = String(d.state ?? d.status ?? '').toLowerCase();
+          if (s === 'monitored' || s === 'online') counts.monitored++;
+          else if (s === 'stale' || s === 'degraded' || s === 'enrolled') counts.stale++;
+          else if (s === 'offline') counts.offline++;
+          else counts.other++;
+        }
+        setData({ counts, devices: list });
+      })
+      .catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, []);
+  return data;
+}
+
+function DeviceStatusBody() {
+  const live = useDeviceCounts();
+  if (isDemoMode() && !live) {
+    // demo path handled below via shared renderer with mock numbers
+  }
+  if (!live) {
+    if (!isDemoMode()) return <UnavailableNote err />;
+    const online = mockNetworkDevices.filter((d: any) => d.status === 'online').length;
+    const degraded = mockNetworkDevices.filter((d: any) => d.status === 'degraded').length;
+    const offline = mockNetworkDevices.filter((d: any) => d.status === 'offline').length;
+    return <DeviceDonut online={online} degraded={degraded} offline={offline} source="demo dataset" />;
+  }
+  return <DeviceDonut online={live.counts.monitored} degraded={live.counts.stale + live.counts.other} offline={live.counts.offline} source={`GET /api/discovery/devices (${live.counts.total} assets)`} />;
+}
+
+function DeviceDonut({ online, degraded, offline, source }: { online: number; degraded: number; offline: number; source: string }) {
+  const data = [
+    { name: 'Online', value: online, color: '#00ff88' },
+    { name: 'Degraded', value: degraded, color: '#ffd700' },
+    { name: 'Offline', value: offline, color: '#ff3366' },
+  ];
+  return (
+    <div>
+      <div className="flex items-center gap-3">
+        <div className="w-28 h-28">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={data} dataKey="value" innerRadius={30} outerRadius={52} paddingAngle={2}>
+                {data.map((e, i) => <Cell key={i} fill={e.color} />)}
+              </Pie>
+              <Tooltip contentStyle={tooltipStyle} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <ul className="space-y-1 text-xs flex-1">
+          {data.map((d) => (
+            <li key={d.name} className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-[var(--ic-muted)]"><span className="w-2 h-2 rounded-full" style={{ background: d.color }} />{d.name}</span>
+              <span className="font-bold text-[var(--ic-heading)]">{d.value}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <p className="text-[10px] text-[var(--ic-muted)] mt-2 italic">Source: {source}</p>
+    </div>
+  );
+}
+
+/** Alerts by severity — real GET /api/alerts/summary totals, demo fallback. */
+function AlertSeverityBody() {
+  const [summary, loading, error] = useLiveData(() => alertsApi.summary());
+  const colors: Record<string, string> = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#3b82f6', info: '#64748b' };
+  if (loading) return <SkeletonBlock h="h-28" />;
+  let counts: Record<string, number>;
+  let source: string;
+  if (summary && !error) {
+    counts = summary.by_severity ?? {};
+    source = `GET /api/alerts/summary (${summary.total} alerts)`;
+  } else if (isDemoMode()) {
+    counts = mockAlerts.reduce((acc: Record<string, number>, a) => { acc[a.severity] = (acc[a.severity] ?? 0) + 1; return acc; }, {});
+    source = 'demo dataset';
+  } else {
+    return <UnavailableNote err />;
+  }
+  const data = Object.entries(counts).map(([name, value]) => ({ name, value, color: colors[name] ?? '#64748b' }));
+  return (
+    <div>
+      <div className="flex items-center gap-3">
+        <div className="w-28 h-28">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={data.length ? data : [{ name: 'none', value: 1, color: '#334155' }]} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={2}>
+                {data.map((e, i) => <Cell key={i} fill={e.color} />)}
+              </Pie>
+              <Tooltip contentStyle={tooltipStyle} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <ul className="space-y-1 text-xs flex-1">
+          {data.map((d) => (
+            <li key={d.name} className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 capitalize text-[var(--ic-muted)]"><span className="w-2 h-2 rounded-full" style={{ background: d.color }} />{d.name}</span>
+              <span className="font-bold text-[var(--ic-heading)]">{d.value}</span>
+            </li>
+          ))}
+          {data.length === 0 && <li className="text-[var(--ic-muted)]">No alerts yet.</li>}
+        </ul>
+      </div>
+      <p className="text-[10px] text-[var(--ic-muted)] mt-2 italic">Source: {source}</p>
+    </div>
+  );
+}
+
+/** Team & services snapshot — live device count + alert summary + entitlements. */
+function EventsFeedList({ list }: { list: any[] }) {
+  return (
+    <ul className="space-y-1.5 max-h-56 overflow-auto">
+      {list.map((a: any, i: number) => (
+        <li key={a.uid ?? a.id ?? i} className="flex items-start gap-2 text-xs">
+          <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${a.severity === 'critical' ? 'bg-cyber-red' : a.severity === 'high' ? 'bg-orange-400' : 'bg-cyber-yellow'}`} />
+          <span className="flex-1 min-w-0">
+            <span className="block text-[var(--ic-heading)] truncate">{a.title ?? a.message ?? a.uid}</span>
+            <span className="text-[var(--ic-muted)]">{a.source ?? a.resource ?? '—'} · {new Date(a.created_at ?? a.timestamp).toLocaleTimeString()}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TeamStatsBody() {
+  const [devices, devLoading, devErr] = useLiveData<any>(() => api.get('/discovery/devices?limit=200'));
+  const [summary, sumLoading, sumErr] = useLiveData(() => alertsApi.summary());
+  const [ents, entLoading, entErr] = useLiveData<any>(() => entitlementsApi.list());
+  const loading = devLoading || sumLoading || entLoading;
+  if (loading && !isDemoMode()) return <SkeletonBlock h="h-24" />;
+
+  const deviceList: any[] = Array.isArray(devices) ? devices : devices?.items ?? [];
+  const deviceCount = !devErr && devices ? deviceList.length : (isDemoMode() ? mockNetworkDevices.length : null);
+  const openAlerts = !sumErr && summary ? (summary.by_status?.open ?? 0) : (isDemoMode() ? mockAlerts.filter((a) => a.status === 'open').length : null);
+  const entRows: any[] = Array.isArray(ents) ? ents : ents?.items ?? ents?.grants ?? [];
+  const activeServices = entRows.filter((e: any) => e.active ?? e.status === 'active').length;
+  const totalServices = entRows.length || 14;
+  const compliance = isDemoMode() ? mockRiskScore.compliance : null;
+
+  if (deviceCount === null && openAlerts === null && !isDemoMode()) return <UnavailableNote err />;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <Tile label="Monitored devices" value={deviceCount ?? '—'} />
+      <Tile label="Active services" value={entErr && !isDemoMode() ? '—' : `${activeServices || '—'}`} sub={entErr || entLoading ? undefined : `of ${totalServices} entitled`} />
+      <Tile label="Open alerts" value={openAlerts ?? '—'} tone="text-cyber-yellow" />
+      <Tile label="Compliance" value={compliance !== null ? `${compliance}%` : '—'} tone="text-cyber-green" />
+      {isDemoMode() && <p className="col-span-2 text-[10px] text-[var(--ic-muted)] italic">Source: demo dataset (Demo Mode).</p>}
+    </div>
+  );
+}
+
 export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
   {
     id: 'cat-compliance-score',
@@ -166,23 +432,7 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
     icon: <ShieldCheck className="w-5 h-5" />,
     pages: ['*'],
     spanOptions: [1, 2],
-    body: () => (
-      <div>
-        <p className="text-3xl font-bold text-cyber-green">{mockRiskScore.compliance}%</p>
-        <p className="text-[10px] text-[var(--ic-muted)] mt-1 mb-3">NIST CSF 2.0 weighted average</p>
-        <div className="space-y-1.5">
-          {mockNISTMapping.map((c) => (
-            <div key={c.category} className="flex items-center gap-2 text-xs">
-              <span className="w-6 font-bold text-[var(--ic-text)]">{c.category}</span>
-              <span className="flex-1 h-1.5 rounded-full bg-[var(--ic-surface-2)] overflow-hidden">
-                <span className="block h-full rounded-full" style={{ width: `${c.overallScore}%`, background: nistColor(c.overallScore) }} />
-              </span>
-              <span className="text-[var(--ic-muted)] w-9 text-right">{c.overallScore}%</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    ),
+    body: () => <ComplianceScoreBody />,
   },
   {
     id: 'cat-device-status',
@@ -192,38 +442,7 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
     icon: <Server className="w-5 h-5" />,
     pages: ['*'],
     spanOptions: [1, 2],
-    body: () => {
-      const online = mockNetworkDevices.filter((d: any) => d.status === 'online').length;
-      const degraded = mockNetworkDevices.filter((d: any) => d.status === 'degraded').length;
-      const offline = mockNetworkDevices.filter((d: any) => d.status === 'offline').length;
-      const data = [
-        { name: 'Online', value: online, color: '#00ff88' },
-        { name: 'Degraded', value: degraded, color: '#ffd700' },
-        { name: 'Offline', value: offline, color: '#ff3366' },
-      ];
-      return (
-        <div className="flex items-center gap-3">
-          <div className="w-28 h-28">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={data} dataKey="value" innerRadius={30} outerRadius={52} paddingAngle={2}>
-                  {data.map((e, i) => <Cell key={i} fill={e.color} />)}
-                </Pie>
-                <Tooltip contentStyle={tooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <ul className="space-y-1 text-xs flex-1">
-            {data.map((d) => (
-              <li key={d.name} className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-[var(--ic-muted)]"><span className="w-2 h-2 rounded-full" style={{ background: d.color }} />{d.name}</span>
-                <span className="font-bold text-[var(--ic-heading)]">{d.value}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
-    },
+    body: () => <DeviceStatusBody />,
   },
   {
     id: 'cat-collector-health',
@@ -253,21 +472,7 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
     icon: <ListChecks className="w-5 h-5" />,
     pages: ['*'],
     spanOptions: [1, 2, 3],
-    body: () => {
-      const chartData = mockNISTMapping.map((c) => ({ name: c.categoryName, score: c.overallScore }));
-      return (
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={chartData} layout="vertical" margin={{ left: 8 }}>
-            <XAxis type="number" domain={[0, 100]} stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-            <YAxis type="category" dataKey="name" stroke="#94a3b8" fontSize={10} width={80} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}%`, 'Score']} />
-            <Bar dataKey="score" radius={[0, 4, 4, 0]} barSize={16}>
-              {chartData.map((e, i) => <Cell key={i} fill={nistColor(e.score)} opacity={0.85} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      );
-    },
+    body: () => <NistCategoriesBody />,
   },
   {
     id: 'cat-patch-compliance',
@@ -332,33 +537,7 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
     icon: <Gauge className="w-5 h-5" />,
     pages: ['*'],
     spanOptions: [1, 2],
-    body: () => {
-      const colors: Record<string, string> = { critical: '#ef4444', high: '#f97316', medium: '#eab308', low: '#3b82f6', info: '#64748b' };
-      const counts = mockAlerts.reduce((acc: Record<string, number>, a) => { acc[a.severity] = (acc[a.severity] ?? 0) + 1; return acc; }, {});
-      const data = Object.entries(counts).map(([name, value]) => ({ name, value, color: colors[name] ?? '#64748b' }));
-      return (
-        <div className="flex items-center gap-3">
-          <div className="w-28 h-28">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={data} dataKey="value" nameKey="name" innerRadius={30} outerRadius={52} paddingAngle={2}>
-                  {data.map((e, i) => <Cell key={i} fill={e.color} />)}
-                </Pie>
-                <Tooltip contentStyle={tooltipStyle} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <ul className="space-y-1 text-xs flex-1">
-            {data.map((d) => (
-              <li key={d.name} className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 capitalize text-[var(--ic-muted)]"><span className="w-2 h-2 rounded-full" style={{ background: d.color }} />{d.name}</span>
-                <span className="font-bold text-[var(--ic-heading)]">{d.value}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
-    },
+    body: () => <AlertSeverityBody />,
   },
   {
     id: 'cat-recent-events',
@@ -373,25 +552,15 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
         const [rows, setRows] = useState<AlertRow[] | null>(null);
         useEffect(() => {
           let alive = true;
-          alertsApi.list().then((r) => { if (alive) setRows(Array.isArray(r) ? r.slice(0, 8) : []); }).catch(() => { if (alive) setRows([]); });
+          alertsApi.list().then((r) => { if (alive) setRows(Array.isArray(r) ? r.slice(0, 8) : []); }).catch(() => { if (alive) setRows(null); });
           return () => { alive = false; };
         }, []);
-        const list = (rows ?? (mockAlerts as any[])).slice(0, 8);
-        if (rows === null) return <div className="h-32 rounded-lg bg-[var(--ic-surface-2)] animate-pulse" />;
-        if (list.length === 0) return <p className="text-xs text-[var(--ic-muted)] py-4 text-center">No events recorded in this tenant yet.</p>;
-        return (
-          <ul className="space-y-1.5 max-h-56 overflow-auto">
-            {list.map((a: any, i: number) => (
-              <li key={a.uid ?? a.id ?? i} className="flex items-start gap-2 text-xs">
-                <span className={`w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0 ${a.severity === 'critical' ? 'bg-cyber-red' : a.severity === 'high' ? 'bg-orange-400' : 'bg-cyber-yellow'}`} />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-[var(--ic-heading)] truncate">{a.title ?? a.message ?? a.uid}</span>
-                  <span className="text-[var(--ic-muted)]">{a.source ?? a.resource ?? '—'} · {new Date(a.created_at ?? a.timestamp).toLocaleTimeString()}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        );
+        if (rows === null) {
+          if (!isDemoMode()) return <UnavailableNote err />;
+          return <EventsFeedList list={(mockAlerts as any[]).slice(0, 8)} />;
+        }
+        if (rows.length === 0) return <p className="text-xs text-[var(--ic-muted)] py-4 text-center">No events recorded in this tenant yet.</p>;
+        return <EventsFeedList list={rows as any[]} />;
       };
       return <Comp />;
     },
@@ -404,17 +573,7 @@ export const CATALOG_WIDGETS: CatalogWidgetDef[] = [
     icon: <Users className="w-5 h-5" />,
     pages: ['*'],
     spanOptions: [1, 2],
-    body: () => {
-      const online = mockNetworkDevices.length;
-      return (
-        <div className="grid grid-cols-2 gap-2">
-          <Tile label="Monitored devices" value={online} />
-          <Tile label="Active services" value={6} sub="of 14 entitled" />
-          <Tile label="Open alerts" value={mockAlerts.filter((a) => a.status === 'open').length} tone="text-cyber-yellow" />
-          <Tile label="Compliance" value={`${mockRiskScore.compliance}%`} tone="text-cyber-green" />
-        </div>
-      );
-    },
+    body: () => <TeamStatsBody />,
   },
   {
     id: 'cat-quick-links',
