@@ -24,15 +24,15 @@ API prefix in this repo is `/api/...` (not `/api/v1/...`) — see ALIGNMENT §F.
 - T2.2 `registry.py` + manifest.yaml discovery + `_template/` + `mock` connector + `docs/connectors/WRITING_A_CONNECTOR.md`. ~30 steps.
 - T2.3 Wrap current read-pullers as providers: `wazuh`, `misp`, `thehive` (existing code paths), fix nothing else. Characterization tests first. ~35 steps.
 - T2.4 `jobs.py` async job store on Redis (already in compose): queued→running→succeeded|failed|unsupported, idempotency keys, retries. ~35 steps.
-- T2.5 `guardrails.py`: RBAC per action, four-eyes for dangerous ops, dry-run, protected assets, audit log — reuse `soar.py` consequential-action gating concepts. ~30 steps.
-- T2.6 `POST /api/actions` + `GET /api/capabilities?org_id=`; map console buttons (securityOps action groups) to canonical names; unsupported ones return `unsupported` (honesty rule). ~35 steps.
+- T2.5 `guardrails.py`: RBAC per action, four-eyes for dangerous ops, dry-run, protected assets, audit log — reuse `soar.py` consequential-action gating concepts. **Owner decision #5:** all connector HTTP calls go through one transport helper honoring `CONNECTOR_TLS_VERIFY` (default `false` = current lenient behavior; opt-in strict). ~30 steps.
+- T2.6 `POST /api/actions` + `GET /api/capabilities?org_id=`; **owner decision #6: this is the "simple adapter" layer — map existing console buttons (`securityOps.ts` action groups) to canonical names by thin delegation to current routes/engines; no backend rewrite; unsupported ones return `unsupported` (honesty rule).** ~35 steps.
 - T2.7 Native-provider adapters: `TriageEngine`, `DiscoveryEngine`, `IncidentResponseRunner`, SOAR runner behind provider interface + `provider_mode` config flag (default `native`). ~35 steps.
 
-## Phase 3 — MVP installers (compose-based, fail-loudly on TODO_VERIFY pins)
-- T3.1 `deploy/preflight.sh` (RAM/CPU/disk/port checks vs catalog resources) + top-level `deploy/install.sh --service …|--profile mvp`. ~30 steps.
+## Phase 3 — MVP installers (compose-based per owner decision #2; fail-loudly on TODO_VERIFY pins)
+- T3.1 `deploy/preflight.sh` (RAM/CPU/disk/port checks vs catalog resources, sized for containers on the target VM) + top-level `deploy/install.sh --service …|--profile mvp`. ~30 steps.
 - T3.2 Wazuh single-node installer + connector registration + `verify.sh` (API reachable, test alert appears via `/api/incidents`). ~35 steps. Versions/checksums: research official pages or emit TODO_VERIFY.
 - T3.3 MISP installer + `verify.sh` (test IoC event queryable) reusing `services/misp.py`. ~30 steps.
-- T3.4 DFIR-IRIS installer + case-create-from-alert verify; keep native tickets as default provider, IRIS opt-in flag. ~35 steps.
+- T3.4 DFIR-IRIS installer + case-create-from-alert verify; **owner decision #4: IRIS confirmed in scope** — native tickets stay default provider, IRIS opt-in per org (`org_id`), TheHive kept as configured connector. ~35 steps.
 - T3.5 Greenbone minimal installer + first-finding verify (heaviest — preflight gate). ~35 steps.
 - T3.6 nginx routing for new UIs under separate paths w/ TLS notes; merge duplicate compose configs found in T0.5. ~25 steps.
 
@@ -64,12 +64,15 @@ API prefix in this repo is `/api/...` (not `/api/v1/...`) — see ALIGNMENT §F.
 - T8.2 agent-go: TLS verification flag (default keep current behavior to avoid breakage), unit tests, fake SNMP integration test, checksummed release script feeding `install.sh`. ~35 steps.
 - T8.3 `docs/REPORT.md` in brief §13 format: kept/wrapped/added/not-done, all TODO_VERIFYs, license review list (AGPL components, TheHive). ~25 steps.
 
-## Explicit deviations from the brief (recorded here instead of silently)
+## Explicit deviations from the brief (recorded here instead of silently) — updated with owner decisions 2026-10-31
 - Routes stay `/api/...` (repo reality), not `/api/v1/...`.
-- Tenant key remains `org_id`; no rename.
+- Tenant key remains `org_id`; **owner confirmed (#3): `org_id` IS the client/tenant ID; "tenant" = the client-admin area. No rename, ever.**
 - Event bus deferred: Redis jobs now; NATS/Kafka only if volume demands (design note).
-- Native tickets are the primary case provider; IRIS/TheHive are opt-in connectors.
-- Installers are Docker-compose based; bare-metal apt installs out of scope until a target VM exists.
+- Native tickets are the primary case provider; **DFIR-IRIS added as opt-in connector per owner decision #4**; TheHive stays as configured connector.
+- Installers are Docker-compose based **per owner decision #2 (containers now, VM bare-metal later)**; preflight still validates host capacity for the container fleet.
+- TLS verification: new `CONNECTOR_TLS_VERIFY` / agent-go `--insecure` flags introduced with defaults preserving today's lenient behavior (**owner decision #5**); strict-by-default is a later, explicit migration step.
+- EDR console: thin adapter mapping to `/api/actions` only — **owner decision #6: no backend rewrite; wiring already exists.**
+- Push: agent commits locally; **owner pushes manually (decision #1)**.
 - Nothing switches from native to connector by default; every phase gated by its verify script + characterization tests.
 
-**Awaiting approval of this plan before any implementation begins.**
+**Plan APPROVED by owner on 2026-10-31 (with decisions #1–#6 above incorporated). Implementation may begin at T0.1.**

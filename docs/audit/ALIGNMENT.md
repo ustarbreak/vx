@@ -4,6 +4,19 @@ or a command I ran in this repo. Items not checked are marked **TODO_VERIFY**.
 
 Brief analyzed: `Infracentra Agent Brief for Service Registry, Connectors, Installers and First-S.md` (245 lines, at repo root — not in a `vx/` folder).
 
+## Owner decisions log (2026-10-31, turn 2) - authoritative answers to the open questions
+
+| # | Question from this audit | Owner decision | Effect on docs/plan |
+| --- | --- | --- | --- |
+| 1 | Git remote / push | **Manual by owner.** Agent commits only; no push attempts. | Commits stay local on branch; owner pushes. |
+| 2 | Installer target: VM or containers? | **Deployment VM is the end goal, but containers for now.** | Phase 3 installers are Docker-compose based (`deploy/installers/<id>/` with compose file + `install.sh`/`verify.sh` wrappers); bare-metal path deferred; preflight still checks host RAM/disk/ports for container sizing. |
+| 3 | Tenant key naming | **Confirmed: `org_id` IS the tenant/client key** (the client's ID). "Tenant" in UI-speak refers to the whole client-admin area, not a rename target. | No `tenant_id` rename ever. Docs wording everywhere: "`org_id` (the tenant key)". |
+| 4 | Cases backend | **Keep native tickets as default AND add DFIR-IRIS.** | T3.4 (IRIS installer) confirmed in scope; IRIS is an opt-in connector/provider alongside TheHive; native `ticketing.py` remains primary until a per-org switch. |
+| 5 | TLS verify=False / InsecureSkipVerify | **Fix behind a flag; keep current lenient behavior as default** (no breakage of existing self-signed lab setups). | Add `CONNECTOR_TLS_VERIFY` env (default false = current behavior) and agent-go `--insecure` config (default true); flip defaults later via explicit migration note, never silently. |
+| 6 | EDR console wiring | **Already pre-installed/coded; day-of implementation needs only a simple adapter change, not a backend rewrite.** | Resolves that TODO_VERIFY directionally: thin adapters map console actions to `/api/actions`; characterization tests first; no route rewrites, no React restructuring. |
+
+Status legend used throughout: **ga** = production-grade and tested here, **beta** = real code, unverified against live external systems, **roadmap** = scaffold/label only.
+
 ---
 
 ## A. My understanding of the brief (≤10 lines)
