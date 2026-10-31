@@ -1,0 +1,23 @@
+id: vuln-scanning
+name: Vuln Scanning
+status: roadmap
+provider: native
+engine: OpenVAS / Greenbone Community Edition
+docs_url: https://docs.greenbone.net/GSM-Manual/gos-22.04/en/scanning/
+endpoints:
+  tasks: /get_tasks
+  info: /get_version
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: asset-discovery
+  rationale: Le scanneur cible l'inventaire produit par la découverte automatique
+    ; hors inventaire = hors périmètre.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

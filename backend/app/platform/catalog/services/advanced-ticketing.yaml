@@ -1,0 +1,20 @@
+id: advanced-ticketing
+name: Advanced Ticketing
+status: ga
+provider: native
+engine: GLPI / osTicket (ITSM open source)
+docs_url: https://glpi-developer-documentation.rtfd.io/
+endpoints:
+  fulltextsearch: /apirest.php/fulltextsearch?search=text
+  session: /apirest.php/login
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies: []
+in_seed: false
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

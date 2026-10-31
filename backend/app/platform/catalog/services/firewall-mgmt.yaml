@@ -1,0 +1,23 @@
+id: firewall-mgmt
+name: Firewall Mgmt
+status: ga
+provider: native
+engine: OPNsense / pfSense REST plugin
+docs_url: https://docs.opnsense.org/development/api.html
+endpoints:
+  rules: /api/firewall/filter/searchRule
+  aliases: /api/firewall/alias/searchItem
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: threat-intel
+  rationale: Les règles de blocage IP poussées par Firewall Management ciblent des
+    adresses signalées par Threat Intel.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES
