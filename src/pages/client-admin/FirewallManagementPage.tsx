@@ -1,6 +1,75 @@
 import React, { useState, useEffect } from 'react';
 import { Lock, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const FW_VENDORS = ['fortinet', 'cisco', 'paloalto', 'checkpoint', 'opnsense'];
+
+const FW_GROUPS: ActionGroup[] = [
+  {
+    title: 'Critical rules supervision', icon: 'Eye',
+    fields: [{ name: 'window', label: 'Review window', options: ['Last 24h', 'Last 7 days', 'Last 30 days'] }],
+    actions: [
+      { id: 'fw-critical-shadow', label: 'Audit Shadowed / Redundant Rules' },
+      { id: 'fw-critical-anyany', label: 'Report: ANY→ANY & Overly Permissive Rules' },
+      { id: 'fw-critical-hitcount', label: 'Zero-Hit Rules Review (cleanup candidates)' },
+      { id: 'fw-critical-expiring', label: 'Expiring Temporary / Break-Glass Rules' },
+      { id: 'fw-critical-risk-score', label: 'Score Rulebase Risk Posture' },
+    ],
+  },
+  {
+    title: 'Investigate without touching the device', icon: 'Search',
+    fields: [
+      { name: 'ip', label: 'Host / IP to investigate', placeholder: 'e.g. 203.0.113.44 or 10.1.2.30' },
+      { name: 'window', label: 'Time window', options: ['Last hour', 'Last 24h', 'Last 7 days'] },
+    ],
+    actions: [
+      { id: 'fw-trace-host', label: 'Trace All Sessions for a Host' },
+      { id: 'fw-denied-report', label: 'Top Denied Traffic Report' },
+      { id: 'fw-threat-match', label: 'Match Traffic Against Threat Feeds' },
+      { id: 'fw-config-backup-check', label: 'Verify Last Config Backup / Diff Running-Config' },
+    ],
+  },
+  {
+    title: 'Log extraction — Syslog / SNMP / OID (platform-side)', icon: 'Download',
+    fields: [
+      { name: 'device', label: 'Firewall device', placeholder: 'e.g. FG-PARIS-01' },
+      { name: 'vendor', label: 'Vendor editor', options: FW_VENDORS },
+    ],
+    actions: [
+      { id: 'fw-extract-syslog', label: 'Extract Syslog Stream (last 1h)' },
+      { id: 'fw-extract-traffic-log', label: 'Pull Traffic Logs via API' },
+      { id: 'fw-snmp-poll', label: 'SNMP Poll: CPU / Memory / Session Counters' },
+      { id: 'fw-oid-walk', label: 'Walk Vendor OID Tree (ifMIB + private MIB)' },
+      { id: 'fw-netflow', label: 'Export NetFlow/IPFIX Records for Host' },
+      { id: 'fw-support-log', label: 'Fetch Support / Diagnostic Log Bundle' },
+    ],
+  },
+  {
+    title: 'Push configuration (vendor-specific CLI)', icon: 'Upload', danger: true,
+    fields: [
+      { name: 'device', label: 'Target firewall', placeholder: 'e.g. ASA-HQ-01' },
+      { name: 'vendor', label: 'Vendor editor', options: FW_VENDORS },
+      { name: 'template', label: 'Change template', options: ['Block attacker IP + log', 'Disable risky rule', 'Harden VPN/IPsec', 'Enable scan detection', 'Custom CLI snippet'] },
+    ],
+    actions: [
+      { id: 'fw-push-block-ip', label: 'Push: Block Source IP (deny + log)' },
+      { id: 'fw-push-disable-rule', label: 'Push: Disable Selected Rule' },
+      { id: 'fw-push-harden-vpn', label: 'Push: IPsec / VPN Hardening Pack' },
+      { id: 'fw-push-full-config', label: 'Push Full Configuration Snapshot' },
+      { id: 'fw-rollback', label: 'Rollback to Previous Config Revision' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'fw-pb-auto-block', label: 'Arm Playbook: Auto-Block Repeat Offender IPs' },
+      { id: 'fw-pb-ticket-on-deny-burst', label: 'Arm Playbook: Ticket on Deny Burst / Scan' },
+      { id: 'fw-pb-nightly-audit', label: 'Schedule: Nightly Rulebase Audit' },
+    ],
+  },
+];
 
 interface FirewallRule {
   id: string;
@@ -83,6 +152,10 @@ export default function FirewallManagementPage() {
           <p className="text-gray-400 text-sm">Deny Rules</p>
         </div>
       </div>
+
+      {/* Firewall supervision & response console — critical-rule audits,
+          syslog/SNMP/OID extraction and vendor-specific config push */}
+      <OpsConsole service="firewall-mgmt" title="Firewall Supervision & Response Console" groups={FW_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

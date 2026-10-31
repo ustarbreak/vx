@@ -1,6 +1,59 @@
 import React, { useState, useEffect } from 'react';
 import { Wifi, Users, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const VPN_GROUPS: ActionGroup[] = [
+  {
+    title: 'Session investigation', icon: 'Search',
+    fields: [
+      { name: 'user', label: 'User / tunnel to investigate', placeholder: 'e.g. j.dupont or tunnel HQ-BRANCH' },
+      { name: 'window', label: 'Time window', options: ['Last hour', 'Last 24h', 'Last 7 days'] },
+    ],
+    actions: [
+      { id: 'vpn-list-sessions', label: 'Dump Active VPN Sessions (vpn-sessiondb)' },
+      { id: 'vpn-user-history', label: 'Login History & Failed Auth for User' },
+      { id: 'vpn-split-tunnel-audit', label: 'Audit Split-Tunnel / Route Leaks' },
+      { id: 'vpn-geo-anomaly', label: 'Impossible-Travel / Geo Anomaly Check' },
+      { id: 'vpn-negotiation-log', label: 'Pull IKE / Phase-1 Negotiation Logs' },
+      { id: 'vpn-throughput', label: 'Per-Tunnel Throughput & Error Counters' },
+    ],
+  },
+  {
+    title: 'Response actions', icon: 'Ban', danger: true,
+    fields: [{ name: 'user', label: 'Target user / session', placeholder: 'e.g. j.dupont' }],
+    actions: [
+      { id: 'vpn-terminate-session', label: 'Terminate VPN Session' },
+      { id: 'vpn-terminate-all', label: 'Terminate All Sessions for User' },
+      { id: 'vpn-block-user', label: 'Block User from VPN Gateway' },
+      { id: 'vpn-force-rekey', label: 'Force Rekey / SA Renewal' },
+      { id: 'vpn-reset-cert', label: 'Revoke & Reissue Client Certificate' },
+    ],
+  },
+  {
+    title: 'Push configuration', icon: 'Upload',
+    fields: [
+      { name: 'gateway', label: 'Target gateway', placeholder: 'e.g. FG-VPN-01' },
+      { name: 'vendor', label: 'Vendor editor', options: ['fortinet', 'cisco', 'paloalto', 'checkpoint'] },
+      { name: 'profile', label: 'Hardening profile', options: ['Enforce MFA everywhere', 'Disable weak ciphers (PFS + AES-GCM only)', 'Restrict tunnel to corporate subnets', 'Idle timeout 30 min'] },
+    ],
+    actions: [
+      { id: 'vpn-push-policy', label: 'Push VPN Policy Now' },
+      { id: 'vpn-enable-mfa', label: 'Enforce MFA on RADIUS/SAML Backend' },
+      { id: 'vpn-harden-crypto', label: 'Harden IPsec Crypto Suite' },
+      { id: 'vpn-limit-sessions', label: 'Set Max Concurrent Sessions per User' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'vpn-pb-bruteforce', label: 'Arm Playbook: Auto-Block VPN Brute-Force' },
+      { id: 'vpn-pb-impossible-travel', label: 'Arm Playbook: Impossible Travel → Kill Session + Ticket' },
+      { id: 'vpn-pb-down-alert', label: 'Arm Playbook: Tunnel Down → Notify Tier-2' },
+    ],
+  },
+];
 
 interface VPNConnection {
   id: string;
@@ -83,6 +136,10 @@ export default function VPNGatewayPage() {
           <p className="text-gray-400 text-sm">Disconnected</p>
         </div>
       </div>
+
+      {/* VPN investigation & response console — session hunting, containment,
+          hardening push and playbook arming */}
+      <OpsConsole service="vpn-gateway" title="VPN Gateway Investigation & Response Console" groups={VPN_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

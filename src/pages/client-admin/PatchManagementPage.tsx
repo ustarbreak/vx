@@ -1,6 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import { Wrench, CheckCircle, AlertTriangle, Clock } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const PATCH_GROUPS: ActionGroup[] = [
+  {
+    title: 'Software inventory collection (collector)', icon: 'Database',
+    fields: [{ name: 'device', label: 'Target device', placeholder: 'e.g. WS-FIN-012 or All endpoints' }],
+    actions: [
+      { id: 'patch-collect-now', label: 'Collect Software Inventory Now' },
+      { id: 'patch-collect-schedule', label: 'Schedule Collector Re-Poll' },
+      { id: 'patch-outdated-report', label: 'Report: Outdated Software + Suggested Patches' },
+      { id: 'patch-eol-detect', label: 'Detect End-of-Life / Unsupported Versions' },
+      { id: 'patch-thirdparty', label: 'Third-App Patch Catalog Sync' },
+    ],
+  },
+  {
+    title: 'Scan schedules (daily / weekly / monthly / custom)', icon: 'Calendar',
+    fields: [
+      { name: 'frequency', label: 'Frequency', options: ['Daily (quotidian)', 'Weekly', 'Monthly', 'Yearly', 'Custom poll interval'] },
+      { name: 'window', label: 'Maintenance window', placeholder: 'e.g. Tue 03:00' },
+    ],
+    actions: [
+      { id: 'patch-sched-daily', label: 'Set Daily Compliance Scan' },
+      { id: 'patch-sched-weekly', label: 'Set Weekly Scan' },
+      { id: 'patch-sched-monthly', label: 'Set Monthly Scan' },
+      { id: 'patch-sched-custom', label: 'Set Custom Poll-Time Scan' },
+    ],
+  },
+  {
+    title: 'Deploy patches', icon: 'Upload', danger: true,
+    fields: [
+      { name: 'scope', label: 'Deployment scope', options: ['Selected device', 'Site / group', 'All endpoints'] },
+      { name: 'severity', label: 'Auto-approve severity', options: ['Critical only', 'Critical + High', 'All missing patches'] },
+    ],
+    actions: [
+      { id: 'patch-deploy-critical', label: 'Deploy Critical Patches Now' },
+      { id: 'patch-deploy-selected', label: 'Deploy Selected Patch Batch' },
+      { id: 'patch-test-ring', label: 'Push to Pilot Ring First (canary)' },
+      { id: 'patch-retry-failed', label: 'Retry Failed Installations' },
+      { id: 'patch-uninstall', label: 'Uninstall Last Patch (rollback)' },
+      { id: 'patch-reboot', label: 'Schedule Required Reboots' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'patch-pb-auto', label: 'Arm Playbook: Auto-Patch Critical CVEs' },
+      { id: 'patch-pb-report', label: 'Schedule: Weekly Patch Compliance Report' },
+      { id: 'patch-pb-ticket', label: 'Arm Playbook: Failed Patch → Ticket Tier-1' },
+    ],
+  },
+];
 
 interface Patch {
   id: string;
@@ -81,6 +133,9 @@ export default function PatchManagementPage() {
           <p className="text-gray-400 text-sm">Failed</p>
         </div>
       </div>
+
+      {/* Patch operations console — collector, schedules and deployment */}
+      <OpsConsole service="patch-management" title="Patch Management Operations Console" groups={PATCH_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

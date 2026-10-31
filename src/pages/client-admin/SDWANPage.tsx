@@ -2,6 +2,61 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Network, Activity, CheckCircle, AlertTriangle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const SDWAN_VENDORS = ['fortinet', 'cisco', 'paloalto', 'velocloud', 'watchguard'];
+
+const SDWAN_GROUPS: ActionGroup[] = [
+  {
+    title: 'Troubleshoot by vendor & problem (exact CLI for that editor)', icon: 'Wrench',
+    fields: [
+      { name: 'vendor', label: 'Vendor / editor', options: SDWAN_VENDORS },
+      { name: 'problem', label: 'Problem scenario', options: ['packet_loss', 'tunnel_down', 'failover', 'app_routing'] },
+      { name: 'site', label: 'Site / edge device', placeholder: 'e.g. BR-MADRID-01' },
+    ],
+    actions: [
+      { id: 'sdwan-ts-packet-loss', label: 'Run Packets Loss / Jitter Checks' },
+      { id: 'sdwan-ts-tunnel-down', label: 'Run Tunnel-Down Diagnostics' },
+      { id: 'sdwan-ts-failover', label: 'Run Failover / Path-Selection Checks' },
+      { id: 'sdwan-ts-app-routing', label: 'Run Application Steering Checks' },
+      { id: 'sdwan-ts-zbfw', label: 'Run Zone-Firewall Drop Checks (Cisco)' },
+    ],
+  },
+  {
+    title: 'Overlay health investigation', icon: 'Search',
+    fields: [{ name: 'site', label: 'Site to inspect', placeholder: 'e.g. BR-LISBON-02' }],
+    actions: [
+      { id: 'sdwan-health-checks', label: 'Dump SLA Health-Check Results' },
+      { id: 'sdwan-member-stats', label: 'Per-Member RTT / Loss / Jitter Stats' },
+      { id: 'sdwan-tunnel-table', label: 'Show Overlay Tunnel Table' },
+      { id: 'sdwan-route-table', label: 'Verify Route Preference & Steering' },
+      { id: 'sdwan-neighbor-cache', label: 'Check Peer / Neighbour Reachability' },
+      { id: 'sdwan-support-bundle', label: 'Generate Support Report Bundle' },
+    ],
+  },
+  {
+    title: 'Push configuration', icon: 'Upload', danger: true,
+    fields: [
+      { name: 'vendor', label: 'Vendor / editor', options: SDWAN_VENDORS },
+      { name: 'template', label: 'Change template', options: ['Adjust SLA thresholds (loss<1% jitter<30ms)', 'Re-prioritise business-critical app rule', 'Enable per-packet load balancing', 'Add backup colour to policy'] },
+    ],
+    actions: [
+      { id: 'sdwan-push-sla', label: 'Push SLA Profile Update' },
+      { id: 'sdwan-push-steering', label: 'Push Traffic-Steering Policy' },
+      { id: 'sdwan-force-rebalance', label: 'Force Path Rebalance Now' },
+      { id: 'sdwan-clear-tunnels', label: 'Reset Overlay Tunnels at Site' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'sdwan-pb-degrade', label: 'Arm Playbook: Link Degradation → Ticket + Notify' },
+      { id: 'sdwan-pb-down', label: 'Arm Playbook: Site Down → Failover Verify + Escalate' },
+      { id: 'sdwan-pb-nightly-quality', label: 'Schedule: Nightly Overlay Quality Report' },
+    ],
+  },
+];
 
 interface SDWANAlert {
   id: string;
@@ -76,6 +131,10 @@ export default function SDWANPage() {
           <p className="text-gray-400 text-sm">Down</p>
         </div>
       </div>
+
+      {/* SD-WAN troubleshooting console — vendor-specific commands
+          (Fortinet / Cisco Viptela / Palo Alto / VeloCloud / Watchguard) */}
+      <OpsConsole service="sd-wan" title="SD-WAN Troubleshooting & Response Console" groups={SDWAN_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

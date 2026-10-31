@@ -1,6 +1,59 @@
 import React, { useState, useEffect } from 'react';
 import { Database, CheckCircle, AlertTriangle, Clock, HardDrive } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const BACKUP_GROUPS: ActionGroup[] = [
+  {
+    title: 'Backup server connection & inventory', icon: 'Link2',
+    fields: [{ name: 'server', label: 'Backup server', placeholder: 'e.g. bkr-vault01.corp / Veeam / NAS endpoint' }],
+    actions: [
+      { id: 'bk-connect-server', label: 'Connect / Test Backup Server Link' },
+      { id: 'bk-list-repos', label: 'List Repositories & Retention Policies' },
+      { id: 'bk-agent-status', label: 'Check Backup Agent Status per Device' },
+      { id: 'bk-capacity-report', label: 'Storage Capacity & Growth Report' },
+    ],
+  },
+  {
+    title: 'Configure schedules (daily / weekly / monthly / yearly)', icon: 'Calendar',
+    fields: [
+      { name: 'frequency', label: 'Frequency', options: ['Daily (quotidian)', 'Weekly', 'Monthly', 'Yearly', 'Custom window'] },
+      { name: 'window', label: 'Backup window', placeholder: 'e.g. 22:00-02:00' },
+      { name: 'retention', label: 'Retention', options: ['7 daily', '30 daily + 12 monthly', 'GFS 1W/1M/1Y', 'Custom'] },
+    ],
+    actions: [
+      { id: 'bk-sched-daily', label: 'Set Daily Job' },
+      { id: 'bk-sched-weekly', label: 'Set Weekly Full + Daily Incremental' },
+      { id: 'bk-sched-monthly', label: 'Set Monthly Archive' },
+      { id: 'bk-sched-yearly', label: 'Set Yearly Long-Term Retention' },
+    ],
+  },
+  {
+    title: 'Run & verify jobs', icon: 'Play',
+    fields: [{ name: 'job', label: 'Job / device', placeholder: 'e.g. SQL-PROD-01 full backup' }],
+    actions: [
+      { id: 'bk-run-now', label: 'Run Backup Job Now' },
+      { id: 'bk-retry-failed', label: 'Retry Failed Jobs' },
+      { id: 'bk-verify', label: 'Verify Restore Points (checksum)' },
+      { id: 'bk-drill', label: 'Launch DR Recovery Drill' },
+      { id: 'bk-log-export', label: 'Export Backup Job Logs' },
+    ],
+  },
+  {
+    title: 'Recovery actions', icon: 'Download', danger: true,
+    fields: [
+      { name: 'device', label: 'Source device', placeholder: 'e.g. SRV-FILE-02' },
+      { name: 'point', label: 'Restore point', placeholder: 'e.g. 2026-10-30 22:00 full' },
+    ],
+    actions: [
+      { id: 'bk-restore-file', label: 'Granular File/Folder Restore' },
+      { id: 'bk-restore-vm', label: 'Full VM / Image Restore' },
+      { id: 'bk-instant-recovery', label: 'Instant VM Recovery (run from backup)' },
+      { id: 'bk-failover', label: 'Trigger Site Failover (DR plan)' },
+    ],
+  },
+];
 
 interface BackupJob {
   id: string;
@@ -82,6 +135,9 @@ export default function BackupDRPage() {
           <p className="text-gray-400 text-sm">Failed</p>
         </div>
       </div>
+
+      {/* Backup & DR console — server link, schedules, job verification and recovery */}
+      <OpsConsole service="backup-dr" title="Backup & Disaster Recovery Console" groups={BACKUP_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

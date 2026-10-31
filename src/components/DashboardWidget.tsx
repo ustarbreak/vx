@@ -1,10 +1,18 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { GripVertical, Plus, X, RotateCcw } from 'lucide-react';
 import { isDemoMode } from '../services/demoMode';
-// Static import of the catalogue picker. WidgetCatalog only imports plain
-// functions/constants from this module (no hooks at eval time), so this edge
-// of the cycle is safe — both modules fully resolve before any render.
-import { AddWidgetModal } from './WidgetCatalog';
+// NOTE: there used to be a STATIC `import { AddWidgetModal } from './WidgetCatalog'`
+// here, justified by a comment claiming the cycle was "safe". It is NOT under ESM
+// temporal dead zones: when an entry point (e.g. App.tsx -> pages) evaluates
+// WidgetCatalog.tsx BEFORE DashboardWidget.tsx, WidgetCatalog's top-level call to
+// registerCatalogEntryComponent(...) reads CATALOG_ENTRY_REF while
+// DashboardWidget.tsx is still mid-evaluation (its const bindings are in the TDZ),
+// throwing "Cannot access 'CATALOG_ENTRY_REF' before initialization" and leaving
+// the React root empty — i.e. a blank page on 127.0.0.1:5173/. The cycle must be
+// broken on THIS side: keep the DashboardWidget -> WidgetCatalog edge lazy so the
+// dependency graph becomes acyclic at evaluation time (WidgetCatalog may then
+// statically import everything it needs from DashboardWidget).
+import { lazyResolveAddWidgetModal } from './addWidgetModalLazy';
 import {
   DndContext,
   PointerSensor,
@@ -1020,7 +1028,10 @@ function AddWidgetCell() {
         <Plus className="w-6 h-6" />
         <span className="text-xs font-medium">Add widget</span>
       </button>
-      {open && <AddWidgetModal onClose={() => setOpen(false)} />}
+      {/* Lazy: resolves the catalogue modal via a dynamic import() on first
+          open, keeping DashboardWidget.tsx from statically importing
+          WidgetCatalog.tsx (that edge is what created the eval-time cycle). */}
+      {open && React.createElement(lazyResolveAddWidgetModal(), { onClose: () => setOpen(false) })}
     </div>
   );
 }

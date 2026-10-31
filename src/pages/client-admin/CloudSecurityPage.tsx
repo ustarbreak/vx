@@ -2,6 +2,59 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Cloud, AlertTriangle, CheckCircle, Shield, Server } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const CLOUD_GROUPS: ActionGroup[] = [
+  {
+    title: 'Posture review & deep-dive', icon: 'Eye',
+    fields: [
+      { name: 'resource', label: 'Resource / workload (ARN, ID or FQDN)', placeholder: 'arn:aws:s3:::my-company-data' },
+    ],
+    actions: [
+      { id: 'cloud-detail', label: 'Open Full Finding Detail' },
+      { id: 'cloud-timeline', label: 'Build Resource Activity Timeline' },
+      { id: 'cloud-iam-path', label: 'Trace IAM / Attack Path to Resource' },
+      { id: 'cloud-network-map', label: 'Show Network Exposure Map' },
+      { id: 'cloud-compliance', label: 'Map Finding to Compliance Control (CIS/ISO)' },
+      { id: 'cloud-baseline', label: 'Re-evaluate Posture Baseline Now' },
+    ],
+  },
+  {
+    title: 'Configuration & guardrails push', icon: 'Upload',
+    fields: [
+      { name: 'policy', label: 'Guardrail template', options: ['Block Public Buckets', 'Enforce Encryption-at-Rest', 'Least-Privilege IAM Pack', 'CloudTrail/Activity Log Always-On'] },
+      { name: 'scope', label: 'Scope', options: ['All accounts/subscriptions', 'Selected account', 'Production only'] },
+    ],
+    actions: [
+      { id: 'cloud-push-guardrail', label: 'Push Guardrail / Policy Now' },
+      { id: 'cloud-enable-drift', label: 'Enable Hourly Drift Detection' },
+      { id: 'cloud-remediate', label: 'Attach Auto-Remediation Template' },
+      { id: 'cloud-snapshot-protect', label: 'Force Deletion Protection on Resource' },
+    ],
+  },
+  {
+    title: 'Investigate related alerts, tickets & assets', icon: 'Search',
+    fields: [{ name: 'query', label: 'Filter (provider, service or resource)', placeholder: 'AWS S3 public' }],
+    actions: [
+      { id: 'cloud-alerts-correlate', label: 'Correlate Alerts on Same Resource' },
+      { id: 'cloud-open-ticket', label: 'Create Ticket with Evidence Pack' },
+      { id: 'cloud-asset-inventory', label: 'Pull Affected Asset Inventory' },
+      { id: 'cloud-anomalous-call', label: 'Hunt Anomalous API Calls (rootkit/cloudbleed)' },
+    ],
+  },
+  {
+    title: 'Containment playbooks (SOAR-ready)', icon: 'Zap', danger: true,
+    fields: [{ name: 'resource', label: 'Resource to contain', placeholder: 'vm-web-01 / sg-0abc…' }],
+    actions: [
+      { id: 'cloud-quarantine-wl', label: 'Quarantine Workload (isolating SG)' },
+      { id: 'cloud-revoke-keys', label: 'Revoke Compromised Access Keys' },
+      { id: 'cloud-close-public', label: 'Remove Public Access Immediately' },
+      { id: 'cloud-pb-breach', label: 'Arm Playbook: Cloud Account Breach' },
+      { id: 'cloud-pb-miner', label: 'Arm Playbook: Crypto-Miner Outbreak' },
+    ],
+  },
+];
 
 interface CloudAlert {
   id: string;
