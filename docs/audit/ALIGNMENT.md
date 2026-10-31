@@ -15,6 +15,14 @@ Brief analyzed: `Infracentra Agent Brief for Service Registry, Connectors, Insta
 | 5 | TLS verify=False / InsecureSkipVerify | **Fix behind a flag; keep current lenient behavior as default** (no breakage of existing self-signed lab setups). | Add `CONNECTOR_TLS_VERIFY` env (default false = current behavior) and agent-go `--insecure` config (default true); flip defaults later via explicit migration note, never silently. |
 | 6 | EDR console wiring | **Already pre-installed/coded; day-of implementation needs only a simple adapter change, not a backend rewrite.** | Resolves that TODO_VERIFY directionally: thin adapters map console actions to `/api/actions`; characterization tests first; no route rewrites, no React restructuring. |
 
+## Owner decisions log (2026-10-31, turn 3) - closes the remaining open questions
+
+| # | Question from turn 2 | Owner decision | Effect on docs/plan |
+| --- | --- | --- | --- |
+| 7 | Target VM specs for preflight thresholds | **"Only what is defaultly could be used"** — use conservative defaults sized for containerized deployments; no bespoke VM sizing provided. | `deploy/preflight.sh` (T3.1) uses documented defaults: min 8 GB RAM / 4 vCPU / 100 GB disk / Docker Engine + Compose v2 present; per-service resource requests come from the catalog YAMLs (T1.2). Defaults marked `TODO_VERIFY` against the real host on day of install; fail-loudly if below. |
+| 8 | Greenbone placement (heaviest container, ~8 GB RAM alone) | **Move Greenbone to Phase 6** (out of the MVP installer set). | T3.5 removed from Phase 3; added as T6.0 in Phase 6. MVP profile = Wazuh + MISP + DFIR-IRIS only; scan/vulnerability capability stays `roadmap` until Phase 6. |
+| 9 | node_modules de-track (T8.1) timing | **Do it together with feature work** ("to feature work") — not deferred to the end. | De-tracking commit moves into Phase 1 (new T1.6): gitignore + `git rm -r --cached node_modules` + `npm ci` Dockerfile step, landed as its own labeled commit alongside early additive features. |
+
 Status legend used throughout: **ga** = production-grade and tested here, **beta** = real code, unverified against live external systems, **roadmap** = scaffold/label only.
 
 ---
