@@ -198,6 +198,8 @@ function AppRoutes() {
 
         {/* Cross-role service consoles (Advanced Ticketing + Notification Engine) */}
         <Route path="client-admin/advanced-tickets" element={<AdvancedTicketingPage />} />
+        {/* Deep link from AlertsPage related-ticket chips — renders the Service Desk with the ticket drawer open */}
+        <Route path="client-admin/tickets/:ticketUid" element={<AdvancedTicketingPage />} />
         <Route path="client-admin/notifications" element={<NotificationEnginePage />} />
         <Route path="portal" element={<ClientPortalPage />} />
 

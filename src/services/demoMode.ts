@@ -1772,6 +1772,26 @@ export const demoStore = {
       }
       if (method === 'GET') return delay(discoveredDevices as any) as unknown as T;
       if (method === 'POST' && parts[2] === 'import') { const d = discoveredDevices.find(x => x.id === Number(parts[1])); if (d) d.imported = true; return delay(d as any) as unknown as T; }
+      // Device response actions — mirrors backend POST /discovery/devices/{id}/actions/{action}.
+      // Same honesty contract: the command is queued for the collector, never
+      // reported as already executed. Delivery depends on a matching probe row.
+      if (method === 'POST' && parts[2] === 'actions') {
+        const d = discoveredDevices.find(x => x.id === Number(parts[1]));
+        if (!d) throw httpErr(404, 'Device not found');
+        const action = parts[3];
+        if (!['kill', 'isolate', 'unisolate', 'remote_screen'].includes(action)) throw httpErr(400, `Unknown action '${action}'`);
+        const orgDev = demoDevices.filter(x => x.orgId === d.org_id);
+        const fleetSize = Math.max(2, Math.ceil(orgDev.length / 3));
+        const dd = demoDevices.find(x => x.hostname === d.hostname && x.orgId === d.org_id);
+        const hasProbe = !!dd && orgDev.slice(0, fleetSize).some(x => x.hostname === dd.hostname);
+        return delay({
+          ok: true, action, device_id: d.id, hostname: d.hostname, ip: d.ip,
+          delivery: hasProbe ? 'queued_for_probe' : 'no_collector', executed: false,
+          note: hasProbe
+            ? 'Command stored for the enrolled collector; it applies the action on its next policy poll (≤ sweep interval).'
+            : 'This host has no enrolled goinfra collector, so the platform cannot enforce the action remotely. Deploy an agent or act at the switch/firewall level.',
+        } as any) as unknown as T;
+      }
     }
     if (root === 'engine-status') return delay({ nmap_available: false, mode: 'demo-simulated' } as any) as unknown as T;
 

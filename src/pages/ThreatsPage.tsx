@@ -14,7 +14,7 @@ import DashboardWidget, {
 import { AddWidgetButton, AllCatalogEntries } from '../components/WidgetCatalog';
 
 const THREATS_LAYOUT: WidgetLayoutEntry[] = [
-  { id: 'th-graph', colSpan: 3, collapsed: false },
+  // th-graph is a bare widget rendered outside the grid — not listed here.
   { id: 'th-lookup', colSpan: 2, collapsed: false },
   { id: 'th-feed', colSpan: 3, collapsed: false },
 ];
@@ -345,12 +345,15 @@ function ThreatsContent() {
 
       {!isDemoMode() && <FeedStatusPanel />}
 
+      {/* §6D — Threat Intelligence Relationship Graph (verified evidence only).
+          IntelRelationshipGraph renders its own card + header, so it is a bare
+          widget declared OUTSIDE the slot grid — no DashboardWidget chrome on top. */}
+      <div data-widget-id="th-graph">
+        <IntelRelationshipGraph threats={baseList} matches={graphMatches} />
+      </div>
+
+      {/* Everything below is the customizable widget grid */}
       <WidgetGrid>
-        {/* §6D — Threat Intelligence Relationship Graph (verified evidence only) */}
-        <DashboardWidget id="th-graph" title="Threat Relationship Graph" spanOptions={[2, 3]}
-          subtitle="Verified evidence links only — indicator ⇄ incident ⇄ asset ⇄ alert">
-          <IntelRelationshipGraph threats={baseList} matches={graphMatches} />
-        </DashboardWidget>
 
         <DashboardWidget id="th-lookup" title="IoC Search & Enrichment" spanOptions={[1, 2, 3]}>
           <div className="relative">

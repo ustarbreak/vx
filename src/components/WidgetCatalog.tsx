@@ -1,11 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Plus, X, Search as SearchIcon, ShieldCheck, Server, Activity, Users, Building2,
+  Plus as PlusIcon, X as XIcon, Search as SearchIcon, ShieldCheck, Server, Activity, Users, Building2,
   Database, Zap, Wrench, Archive, Gauge, ListChecks, Radar, Inbox, FolderOpen,
 } from 'lucide-react';
 import { AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { CatalogEntryPlaceholder, useOptionalLayoutCtx, widgetStorageKey, type WidgetLayoutEntry } from './DashboardWidget';
+import {
+  CatalogEntryPlaceholder,
+  useOptionalLayoutCtx,
+  widgetStorageKey,
+  PageKeyContext,
+  DefaultLayoutContext,
+  registerCatalogEntryComponent,
+  type WidgetLayoutEntry,
+} from './DashboardWidget';
 import {
   mockAlerts, mockRiskScore, mockNISTMapping, mockNetworkDevices, mockPatches, mockBackups,
 } from '../data/mockData';
@@ -661,9 +669,118 @@ export function AllCatalogEntries(): React.ReactElement[] {
   return CATALOG_WIDGETS.map((w) => <CatalogEntry key={w.id} id={w.id} />);
 }
 
+// Register <CatalogEntry/> with the board scanner in DashboardWidget.tsx.
+// Without this, widgets added through "+ Add widget" are recognized nowhere
+// on the board and never render — the "add widget does nothing" bug. The
+// registry avoids a static import cycle between the two modules.
+registerCatalogEntryComponent(CatalogEntry);
+
 /* ------------------------------------------------------------------ */
 /* "Add widget" button + picker modal                                  */
 /* ------------------------------------------------------------------ */
+
+/**
+ * The catalogue picker itself (no trigger button). Used both by the header
+ * <AddWidgetButton/> and by the "+ Add widget" card that always sits after
+ * the last widget on every board. Reads the active page context so it works
+ * anywhere inside a <WidgetLayoutProvider>.
+ */
+export function AddWidgetModal({ onClose }: { onClose: () => void }) {
+  const ctx = useOptionalLayoutCtx();
+  const pageKey = useContext(PageKeyContext);
+  const defaultLayout = useContext(DefaultLayoutContext);
+  const [query, setQuery] = useState('');
+
+  if (!pageKey) return null;
+
+  const currentIds = ctx ? ctx.layout.map((w) => w.id) : readSavedIds(pageKey);
+
+  const candidates = CATALOG_WIDGETS.filter(
+    (w) => (w.pages.includes(pageKey) || w.pages.includes('*')) && !currentIds.includes(w.id)
+  );
+  const shown = query.trim()
+    ? candidates.filter((w) => (w.title + ' ' + (w.description ?? '')).toLowerCase().includes(query.toLowerCase()))
+    : candidates;
+
+  const add = (id: string) => {
+    const def = catalogById.get(id);
+    if (!def) return;
+    if (ctx) {
+      // Respect the widget's preferred default width from the catalog.
+      // Appending at the end of the layout array == right after the last
+      // visible widget on the board (the board's sync effect places it there).
+      ctx.setLayout((prev) => [...prev, { id, colSpan: def.spanOptions?.[0] ?? 1, collapsed: false }]);
+    } else {
+      // No provider on this page — persist directly so the widget appears next load.
+      const saved = readSavedIds(pageKey);
+      const mergedIds = [
+        ...defaultLayout.map((d) => d.id),
+        ...saved.filter((s) => !defaultLayout.some((d) => d.id === s)),
+        id,
+      ];
+      try {
+        localStorage.setItem(
+          storageKeyFor(pageKey),
+          JSON.stringify(
+            mergedIds.map((wid) => ({
+              id: wid,
+              colSpan: catalogById.get(wid)?.spanOptions?.[0] ?? 1,
+              collapsed: false,
+            }))
+          )
+        );
+      } catch { /* ignore */ }
+      window.dispatchEvent(new Event('ic-widgets-changed'));
+    }
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 sm:p-8" role="dialog" aria-modal="true" aria-label="Add widget catalogue">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col rounded-2xl border border-[var(--ic-border)] bg-[var(--ic-surface)] shadow-2xl">
+        <div className="flex items-center gap-3 p-4 border-b border-[var(--ic-border)]">
+          <PlusIcon className="w-5 h-5 text-cyan-400 flex-shrink-0" />
+          <div className="flex-1">
+            <h2 className="text-sm font-bold text-[var(--ic-heading)]">Widget catalogue — build your dashboard</h2>
+            <p className="text-[11px] text-[var(--ic-muted)]">Click “Add” to place a widget on this page, then drag ⠿ / resize / collapse it wherever you want. Your arrangement is saved automatically.</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)]" aria-label="Close catalogue">
+            <XIcon className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="p-4 pb-2">
+          <div className="relative">
+            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--ic-muted)]" />
+            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search available widgets…"
+              className="w-full pl-9 pr-3 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] placeholder-slate-500 focus:outline-none focus:border-cyan-500/50" />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 content-start">
+          {shown.length === 0 && (
+            <p className="col-span-full text-center text-xs text-[var(--ic-muted)] py-8">
+              {candidates.length === 0 ? 'Every available widget is already on this page 🎉' : 'No widget matches your search.'}
+            </p>
+          )}
+          {shown.map((w) => (
+            <div key={w.id} className="flex items-start gap-3 p-3 rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface-2)] hover:border-cyan-400/40 transition-colors">
+              <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 flex-shrink-0">{w.icon}</div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-[var(--ic-heading)]">{w.title}</p>
+                <p className="text-[11px] text-[var(--ic-muted)] mt-0.5 line-clamp-2">{w.description}</p>
+              </div>
+              <button onClick={() => add(w.id)}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 flex-shrink-0">
+                Add
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function AddWidgetButton({
   pageKey,
@@ -676,7 +793,6 @@ export function AddWidgetButton({
 }) {
   const ctx = useOptionalLayoutCtx();
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
 
   const currentIds = ctx ? ctx.layout.map((w) => w.id) : readSavedIds(pageKey);
   const visible = (id: string) => currentIds.includes(id) || extraIds.includes(id);
@@ -684,9 +800,6 @@ export function AddWidgetButton({
   const candidates = CATALOG_WIDGETS.filter(
     (w) => (w.pages.includes(pageKey) || w.pages.includes('*')) && !visible(w.id)
   );
-  const shown = query.trim()
-    ? candidates.filter((w) => (w.title + ' ' + (w.description ?? '')).toLowerCase().includes(query.toLowerCase()))
-    : candidates;
 
   const add = (id: string) => {
     const def = catalogById.get(id);
@@ -727,54 +840,10 @@ export function AddWidgetButton({
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-500/10 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/20 transition-colors"
         title="Add more widgets to this page"
       >
-        <Plus className="w-3.5 h-3.5" /> Add widget
+        <PlusIcon className="w-3.5 h-3.5" /> Add widget
       </button>
 
-      {open && (
-        <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 sm:p-8" role="dialog" aria-modal="true" aria-label="Add widget catalogue">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)} />
-          <div className="relative w-full max-w-3xl max-h-[85vh] overflow-hidden flex flex-col rounded-2xl border border-[var(--ic-border)] bg-[var(--ic-surface)] shadow-2xl">
-            <div className="flex items-center gap-3 p-4 border-b border-[var(--ic-border)]">
-              <Plus className="w-5 h-5 text-cyan-400 flex-shrink-0" />
-              <div className="flex-1">
-                <h2 className="text-sm font-bold text-[var(--ic-heading)]">Widget catalogue — build your dashboard</h2>
-                <p className="text-[11px] text-[var(--ic-muted)]">Click “Add” to place a widget on this page, then drag ⠿ / resize / collapse it wherever you want. Your arrangement is saved automatically.</p>
-              </div>
-              <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-[var(--ic-muted)] hover:text-[var(--ic-heading)] hover:bg-[var(--ic-surface-2)]" aria-label="Close catalogue">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 pb-2">
-              <div className="relative">
-                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--ic-muted)]" />
-                <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search available widgets…"
-                  className="w-full pl-9 pr-3 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] placeholder-slate-500 focus:outline-none focus:border-cyan-500/50" />
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 content-start">
-              {shown.length === 0 && (
-                <p className="col-span-full text-center text-xs text-[var(--ic-muted)] py-8">
-                  {candidates.length === 0 ? 'Every available widget is already on this page 🎉' : 'No widget matches your search.'}
-                </p>
-              )}
-              {shown.map((w) => (
-                <div key={w.id} className="flex items-start gap-3 p-3 rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface-2)] hover:border-cyan-400/40 transition-colors">
-                  <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400 flex-shrink-0">{w.icon}</div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-[var(--ic-heading)]">{w.title}</p>
-                    <p className="text-[11px] text-[var(--ic-muted)] mt-0.5 line-clamp-2">{w.description}</p>
-                  </div>
-                  <button onClick={() => add(w.id)}
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 flex-shrink-0">
-                    Add
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {open && <AddWidgetModal onClose={() => setOpen(false)} />}
     </>
   );
 }

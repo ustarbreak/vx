@@ -1,6 +1,10 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { GripVertical, Plus, X, RotateCcw } from 'lucide-react';
 import { isDemoMode } from '../services/demoMode';
+// Static import of the catalogue picker. WidgetCatalog only imports plain
+// functions/constants from this module (no hooks at eval time), so this edge
+// of the cycle is safe — both modules fully resolve before any render.
+import { AddWidgetModal } from './WidgetCatalog';
 import {
   DndContext,
   PointerSensor,
@@ -18,9 +22,25 @@ import { CSS } from '@dnd-kit/utilities';
 // Lazy registry for the <CatalogEntry/> component defined in WidgetCatalog.tsx.
 // A static `import { CatalogEntry }` here would create an import cycle
 // (WidgetCatalog already imports from this module), so WidgetCatalog registers
-// its component reference at load time and we compare against it via `any`
-// (React element `type` identity comparison is not expressible in TS).
+// its component reference at load time (see `registerCatalogEntryComponent`)
+// and we compare against it via `any` (React element `type` identity
+// comparison is not expressible in TS). Without registration the board scanner
+// cannot see catalog widgets declared through AllCatalogEntries(), so they
+// never render after being added — the "add widget does nothing" bug.
 export const CATALOG_ENTRY_REF: { current: any } = { current: null };
+
+/** Called once by WidgetCatalog.tsx at module load to register <CatalogEntry/>. */
+export function registerCatalogEntryComponent(component: unknown) {
+  CATALOG_ENTRY_REF.current = component;
+}
+
+/** Registry for bare self-carded components (WorldAttackMap, OrgTopologyMap…)
+ *  so the board can wrap them with edge-resize chrome instead of skipping them. */
+export const BARE_WIDGET_REGISTRY: Map<unknown, { id: string; title: string }> = new Map();
+
+export function registerBareWidget(component: unknown, meta: { id: string; title: string }) {
+  BARE_WIDGET_REGISTRY.set(component, meta);
+}
 
 /* ------------------------------------------------------------------ */
 /* Layout state — shared per page via context so widgets can reorder,  */
@@ -31,7 +51,17 @@ export interface WidgetLayoutEntry {
   id: string;
   colSpan: number; // 1..3 (on lg screens); auto-clamped on smaller ones
   collapsed: boolean;
+  /** Free height in pixels when the user has edge-resized this widget. */
+  heightPx?: number;
+  /** When true the card chrome hides its own header (self-carded bare widgets
+   *  like the attack map keep their internal toolbar; only resize edges show). */
+  hideHeader?: boolean;
 }
+
+/** Grid slot sizes, smallest → largest. `colSpan` values are 1..3 thirds. */
+const SPAN_SIZES = [1, 2, 3] as const;
+const MIN_HEIGHT_PX = 140;
+const MAX_HEIGHT_PX = 1600;
 
 interface LayoutCtx {
   layout: WidgetLayoutEntry[];
@@ -83,10 +113,21 @@ export function widgetAddedCatalogKey(pageKey: string): string {
 export interface DashboardLayoutDto {
   page_key: string;
   layout: WidgetLayoutEntry[];
+  /** Catalogue (`cat-*`) widget ids the user explicitly added on this page. */
+  added_catalog?: string[];
+  /** Free-flow visual order of widget ids across the page's boards. */
+  order?: string[];
   updated_at?: string | null;
 }
 
-async function loadSavedLayout(pageKey: string): Promise<WidgetLayoutEntry[] | null> {
+/** Legacy helper: an old server copy may have carried the order inside the
+ *  layout array itself as a non-enumerable `slots` property. */
+const slotsOf = (layout: unknown): (string | null)[] | undefined => {
+  const raw = (layout as any)?.slots;
+  return Array.isArray(raw) ? (raw as (string | null)[]) : undefined;
+};
+
+async function loadSavedLayout(pageKey: string): Promise<{ layout: WidgetLayoutEntry[]; addedCatalog?: string[] } | null> {
   // 1) Instant local cache (offline / first paint), 2) authoritative server copy.
   const storageKey = widgetStorageKey(pageKey);
   let cached: WidgetLayoutEntry[] | null = null;
@@ -102,19 +143,28 @@ async function loadSavedLayout(pageKey: string): Promise<WidgetLayoutEntry[] | n
     try {
       const { dashboardLayoutApi } = await import('../services/api');
       const dto = await dashboardLayoutApi.get(pageKey);
-      if (Array.isArray(dto?.layout) && dto.layout.length) return dto.layout;
+      // Backend payload is the layout array itself; user-added catalogue ids
+      // are kept in a parallel `added_catalog` list (see saveLayoutToBackend).
+      const added: string[] = Array.isArray((dto as any)?.added_catalog) ? (dto as any).added_catalog : [];
+      if (Array.isArray(dto?.layout)) return { layout: dto.layout, addedCatalog: added };
     } catch {
       /* 404 (never saved) or backend unreachable → fall back to cache/defaults */
     }
   }
-  return cached;
+  return cached ? { layout: cached } : null;
 }
 
-function saveLayoutToBackend(pageKey: string, layout: WidgetLayoutEntry[]) {
+async function saveLayoutToBackend(
+  pageKey: string,
+  layout: WidgetLayoutEntry[],
+  addedCatalog: string[],
+  order?: string[],
+) {
   if (isDemoMode()) return; // Demo Mode persists through localStorage only
-  import('../services/api')
-    .then(({ dashboardLayoutApi }) => dashboardLayoutApi.put(pageKey, layout))
-    .catch(() => { /* offline — localStorage cache stays authoritative until next change */ });
+  try {
+    const { dashboardLayoutApi } = await import('../services/api');
+    await dashboardLayoutApi.put(pageKey, layout, addedCatalog, order);
+  } catch { /* offline — localStorage cache stays authoritative until next change */ }
 }
 
 function deleteLayoutOnBackend(pageKey: string) {
@@ -151,11 +201,16 @@ export function WidgetLayoutProvider({
     try { localStorage.setItem(addedCatalogKey, JSON.stringify(ids)); } catch { /* ignore */ }
   }
 
-  function mergeWithDefaults(saved: WidgetLayoutEntry[]): WidgetLayoutEntry[] {
-    const addedCat = new Set(readAddedCatalog());
+  function mergeWithDefaults(saved: WidgetLayoutEntry[], addedOverride?: string[]): WidgetLayoutEntry[] {
+    const addedCat = new Set(addedOverride ?? readAddedCatalog());
     const known = saved.filter(
       (w) => w.id.startsWith('cat-') ? addedCat.has(w.id) : defaultLayout.some((d) => d.id === w.id),
     );
+    // Merge the persisted "explicitly added" list into local tracking so a
+    // catalogue widget added on another device survives here too.
+    if (addedOverride && addedOverride.length) {
+      rememberAddedCatalog(Array.from(new Set([...readAddedCatalog(), ...addedOverride])));
+    }
     const added = defaultLayout
       .filter((d) => !known.some((w) => w.id === d.id))
       .map((d) => ({ ...d }));
@@ -185,7 +240,7 @@ export function WidgetLayoutProvider({
       if (cancelled || !saved) return;
       hydratedRef.current = true;
       setLayout((prev) => {
-        const merged = mergeWithDefaults(saved);
+        const merged = mergeWithDefaults(saved.layout, saved.addedCatalog);
         // Also keep any widget currently rendered on the page that the server
         // copy doesn't know about (e.g. newly added catalog widgets) — never
         // let hydration silently drop visible content.
@@ -230,22 +285,64 @@ export function WidgetLayoutProvider({
     rememberAddedCatalog(layout.filter((w) => w.id.startsWith('cat-')).map((w) => w.id));
     // Debounced backend sync (skip the very first render's default layout).
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => saveLayoutToBackend(pageKey, layout), 800);
+    saveTimerRef.current = setTimeout(() => {
+      const payload: WidgetLayoutEntry[] = layout.map((w) => ({ ...w }));
+      // Persist which catalogue widgets the user explicitly added + the live
+      // free-flow order, so add/remove/drag/resize all round-trip through the
+      // backend on every device.
+      const board = boardRef.current;
+      saveLayoutToBackend(
+        pageKey,
+        payload,
+        layout.filter((w) => w.id.startsWith('cat-')).map((w) => w.id),
+        board ? normalizeOrder(board.placements) : undefined,
+      );
+    }, 800);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [storageKey, pageKey, layout]);
 
+  /** Live order-board state, registered by <SlotBoard>, for backend sync. */
+  const boardRef = React.useRef<{ placements: (string | null)[]; setPlacements: (p: (string | null)[]) => void } | null>(null);
+
+  // Hydrate the widget ORDER from the server once per mount. The layout PUT
+  // payload carries `order` (see saveLayoutToBackend below), so drag & drop
+  // positions have full backend parity across devices.
+  useEffect(() => {
+    let cancelled = false;
+    if (isDemoMode()) return;
+    import('../services/api')
+      .then(({ dashboardLayoutApi }) => dashboardLayoutApi.get(pageKey))
+      .then((dto: any) => {
+        if (cancelled || !dto) return;
+        const savedOrder = dto?.order ?? slotsOf(dto?.layout);
+        if (Array.isArray(savedOrder) && savedOrder.some((s: unknown) => typeof s === 'string')) {
+          boardRef.current?.setPlacements(savedOrder as (string | null)[]);
+        }
+      })
+      .catch(() => { /* 404 / offline → localStorage order stays authoritative */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageKey]);
+
   // Widget ids declared by the <WidgetGrid> children — scanned once per mount
-  // so the slot board knows which widgets exist even before they render.
+  // so the board knows which widgets exist even before they render.
   const declaredIds = React.useMemo(() => collectDeclaredWidgetIds(children), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <PageKeyContext.Provider value={pageKey}>
-      <LayoutContext.Provider value={{ layout, setLayout }}>
-        <SlotBoard declaredIds={declaredIds}>{children}</SlotBoard>
-      </LayoutContext.Provider>
+      <DefaultLayoutContext.Provider value={defaultLayout}>
+        <LayoutContext.Provider value={{ layout, setLayout }}>
+          <BoardRefContext.Provider value={boardRef}>
+            <SlotBoard declaredIds={declaredIds}>{children}</SlotBoard>
+          </BoardRefContext.Provider>
+        </LayoutContext.Provider>
+      </DefaultLayoutContext.Provider>
     </PageKeyContext.Provider>
   );
 }
+
+/** Ref to the live slot board, registered by <SlotBoard> for backend sync. */
+const BoardRefContext = createContext<React.MutableRefObject<{ placements: (string | null)[]; setPlacements: (p: (string | null)[]) => void } | null> | null>(null);
 
 /** Walk a page tree and gather every DashboardWidget / CatalogEntry id found. */
 function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
@@ -261,6 +358,17 @@ function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
       const t = child.type as unknown;
       if (t === DashboardWidget || t === CatalogEntryPlaceholder || t === CATALOG_ENTRY_REF.current) {
         push((child.props as { id?: string }).id);
+      } else if (BARE_WIDGET_REGISTRY.has(t)) {
+        // Bare self-carded widget (attack map, topology…) — participates in the
+        // board via its registered id so it can be dragged/edge-resized freely.
+        push(BARE_WIDGET_REGISTRY.get(t)!.id);
+      } else if (typeof t === 'string' && (child.props as any)['data-widget-id']) {
+        // Wrapper div around a bare widget — unwrap single-element children.
+        const kids = React.Children.toArray((child.props as { children?: React.ReactNode }).children);
+        if (kids.length === 1 && React.isValidElement(kids[0])) {
+          const inner = kids[0] as React.ReactElement;
+          if (BARE_WIDGET_REGISTRY.has(inner.type)) push(BARE_WIDGET_REGISTRY.get(inner.type)!.id);
+        }
       } else if (typeof t !== 'string' && depth < 6) {
         walk((child.props as { children?: React.ReactNode }).children, depth + 1);
       }
@@ -294,30 +402,28 @@ export const clamp = (n: number, min: number, max: number) => Math.min(max, Math
 export const GRID_COLS = 3;
 
 /* ------------------------------------------------------------------ */
-/* Slot placement — widgets keep their size; only their slot index     */
-/* changes on drag & drop. Empty slots stay visible as "+" placeholders */
-/* you can click to add a widget from the catalogue.                   */
+/* Free-flow ordering — widgets keep whatever size they want and flow   */
+/* into a responsive masonry board. Dragging reorders; there are NO      */
+/* fixed slots and NO empty "+" placeholder cells inside the board.      */
 /* ------------------------------------------------------------------ */
 
 interface PlacementCtx {
-  /** Ordered list of widget ids by slot position (null = empty slot). */
+  /** Ordered list of widget ids by visual position (free-flow order). */
   placements: (string | null)[];
   setPlacements: React.Dispatch<React.SetStateAction<(string | null)[]>>;
 }
 
-/** How many slots fit per row at each breakpoint (mirrors SLOT_GRID_CLASSES). */
-const COLS_PER_ROW: Record<'base' | 'md' | 'lg', number> = { base: 1, md: 2, lg: 3 };
-
-function viewportCols(): 'base' | 'md' | 'lg' {
-  if (typeof window === 'undefined') return 'lg';
-  if (window.matchMedia('(min-width: 1024px)').matches) return 'lg';
-  if (window.matchMedia('(min-width: 768px)').matches) return 'md';
-  return 'base';
+/** Responsive column counts for the masonry board (mirrors MASONRY_CLASSES). */
+function viewportCols(): number {
+  if (typeof window === 'undefined') return 3;
+  if (window.matchMedia('(min-width: 1280px)').matches) return 3;
+  if (window.matchMedia('(min-width: 768px)').matches) return 2;
+  return 1;
 }
 
-/** Track the current breakpoint so placeholder rows adapt live on resize. */
-export function useViewportCols(): 'base' | 'md' | 'lg' {
-  const [cols, setCols] = useState<'base' | 'md' | 'lg'>(() => viewportCols());
+/** Track the current breakpoint so wide widgets clamp to available columns. */
+export function useMasonryCols(): number {
+  const [cols, setCols] = useState<number>(() => viewportCols());
   useEffect(() => {
     const update = () => setCols(viewportCols());
     window.addEventListener('resize', update);
@@ -326,50 +432,35 @@ export function useViewportCols(): 'base' | 'md' | 'lg' {
   return cols;
 }
 
-/** Rows fully occupied by real widgets (trailing empty slots don't count). */
-function filledRows(placements: (string | null)[], cols: number): number {
-  let lastReal = -1;
-  placements.forEach((p, i) => { if (p) lastReal = i; });
-  if (lastReal < 0) return 0;
-  return Math.floor(lastReal / cols) + 1;
-}
-
-/** First empty slot index, or -1 when every slot holds a widget. */
-function firstEmptyIndex(placements: (string | null)[]): number {
-  return placements.findIndex((p) => p === null);
-}
-
-/** Grow the slot array so it always covers every placed widget + one free row. */
-function normalizePlacements(list: (string | null)[]): (string | null)[] {
-  let lastReal = -1;
-  list.forEach((p, i) => { if (p) lastReal = i; });
-  const rows = Math.max(filledRows(list, GRID_COLS) + 1, Math.ceil((lastReal + 1) / GRID_COLS));
-  const out = list.slice();
-  while (out.length < rows * GRID_COLS) out.push(null);
-  // Trim trailing empties beyond one full free row.
-  while (out.length > rows * GRID_COLS && !out[out.length - 1]) out.pop();
+/** Normalize an order list: strip nulls/empties/duplicates, keep sequence. */
+function normalizeOrder(list: (string | null)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of list) {
+    if (p && p !== '' && !seen.has(p)) { seen.add(p); out.push(p); }
+  }
   return out;
 }
 
-/** Compact list of widget ids into a slot array with one spare row of holes. */
+/** Build the widget order, honoring a saved arrangement when present. */
 export function buildPlacements(ids: string[], saved?: (string | null)[] | null): (string | null)[] {
+  const base = normalizeOrder(ids);
   if (saved && saved.some((s) => typeof s === 'string')) {
-    const known = new Set(ids);
+    const known = new Set(base);
+    const ordered: string[] = [];
     const seen = new Set<string>();
-    const list: (string | null)[] = [];
     for (const s of saved) {
-      if (s === null) { list.push(null); continue; }
-      if (known.has(s) && !seen.has(s)) { seen.add(s); list.push(s); }
+      if (s && known.has(s) && !seen.has(s)) { seen.add(s); ordered.push(s); }
     }
-    for (const id of ids) if (!seen.has(id)) list.push(id);
-    return normalizePlacements(list);
+    for (const id of base) if (!seen.has(id)) ordered.push(id);
+    return ordered;
   }
-  return normalizePlacements([...ids]);
+  return base;
 }
 
 function loadSavedPlacements(pageKey: string): (string | null)[] | null {
   try {
-    const raw = localStorage.getItem(`${widgetStorageKey(pageKey)}:slots`);
+    const raw = localStorage.getItem(`${widgetStorageKey(pageKey)}:order`);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as (string | null)[]) : null;
@@ -380,7 +471,7 @@ function loadSavedPlacements(pageKey: string): (string | null)[] | null {
 
 function savePlacements(pageKey: string, placements: (string | null)[]) {
   try {
-    localStorage.setItem(`${widgetStorageKey(pageKey)}:slots`, JSON.stringify(placements));
+    localStorage.setItem(`${widgetStorageKey(pageKey)}:order`, JSON.stringify(normalizeOrder(placements)));
   } catch { /* ignore */ }
 }
 
@@ -395,6 +486,7 @@ function WidgetCard({
   headerExtra,
   removable,
   className,
+  hideHeader = false,
   children,
   dragHandleProps,
   isDragging,
@@ -407,6 +499,11 @@ function WidgetCard({
   /** Show an ✕ remove button (catalog widgets added via "Add widget"). */
   removable?: boolean;
   className: string;
+  /** Headerless chrome for bare self-carded widgets (attack map, topology…):
+   *  the inner component renders its own card/header, so this wrapper only
+   *  contributes resize edges + a floating grip/remove control — no double
+   *  layering. */
+  hideHeader?: boolean;
   children: React.ReactNode;
   dragHandleProps?: Record<string, unknown>;
   isDragging?: boolean;
@@ -421,21 +518,103 @@ function WidgetCard({
       return prev.map((w) => (w.id === entry.id ? { ...w, ...patch } : w));
     });
 
-  // Slot board: every widget lives in one fixed-size slot. Dragging swaps
-  // slots — sizes never change and rows never collapse/reflow. The old
-  // resize / move controls are gone on purpose: they were what made the
-  // grid reflow ("one row fits, everything under it collapses").
+  /* ---- Edge resizing ------------------------------------------------
+     Height: drag the top/bottom edge (free pixel height, persisted).
+     Width:  drag the left/right edges to grow/shrink the card's width in
+             thirds of the board (1→2→3 columns). The direction sign makes
+             the left edge feel natural (drag left = wider). */
+  const cardRef = React.useRef<HTMLDivElement | null>(null);
+  const [resizing, setResizing] = useState<null | 'h' | 'w'>(null);
+  const resizeStart = React.useRef<{ y: number; h: number; x: number; span: number; dir: number }>({ y: 0, h: 0, x: 0, span: 1, dir: 1 });
+
+  const beginResize = (mode: 'h' | 'w', dir = 1) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = cardRef.current;
+    if (!el) return;
+    resizeStart.current = {
+      y: e.clientY,
+      h: entry.heightPx ?? el.getBoundingClientRect().height,
+      x: e.clientX,
+      span: clamp(entry.colSpan || 1, 1, SPAN_SIZES.length),
+      dir,
+    };
+    setResizing(mode);
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+
+  const moveResize = (e: React.PointerEvent) => {
+    if (!resizing) return;
+    if (resizing === 'h') {
+      // Top edge drags up to grow; bottom edge drags down to grow.
+      const dh = resizeStart.current.dir * (e.clientY - resizeStart.current.y);
+      update({ heightPx: clamp(Math.round(resizeStart.current.h + dh), MIN_HEIGHT_PX, MAX_HEIGHT_PX) });
+    } else {
+      const el = cardRef.current;
+      const colW = el && el.parentElement ? el.parentElement.getBoundingClientRect().width / GRID_COLS : 360;
+      const dx = resizeStart.current.dir * (e.clientX - resizeStart.current.x);
+      const target = clamp(
+        resizeStart.current.span + Math.round(dx / Math.max(colW, 80)),
+        SPAN_SIZES[0], SPAN_SIZES[SPAN_SIZES.length - 1],
+      );
+      if (target !== entry.colSpan) update({ colSpan: target });
+    }
+  };
+
+  const endResize = () => setResizing(null);
+
+  const edgeBase = 'absolute z-20 touch-none';
+  const style: React.CSSProperties = entry.heightPx && !entry.collapsed
+    ? { height: entry.heightPx }
+    : {};
+
+  const headerless = hideHeader || entry.hideHeader === true;
+
+  // Slot board: every widget lives in a resizable cell. Dragging swaps
+  // slots; edge handles change this widget's width/size only.
   return (
     <div
-      className={`min-w-0 max-w-full h-full flex flex-col overflow-hidden bg-[var(--ic-surface)] border rounded-xl p-4 sm:p-6 transition-shadow duration-150 ${
+      ref={cardRef}
+      onPointerMove={moveResize}
+      onPointerUp={endResize}
+      onPointerCancel={endResize}
+      style={style}
+      className={`relative min-w-0 max-w-full ${entry.heightPx && !entry.collapsed ? '' : 'h-full '}flex flex-col overflow-hidden transition-shadow duration-150 rounded-xl ${
+        headerless ? '' : 'bg-[var(--ic-surface)] border p-4 sm:p-6'
+      } ${
+        resizing ? 'ring-2 ring-cyan-400/50' : ''
+      } ${
         isOver
           ? 'border-cyan-400 ring-2 ring-cyan-400/40'
           : isDragging
           ? 'border-cyan-400/60 shadow-lg shadow-cyan-500/20 z-10 relative'
-          : 'border-[var(--ic-border)]'
+          : headerless ? '' : 'border-[var(--ic-border)]'
       } ${className}`}
     >
       {/* Header row: drag handle + title + controls */}
+      {headerless ? (
+        /* Bare self-carded widget — floating grip/remove control over its own
+           card, plus the four resize edges below. No duplicate header layer. */
+        removable && (
+          <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-0.5 rounded-lg bg-[var(--ic-surface)]/85 border border-[var(--ic-border)] backdrop-blur px-1 py-0.5 opacity-70 hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              {...(dragHandleProps ?? {})}
+              className={`${btn} cursor-grab active:cursor-grabbing touch-none select-none`}
+              title="Drag to move this widget"
+              aria-label={`Drag to move ${title}`}
+            >
+              <GripVertical className="w-4 h-4 pointer-events-none" />
+            </button>
+            <button type="button"
+              className={`${btn} hover:text-red-400`}
+              onClick={() => setLayout((prev) => prev.filter((w) => w.id !== entry.id))}
+              title={`Remove ${title} from the page`} aria-label={`Remove ${title}`}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )
+      ) : (
       <div className="flex items-center gap-2 mb-4 flex-shrink-0">
         <button
           type="button"
@@ -468,15 +647,49 @@ function WidgetCard({
           )}
         </div>
       </div>
+      )}
 
       {/* Body — hidden when collapsed. `overflow-x-auto` keeps wide content
           (tables, charts, maps) inside the card: it scrolls within the widget
           instead of overflowing the layout or squashing text. */}
-      {!entry.collapsed && <div className="min-w-0 flex-1 overflow-x-auto">{children}</div>}
+      {!entry.collapsed && <div className={`min-w-0 flex-1 overflow-x-auto ${headerless ? 'h-full' : ''}`}>{children}</div>}
 
       {/* Hint shown only while collapsed */}
       {entry.collapsed && (
         <p className="text-[11px] text-[var(--ic-muted)] italic">Widget collapsed — press “+” to expand.</p>
+      )}
+
+      {/* Edge resize handles — all four edges (hidden when collapsed).
+          Left/right drag horizontally to grow/shrink the card's width in
+          thirds of the board; top/bottom drag vertically for free height. */}
+      {!entry.collapsed && (
+        <>
+          <div
+            role="separator" aria-orientation="horizontal" title="Drag to resize height"
+            onPointerDown={beginResize('h')}
+            className={`${edgeBase} left-2 right-2 -top-1 h-2 cursor-ns-resize rounded-full hover:bg-cyan-400/30`}
+          />
+          <div
+            role="separator" aria-orientation="horizontal" title="Drag to resize height"
+            onPointerDown={beginResize('h')}
+            className={`${edgeBase} left-2 right-2 -bottom-1 h-2 cursor-ns-resize rounded-full hover:bg-cyan-400/30`}
+          />
+          <div
+            role="separator" aria-orientation="vertical" title="Drag to resize width"
+            onPointerDown={beginResize('w', -1)}
+            className={`${edgeBase} top-2 bottom-2 -left-1 w-2 cursor-ew-resize rounded-full hover:bg-cyan-400/30`}
+          />
+          <div
+            role="separator" aria-orientation="vertical" title="Drag to resize width"
+            onPointerDown={beginResize('w', 1)}
+            className={`${edgeBase} top-2 bottom-2 -right-1 w-2 cursor-ew-resize rounded-full hover:bg-cyan-400/30`}
+          />
+          <div
+            role="separator" title="Drag to resize both ways"
+            onPointerDown={(e) => { beginResize('h')(e); }}
+            className={`${edgeBase} -bottom-1 -right-1 w-4 h-4 cursor-nwse-resize rounded-full hover:bg-cyan-400/40`}
+          />
+        </>
       )}
     </div>
   );
@@ -558,13 +771,11 @@ export function CatalogEntryPlaceholder({
 
 /**
  * Wrap your DashboardWidgets in <SlotGrid> (preferred) or <WidgetGrid>.
- * Both provide the responsive CSS Grid AND the dnd-kit drag-and-drop context.
- *
- * <WidgetGrid> is now a thin alias of <SlotGrid>: widgets live in fixed-size
- * slots (3 per row on desktop, 2 on tablet, 1 on mobile), each widget keeps
- * its size at all times, and empty slots render as clickable “+” placeholders
- * that open the catalogue. The legacy variable-width behaviour is available
- * via `<VariableWidthGrid>` if ever needed.
+ * Both provide the responsive masonry board AND the dnd-kit drag-and-drop
+ * context. Widgets flow freely into the columns — a wide widget can take a
+ * whole row, small ones share rows side by side. There are no fixed slots
+ * and no empty placeholder cells; new widgets always land at the end of the
+ * board (right after the last visible widget).
  */
 export function WidgetGrid({
   className = '',
@@ -577,31 +788,49 @@ export function WidgetGrid({
 }
 
 /* ------------------------------------------------------------------ */
-/* SlotGrid — fixed-size slots + click-empty-to-add                    */
+/* SlotGrid — free-flow masonry board                                  */
 /* ------------------------------------------------------------------ */
 
-/** Page key of the active layout provider — used to persist slot placement. */
-const PageKeyContext = createContext<string | null>(null);
+/** Page key of the active layout provider — used to persist widget order. */
+export const PageKeyContext = createContext<string | null>(null);
 
-/** Responsive slot grid: 1 col (mobile) → 2 cols (tablet+) → 3 cols (desktop). */
-const SLOT_GRID_CLASSES = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6 items-stretch';
+/** Default layout of the active provider — fallback for catalogue helpers. */
+export const DefaultLayoutContext = createContext<WidgetLayoutEntry[]>([]);
 
-interface BoardCtx extends PlacementCtx {
-  /** Pending target slot for the next widget added from the catalogue (-1 = none). */
-  pendingSlotRef: React.MutableRefObject<number>;
-}
+/** Responsive masonry board: 1 col (mobile) → 2 cols (md) → 3 cols (xl+). */
+const MASONRY_CLASSES = 'columns-1 md:columns-2 xl:columns-3 gap-4 lg:gap-6 space-y-4 lg:space-y-6';
+
+/** Column span classes for edge-resized widgets at each breakpoint. */
+const SPAN_CLASS: Record<number, string[]> = {
+  1: ['w-full'],
+  2: ['md:w-[calc(50%-0.75rem)]', 'xl:w-[calc((100%-3rem)/3*2+1.5rem)]'],
+  3: ['w-full'],
+};
+
+type BoardCtx = PlacementCtx;
 
 const BoardContext = createContext<BoardCtx | null>(null);
 
-/** Non-throwing accessor for the shared slot board (pages without <SlotGrid> get null). */
+/** Non-throwing accessor for the shared board (pages without <SlotGrid> get null). */
 export function useOptionalPlacementCtx(): BoardCtx | null {
   return useContext(BoardContext);
 }
 
+/** Reorder the free-flow list on drag end: move `activeId` to `overId`'s position. */
+function relayoutFromOrder(prev: (string | null)[], activeId: string, overId: string): (string | null)[] {
+  const order = normalizeOrder(prev);
+  const from = order.indexOf(activeId);
+  const to = order.indexOf(overId);
+  if (from === -1 || to === -1 || from === to) return prev;
+  order.splice(to, 0, ...order.splice(from, 1));
+  return order;
+}
+
 /**
- * The slot board owns the single placements array shared by every <SlotGrid>
- * on the page and persists it per user/page in localStorage. Drag & drop only
- * swaps slot positions — widget sizes never change, so no reflow/collapse.
+ * The board owns the single widget-order array shared by every <SlotGrid>
+ * on the page and persists it per user/page (localStorage + backend). Drag &
+ * drop reorders widgets; each keeps its own size and the masonry board adapts
+ * automatically — no fixed slots, no holes, no row collapse.
  */
 function SlotBoard({
   children,
@@ -622,73 +851,54 @@ function SlotBoard({
   );
 
   const setPlacements: BoardCtx['setPlacements'] = (next) =>
-    setPlacementsRaw((prev) => normalizePlacements(typeof next === 'function' ? next(prev) : next));
+    setPlacementsRaw((prev) => normalizeOrder(typeof next === 'function' ? next(prev) : next));
 
-  // Where the next catalog widget should land (set by clicking an empty slot).
-  const pendingSlotRef = React.useRef(-1);
+  /** Latest placements, readable inside callbacks without stale closures. */
+  const placementsRef = React.useRef(placements);
+  useEffect(() => { placementsRef.current = placements; }, [placements]);
 
-  // Keep placements consistent with the widgets that exist on the page:
-  // append missing ones (declared defaults + newly added catalog widgets),
-  // blank out stale ones (removed widgets) — preserving the user's chosen
-  // order and holes.
+  // Register with the provider so backend sync can read/write widget order.
+  const boardRef = useContext(BoardRefContext);
+  useEffect(() => {
+    if (!boardRef) return;
+    boardRef.current = { placements, setPlacements };
+    return () => { if (boardRef.current?.placements === placements) boardRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placements, boardRef]);
+
+  // Keep the order consistent with the widgets that exist on the page:
+  // append missing ones (declared defaults + newly added catalog widgets —
+  // they always land at the END of the board, right after the last visible
+  // widget), drop stale ones (removed widgets) — preserving the user's order.
   useEffect(() => {
     if (!ctx) return;
     const current = new Set([...declaredIds, ...liveIds]);
-    const placed = new Set(placements.filter(Boolean) as string[]);
-    const missing = [...current].filter((id) => !placed.has(id));
-    const stale = new Set(placements.filter((p) => p && !current.has(p)) as string[]);
-    if (!missing.length && !stale.size) return;
-    const pending = pendingSlotRef.current;
+    const placed = normalizeOrder(placements);
+    const placedSet = new Set(placed);
+    const missing = [...current].filter((id) => !placedSet.has(id));
+    const hasStale = placed.some((p) => !current.has(p));
+    if (!missing.length && !hasStale) return;
     setPlacements((prev) => {
-      let list = prev.map((p) => (p && stale.has(p) ? null : p));
-      for (const id of missing) {
-        // Land the newly added widget exactly in the clicked empty slot…
-        if (pending >= 0 && !list[pending]) {
-          list[pending] = id;
-          pendingSlotRef.current = -1;
-          continue;
-        }
-        // …otherwise take the first free hole or grow the board.
-        const hole = list.findIndex((p) => p === null);
-        if (hole >= 0) list[hole] = id;
-        else list.push(id);
-      }
-      return list;
+      const order = normalizeOrder(prev).filter((id) => current.has(id));
+      for (const id of missing) if (!order.includes(id)) order.push(id);
+      return order;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderedSig, liveSig, placements, ctx]);
 
-  // Persist the slot arrangement.
+  // Persist the widget order.
   useEffect(() => {
     if (pageKey) savePlacements(pageKey, placements);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placements, pageKey]);
 
-  // Swap two slots on drop — sizes never change, only positions.
+  // Reorder on drop — each widget keeps its size; the masonry re-flows itself.
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
     const activeId = String(active.id);
     const overId = String(over.id);
-    setPlacements((prev) => {
-      const from = prev.indexOf(activeId);
-      if (from === -1) return prev;
-      let to = -1;
-      if (overId.startsWith('slot:')) to = parseInt(overId.slice(5), 10);
-      else to = prev.indexOf(overId);
-      if (Number.isNaN(to) || to < 0 || to >= prev.length || to === from) return prev;
-      const list = prev.slice();
-      if (list[to]) {
-        // Occupied target → swap the two widgets.
-        const tmp = list[from];
-        list[from] = list[to];
-        list[to] = tmp;
-      } else {
-        list[to] = list[from];
-        list[from] = null;
-      }
-      return list;
-    });
+    setPlacements((prev) => relayoutFromOrder(prev, activeId, overId));
   };
 
   const sensors = useSensors(
@@ -698,7 +908,7 @@ function SlotBoard({
   );
 
   return (
-    <BoardContext.Provider value={{ placements, setPlacements, pendingSlotRef }}>
+    <BoardContext.Provider value={{ placements, setPlacements }}>
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         {children}
       </DndContext>
@@ -706,45 +916,14 @@ function SlotBoard({
   );
 }
 
-/**
- * One CSS-Grid row band of the board. Widgets keep their fixed slot size;
- * empty slots render as clickable “+” placeholders. `colsNow` adapts the
- * filler logic when the breakpoint shows fewer columns than GRID_COLS.
- */
-function SlotRowBand({
-  list,
-  startIdx,
-  count,
-  colsNow,
-}: {
-  list: (string | null)[];
-  startIdx: number;
-  count: number;
-  colsNow: number;
-}) {
-  const body: React.ReactNode[] = [];
-  const slice = list.slice(startIdx, startIdx + count);
-  const emptiesCount = slice.filter((p) => p === null).length;
-  // Invisible fillers so placeholder "+" cells always form complete rows.
-  const trailingEmpties = ((Math.ceil(emptiesCount / colsNow) * colsNow - emptiesCount) % colsNow + colsNow) % colsNow;
-  for (let t = 0; t < trailingEmpties; t++) body.push(<TrailingSpacer key={`trail-${t}`} />);
-  slice.forEach((p, i) => {
-    const slotIndex = startIdx + i;
-    if (p) body.push(<SlotWidgetCell key={`w-${p}`} slotIndex={slotIndex} widgetId={p} />);
-    else body.push(<EmptySlotCell key={`empty-${slotIndex}`} slotIndex={slotIndex} />);
-  });
-  return <div className={SLOT_GRID_CLASSES}>{body}</div>;
-}
-
-/** Renders one placed widget (sortable card) inside its slot. */
-function SlotWidgetCell({ slotIndex, widgetId }: { slotIndex: number; widgetId: string }) {
+/** Renders one placed widget (sortable card) in the free-flow order. */
+function SlotWidgetCell({ index, widgetId, span }: { index: number; widgetId: string; span: number }) {
   const ctx = useContext(LayoutContext);
   const el = useContext(SlotCellElementContext).get(widgetId);
   const { setNodeRef, listeners, attributes, transform, transition, isDragging, isOver } = useSortable({ id: widgetId });
 
   if (!ctx || !el) return null;
-  const index = ctx.layout.findIndex((w) => w.id === widgetId);
-  const entry = index >= 0 ? ctx.layout[index] : { id: widgetId, colSpan: 1, collapsed: false };
+  const entry = ctx.layout.find((w) => w.id === widgetId) ?? { id: widgetId, colSpan: 1, collapsed: false };
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -753,13 +932,54 @@ function SlotWidgetCell({ slotIndex, widgetId }: { slotIndex: number; widgetId: 
   };
 
   const props = el.props as any;
+  // Bare self-carded widget (WorldAttackMap, OrgTopologyMap…): recognized by
+  // its component type in the registry — wrapped with headerless edge-resize
+  // chrome so it can be dragged and resized on all four edges freely while
+  // keeping its own card/header (no double layering).
+  const bareMeta = BARE_WIDGET_REGISTRY.get(el.type as unknown);
+  if (bareMeta) {
+    // Live layout entry wins (keeps the user's resized height/width), but a
+    // bare widget must always render headerless — force it.
+    const liveEntry = ctx.layout.find((w) => w.id === bareMeta.id);
+    const bareEntry: WidgetLayoutEntry = {
+      ...(liveEntry ?? { id: bareMeta.id, colSpan: span, collapsed: false }),
+      hideHeader: true,
+    };
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        data-slot-index={index}
+        className={`min-w-0 break-inside-avoid mb-0 ${(SPAN_CLASS[span] ?? SPAN_CLASS[1]).join(' ')}`}
+      >
+        <WidgetCard
+          entry={bareEntry}
+          title={bareMeta.title}
+          hideHeader
+          removable
+          className=""
+          dragHandleProps={{ ...attributes, ...listeners }}
+          isDragging={isDragging}
+          isOver={isOver && isDragging}
+        >
+          {el}
+        </WidgetCard>
+      </div>
+    );
+  }
+
   const isPlainWidget = el.type === DashboardWidget;
   const cp = isPlainWidget
     ? props
     : { title: props.title ?? widgetId, subtitle: props.subtitle, spanOptions: props.spanOptions ?? [1], headerExtra: undefined, className: '', children: props.children };
 
   return (
-    <div ref={setNodeRef} style={style} data-slot-index={slotIndex} className="min-w-0">
+    <div
+      ref={setNodeRef}
+      style={style}
+      data-slot-index={index}
+      className={`min-w-0 break-inside-avoid mb-0 ${(SPAN_CLASS[span] ?? SPAN_CLASS[1]).join(' ')}`}
+    >
       <WidgetCard
         entry={entry}
         title={cp.title ?? widgetId}
@@ -780,41 +1000,34 @@ function SlotWidgetCell({ slotIndex, widgetId }: { slotIndex: number; widgetId: 
 // Bridge so SlotWidgetCell can find the React element declared for a widget id.
 const SlotCellElementContext = createContext<Map<string, React.ReactElement>>(new Map());
 
-/** Dashed placeholder cell shown for empty slots; click opens the catalogue. */
-function EmptySlotCell({ slotIndex }: { slotIndex: number }) {
-  const { setNodeRef, isOver } = useSortable({ id: `slot:${slotIndex}` });
-  const board = useOptionalPlacementCtx();
-  const placeHere = () => {
-    if (!board) return;
-    board.pendingSlotRef.current = slotIndex; // next added widget lands here
-    window.dispatchEvent(new CustomEvent('ic-widget-slot-request', { detail: { slotIndex } }));
-  };
+/**
+ * "Add widget" card that always sits immediately after the last visible
+ * widget on the board — the only way to append new widgets (no empty "+"
+ * placeholder cells are scattered inside the dashboard anymore). Clicking it
+ * opens the catalogue modal.
+ */
+function AddWidgetCell() {
+  const [open, setOpen] = useState(false);
   return (
-    <div ref={setNodeRef} data-slot-index={slotIndex} className="min-w-0">
+    <div className="min-w-0 break-inside-avoid mb-0">
       <button
         type="button"
-        onClick={placeHere}
-        aria-label="Add a widget to this empty slot"
-        title="Click to add a widget here"
-        className={`flex flex-col items-center justify-center gap-2 min-h-[120px] h-full w-full rounded-xl border border-dashed transition-colors text-[var(--ic-muted)] hover:border-cyan-400/60 hover:text-cyan-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40 ${
-          isOver ? 'border-cyan-400 bg-cyan-400/5 text-cyan-300' : 'border-[var(--ic-border)] bg-[var(--ic-surface)]/40'
-        }`}
+        onClick={() => setOpen(true)}
+        aria-label="Add a widget after the last one"
+        title="Add a widget here"
+        className="flex flex-col items-center justify-center gap-2 min-h-[120px] h-full w-full rounded-xl border border-dashed transition-colors text-[var(--ic-muted)] hover:border-cyan-400/60 hover:text-cyan-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40 border-[var(--ic-border)] bg-[var(--ic-surface)]/40"
       >
         <Plus className="w-6 h-6" />
         <span className="text-xs font-medium">Add widget</span>
       </button>
+      {open && <AddWidgetModal onClose={() => setOpen(false)} />}
     </div>
   );
 }
 
-/** Invisible filler that keeps placeholder rows aligned across breakpoints. */
-function TrailingSpacer() {
-  return <div aria-hidden className="hidden sm:block" style={{ minHeight: 0 }} />;
-}
-
 /**
- * Public slot grid: declares which widget elements belong to this band and
- * renders the board rows. All grids under one provider share one board.
+ * Public slot grid: declares which widget elements belong to this board and
+ * renders the free-flow masonry. All grids under one provider share one board.
  */
 function SlotGrid({
   className = '',
@@ -827,8 +1040,20 @@ function SlotGrid({
   const board = useContext(BoardContext);
 
   const byId = new Map<string, React.ReactElement>();
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
+  // Bare self-carded widgets (WorldAttackMap, OrgTopologyMap…) are often
+  // wrapped in a plain <div data-widget-id="…"> on the page — unwrap single
+  // children so the board scanner can recognize them.
+  const resolveBare = (child: React.ReactElement): React.ReactElement => {
+    const t = child.type as unknown;
+    if (typeof t === 'string' && (child.props as any)['data-widget-id']) {
+      const kids = React.Children.toArray((child.props as { children?: React.ReactNode }).children);
+      if (kids.length === 1 && React.isValidElement(kids[0])) return kids[0] as React.ReactElement;
+    }
+    return child;
+  };
+  React.Children.forEach(children, (rawChild) => {
+    if (!React.isValidElement(rawChild)) return;
+    const child = resolveBare(rawChild);
     // DashboardWidget / CatalogEntryPlaceholder are declared directly in the
     // page tree. <CatalogEntry/> (defined in WidgetCatalog.tsx, which imports
     // this module — a static import back would be a cycle) is recognized via
@@ -836,29 +1061,21 @@ function SlotGrid({
     if (child.type === DashboardWidget || (child.type as any) === CatalogEntryPlaceholder || (child.type as any) === CATALOG_ENTRY_REF.current) {
       const cid = (child.props as { id?: string }).id;
       if (cid) byId.set(cid, child);
+    } else if (BARE_WIDGET_REGISTRY.has(child.type)) {
+      byId.set(BARE_WIDGET_REGISTRY.get(child.type)!.id, child);
     }
   });
 
-  // When a placed slot references a widget whose element we couldn't collect
-  // (e.g. <CatalogEntry/> rendered inside SlotBoard's own subtree), ask for it
-  // through a window event that WidgetCatalog answers synchronously with the
-  // element it produced during its render pass.
-  const requestMissingElement = (widgetId: string) => {
-    let out: React.ReactElement | null = null;
-    try {
-      window.dispatchEvent(new CustomEvent('ic-widget-ensure-element', {
-        detail: { id: widgetId, resolve: (e: React.ReactElement | null) => { out = e; } },
-      }));
-    } catch { /* ignore */ }
-    if (out && !byId.has(widgetId)) byId.set(widgetId, out);
-  };
-
   const gridClasses = `${className}`.trim();
 
-  // No provider/board: static slot grid (no dnd, no placeholders).
+  /** Width per widget for this board (colSpan 1..3). */
+  const gridSpans: Record<string, number> = {};
+  for (const w of ctx?.layout ?? []) gridSpans[w.id] = clamp(w.colSpan || 1, 1, GRID_COLS);
+
+  // No provider/board: static masonry (no dnd, no add cell).
   if (!ctx || !board) {
     return (
-      <div className={`${SLOT_GRID_CLASSES} ${gridClasses}`.trim()}>
+      <div className={`${MASONRY_CLASSES} ${gridClasses}`.trim()}>
         {React.Children.map(children, (child) =>
           React.isValidElement(child) && child.type === CatalogEntryPlaceholder ? null : child
         )}
@@ -866,27 +1083,20 @@ function SlotGrid({
     );
   }
 
-  const { placements } = board;
-  const colsKind = useViewportCols();
-  const colsNow = COLS_PER_ROW[colsKind];
-  const rowsNow = Math.max(filledRows(placements, GRID_COLS) + 1, 1);
-  const totalSlots = rowsNow * GRID_COLS;
-  const list = placements.slice(0, totalSlots);
-  while (list.length < totalSlots) list.push(null);
-
-  const bands: React.ReactNode[] = [];
-  for (let r = 0; r < rowsNow; r++) {
-    bands.push(
-      <SlotRowBand key={`band-${r}`} list={list} startIdx={r * GRID_COLS} count={GRID_COLS} colsNow={colsNow} />
-    );
-  }
-
-  const sortableIds = [...list.map((p) => p ?? '').filter(Boolean), ...list.map((_, i) => `slot:${i}`)];
+  const order = normalizeOrder(board.placements);
+  const sortableIds = order;
 
   return (
     <SlotCellElementContext.Provider value={byId}>
       <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
-        <div className={`space-y-4 lg:space-y-6 ${gridClasses}`.trim()}>{bands}</div>
+        <div className={`${MASONRY_CLASSES} ${gridClasses}`.trim()}>
+          {order.map((id, i) => (
+            <SlotWidgetCell key={id} index={i} widgetId={id} span={clamp(gridSpans[id] ?? 1, 1, GRID_COLS)} />
+          ))}
+          {/* The add-widget card is forced to be the LAST item on the board,
+              right after the last shown widget. */}
+          <AddWidgetCell />
+        </div>
       </SortableContext>
     </SlotCellElementContext.Provider>
   );
@@ -912,14 +1122,17 @@ export function ResetLayoutButton({
         try {
           localStorage.removeItem(widgetStorageKey(pageKey));
           localStorage.removeItem(widgetAddedCatalogKey(pageKey));
+          // Legacy key from the old fixed-slot system (now `:order`).
           localStorage.removeItem(`${widgetStorageKey(pageKey)}:slots`);
+          localStorage.removeItem(`${widgetStorageKey(pageKey)}:order`);
         } catch {
           /* ignore */
         }
         deleteLayoutOnBackend(pageKey);
-        // Forget the saved slot arrangement, then re-place widgets in order.
+        // Forget the saved arrangement, then restore the page's default
+        // layout exactly as declared (widths + headerless bare widgets).
         if (board) board.setPlacements(defaultLayout.map((d) => d.id));
-        setLayout(defaultLayout.map((d) => ({ ...d, colSpan: 1 })));
+        setLayout(defaultLayout.map((d) => ({ ...d })));
       }}
       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--ic-muted)] border border-[var(--ic-border)] bg-[var(--ic-surface-2)] hover:text-cyan-400 hover:border-cyan-400/40 transition-colors"
       title="Restore the default widget arrangement"

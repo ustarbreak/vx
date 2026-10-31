@@ -11,19 +11,26 @@ import DashboardWidget, {
   WidgetGrid,
   ResetLayoutButton,
   CustomizeHint,
+  registerBareWidget,
   type WidgetLayoutEntry,
 } from '../../components/DashboardWidget';
 import { AddWidgetButton, AllCatalogEntries } from '../../components/WidgetCatalog';
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
 
+// Register the bare self-carded widgets with the board so they participate in
+// drag/reorder and get headerless four-edge resize chrome (free width/height)
+// instead of being skipped by the scanner. Declared at module scope — runs
+// once before any render.
+registerBareWidget(WorldAttackMap, { id: 'ca-attackmap', title: 'Worldwide Threat Map' });
+registerBareWidget(OrgTopologyMap, { id: 'ca-topology', title: 'Infrastructure Topology' });
+
+// Grid widgets + registered bare widgets (attack map, topology). Bare ones
+// carry hideHeader so their own internal card/header stays the only layer.
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
-  // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 6 / 12).
+  // colSpan in thirds of the row; masonry tracks adapt per breakpoint (1 / 2 / 3).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
-  { id: 'ca-attackmap', colSpan: 2, collapsed: false },
-  { id: 'ca-topology', colSpan: 1, collapsed: false },
-  { id: 'ca-ops', colSpan: 2, collapsed: false },
-  { id: 'ca-infra', colSpan: 1, collapsed: false },
-  { id: 'ca-value', colSpan: 3, collapsed: false },
+  { id: 'ca-attackmap', colSpan: 3, collapsed: false, hideHeader: true },
+  { id: 'ca-topology', colSpan: 2, collapsed: false, hideHeader: true },
   { id: 'ca-org', colSpan: 2, collapsed: false },
   { id: 'ca-kpis', colSpan: 3, collapsed: false },
 ];
@@ -114,47 +121,51 @@ export default function ClientAdminDashboardPage() {
       </div>
 
       {/* Everything below is a customizable widget grid: drag ⠿ to reorder,
-          resize between 1–3 columns, collapse, and add catalog widgets via "+ Add widget". */}
+          resize from all four edges (width + free height), collapse, and add
+          catalog widgets via the "+ Add widget" card after the last widget.
+          The bare widgets (attack map, topology) are registered with the board
+          so they flow inside it too — headerless chrome keeps their own card
+          as the only layer while still being draggable/edge-resizable. */}
       <WidgetGrid>
-      {/* D — Global security posture strip (real backend values, drill-downs) */}
-      <DashboardWidget id="ca-posture" title="Security posture" subtitle="Live KPIs across your estate" spanOptions={[2, 3]}>
-        <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
-      </DashboardWidget>
-
-      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode) */}
-      <DashboardWidget id="ca-attackmap" title="Worldwide attack map"
-        subtitle="Observed events · approximate geolocation · click an event to open the incident" spanOptions={[2, 3]}>
+      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode). */}
+      <div data-widget-id="ca-attackmap">
         <WorldAttackMap
           key={`${period}-${refreshKey}`}
           filters={mapWindow(PERIOD_PRESETS[periodIdx].months)}
           onSelectEvent={(e) => nav(`/client-admin/alerts/${e.id}`)}
         />
+      </div>
+
+      {/* D — Global security posture strip (real backend values, drill-downs) */}
+      <DashboardWidget id="ca-posture" title="Security posture" subtitle="Live KPIs across your estate" spanOptions={[2, 3]}>
+        <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
       </DashboardWidget>
 
-      {/* Organizational Infrastructure Topology (GET /api/org-topology) —
-          separate, complementary view: "what does my org look like and is it
-          healthy?". Real registered sites + enrolled collectors only; network
-          links are never inferred. Demo fixtures only behind Demo Mode. */}
-      <DashboardWidget id="ca-topology" title="Infrastructure topology"
-        subtitle="Registered sites & enrolled collectors · ownership links only · click a node for details">
+      {/* Infrastructure Topology (GET /api/org-topology) — bare widget inside
+          the board: renders its own card + toolbar, wrapped with headerless
+          edge-resize chrome (no double layering). */}
+      <div data-widget-id="ca-topology">
         <OrgTopologyMap compact />
-      </DashboardWidget>
+      </div>
 
-      {/* E — Security operations summary with incident drill-down */}
-      <DashboardWidget id="ca-ops" title="Security operations summary" subtitle="Incident triage & drill-down" spanOptions={[2, 3]}>
+      {/* E — Security operations summary with incident drill-down.
+          OpsSummaryTable renders its own card — bare widget, no double layer. */}
+      <div data-widget-id="ca-ops">
         <OpsSummaryTable alerts={alerts} error={alertsError} onRefresh={refreshAlerts} />
-      </DashboardWidget>
+      </div>
 
-      {/* F — Infrastructure / ingestion health */}
-      <DashboardWidget id="ca-infra" title="Ingestion health" subtitle="Collector fleet & last event">
+      {/* F — Infrastructure / ingestion health.
+          InfraHealthCard renders its own card — bare widget, no double layer. */}
+      <div data-widget-id="ca-infra">
         <InfraHealthCard probes={probes} probesError={probesError} lastEventAt={lastEventAt} />
-      </DashboardWidget>
+      </div>
 
       {/* Merged: former "Overview" + "Value & Loyalty" → single Executive Dashboard.
-          Cards untouched; the header period selector drives the dependent view. */}
-      <DashboardWidget id="ca-value" title="Business value — live proof" subtitle="Proof Pack figures for the selected reporting period" spanOptions={[2, 3]}>
+          ValueEngineSection renders its own heading + individual cards — bare
+          widget outside the grid so no outer card duplicates them. */}
+      <div data-widget-id="ca-value">
         <ValueEngineSection key={`value-${period}-${refreshKey}`} orgId={orgNumericId} />
-      </DashboardWidget>
+      </div>
 
       <DashboardWidget id="ca-org" title="Organization" subtitle="Contract & tier context" spanOptions={[1, 2, 3]}>
       <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 -m-2">

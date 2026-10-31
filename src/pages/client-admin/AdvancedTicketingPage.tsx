@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   Inbox, Plus, Search, RefreshCw, X, ShieldAlert, Clock, AlertOctagon,
   FileText, Lock, CheckCircle2, XCircle, Bot, GitBranch, Users, Play,
@@ -510,6 +511,18 @@ const AdvancedTicketingPage: React.FC = () => {
   const [selected, setSelected] = useState<AdvTicket | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showWorkload, setShowWorkload] = useState(false);
+
+  // Deep links: /client-admin/tickets/:ticketUid or /client-admin/advanced-tickets?ticket=<uid>
+  const { ticketUid } = useParams();
+  const [searchParams] = useSearchParams();
+  const deepLinkUid = ticketUid || searchParams.get('ticket') || '';
+
+  // Auto-open the drawer for a deep-linked ticket once the list has loaded.
+  useEffect(() => {
+    if (!deepLinkUid || loading) return;
+    const match = tickets.find(t => t.uid === deepLinkUid);
+    if (match) setSelected(match);
+  }, [deepLinkUid, tickets, loading]);
 
   const load = useCallback(async () => {
     setLoading(true); setError('');

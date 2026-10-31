@@ -800,7 +800,25 @@ export const discoveryApi = {
   deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
+  /** Response actions on a monitored device. Mirrors backend POST
+   *  /discovery/devices/{id}/actions/{action}. The call records & queues the
+   *  command for the enrolled collector — `executed:false` in the response is
+   *  honest: enforcement happens agent-side on its next policy poll. */
+  deviceAction: (id: number, action: DeviceActionKind, reason?: string) =>
+    api.post<DeviceActionResult>(`/discovery/devices/${id}/actions/${action}`, { reason }),
 };
+
+export type DeviceActionKind = 'kill' | 'isolate' | 'unisolate' | 'remote_screen';
+export interface DeviceActionResult {
+  ok: boolean;
+  action: string;
+  device_id: number;
+  hostname: string | null;
+  ip: string | null;
+  delivery: 'queued_for_probe' | 'no_collector';
+  executed: boolean;
+  note: string;
+}
 
 // ---------------------------------------------------------------------------
 // Platform settings
@@ -1271,17 +1289,25 @@ export interface WidgetLayoutEntryDto {
   id: string;
   colSpan: number;
   collapsed: boolean;
+  /** Free pixel height set by edge-resizing (optional — backend accepts it). */
+  heightPx?: number | null;
+  /** Headerless chrome for bare self-carded widgets (attack map, topology…). */
+  hideHeader?: boolean;
 }
 export interface DashboardLayoutOut {
   page_key: string;
   layout: WidgetLayoutEntryDto[];
+  /** Catalogue widget ids the user explicitly added (survives re-login). */
+  added_catalog?: string[];
+  /** Free-flow visual order of widget ids on the page. */
+  order?: string[];
   updated_at?: string | null;
 }
 
 export const dashboardLayoutApi = {
   /** 404 when the user never customized this page → caller falls back to defaults. */
   get: (pageKey: string) => api.get<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`),
-  put: (pageKey: string, layout: WidgetLayoutEntryDto[]) =>
-    api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout }),
+  put: (pageKey: string, layout: WidgetLayoutEntryDto[], addedCatalog?: string[], order?: string[]) =>
+    api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout, added_catalog: addedCatalog ?? [], order: order ?? [] }),
   del: (pageKey: string) => api.del<void>(`/dashboard/layout/${pageKey}`),
 };

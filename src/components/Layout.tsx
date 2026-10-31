@@ -93,8 +93,11 @@ const isGroup = (e: NavEntry): e is NavGroup => (e as NavGroup).group === true;
 const entryRoutes = (e: NavEntry): string[] =>
   isGroup(e) ? e.items.flatMap(entryRoutes) : [e.to];
 
-/** Stable key for a group header — unique even when sub-groups share labels. */
-const groupKey = (g: NavGroup, depth: number) => `${depth}:${g.label}`;
+/** Stable key for a group header — unique per nav section, label path and
+ *  depth, so identically-labelled groups (e.g. "Command Center" in two
+ *  sections) never share open/closed state. */
+const groupKey = (g: NavGroup, depth: number, prefix: string = '') =>
+  `${prefix}|${depth}:${g.label}`;
 
 /** True if the current pathname matches an item route (exact or nested child,
  *  e.g. /admin/tenants/3 highlights under Tenant Manager). */
@@ -286,106 +289,84 @@ export default function Layout() {
     // Every entry reuses an existing route; nothing is renamed or duplicated.
     // Secondary service pages stay reachable through their parent sub-group.
     // ---------------------------------------------------------------------------
+    // Unified SOC/MSSP information architecture — nine top-level groups,
+    // maximum two navigation levels. Every entry reuses an existing route;
+    // no modules are invented and none removed.
     operationsNav = [
       {
         group: true, icon: LayoutDashboard, label: 'Command Center', items: [
           { to: '/client-admin/dashboard', icon: LayoutDashboard, label: 'Overview & Live Proof' },
-          {
-            group: true, icon: AlertTriangle, label: 'Security Incidents', items: [
-              { to: '/client-admin/alerts', icon: AlertTriangle, label: 'Active Incidents' },
-              { to: '/client-admin/security-history', icon: Shield, label: 'Security History' },
-              { to: '/incidents', icon: Target, label: 'Incident Response' },
-            ],
-          },
-          {
-            group: true, icon: BarChart3, label: 'Security Analytics', items: [
-              { to: '/client-admin/statistics', icon: BarChart3, label: 'Performance Metrics' },
-              { to: '/client-admin/statistics/devices', icon: Monitor, label: 'Devices' },
-              { to: '/client-admin/statistics/network', icon: Network, label: 'Network Statistics' },
-              { to: '/client-admin/statistics/performance', icon: Activity, label: 'System Performance' },
-              { to: '/analytics', icon: TrendingUp, label: 'Analytics' },
-            ],
-          },
+          { to: '/client-admin/statistics', icon: BarChart3, label: 'Performance Metrics' },
+          { to: '/client-admin/statistics/devices', icon: Monitor, label: 'Devices' },
+          { to: '/client-admin/statistics/network', icon: Network, label: 'Network Statistics' },
+          { to: '/client-admin/statistics/performance', icon: Activity, label: 'System Performance' },
+          { to: '/analytics', icon: TrendingUp, label: 'Analytics' },
         ],
       },
       {
-        group: true, icon: ShieldCheck, label: 'Protect & Monitor', items: [
-          {
-            group: true, icon: Monitor, label: 'Assets & Infrastructure', items: [
-              { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
-              { to: '/client-admin/infrastructure', icon: Network, label: 'Infrastructure Map' },
-            ],
-          },
-          {
-            group: true, icon: Radar, label: 'Monitoring & Collectors', items: [
-              { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
-              { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
-              { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
-              { to: '/network', icon: Wifi, label: 'Network Monitoring' },
-              { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
-            ],
-          },
-          {
-            group: true, icon: Target, label: 'Threat Intelligence', items: [
-              { to: '/threats', icon: Target, label: 'Threat Intel Feed' },
-              { to: '/client-admin/endpoint-protection', icon: Shield, label: 'Endpoint Protection' },
-              { to: '/client-admin/email-security', icon: Mail, label: 'Email Security' },
-              { to: '/client-admin/cloud-security', icon: Cloud, label: 'Cloud Security' },
-              { to: '/client-admin/dns-filtering', icon: Globe, label: 'DNS Filtering' },
-              { to: '/client-admin/firewall-mgmt', icon: Lock, label: 'Firewall Management' },
-              { to: '/client-admin/vpn-gateway', icon: Wifi, label: 'VPN Gateway' },
-              { to: '/client-admin/sd-wan', icon: Network, label: 'SD-WAN' },
-            ],
-          },
-          {
-            group: true, icon: FileCheck, label: 'Compliance & Risk', items: [
-              { to: '/client-admin/compliance-reports', icon: FileCheck, label: 'Compliance Reports' },
-              { to: '/compliance', icon: ShieldCheck, label: 'Compliance Posture' },
-              { to: '/client-admin/vulnerability-scanning', icon: Scan, label: 'Vulnerability Scanning' },
-              { to: '/client-admin/patch-management', icon: Wrench, label: 'Patch Management' },
-              { to: '/client-admin/backup-dr', icon: Database, label: 'Backup & DR' },
-            ],
-          },
+        group: true, icon: AlertTriangle, label: 'SOC Operations', items: [
+          { to: '/client-admin/alerts', icon: AlertTriangle, label: 'Active Incidents' },
+          { to: '/client-admin/security-history', icon: Shield, label: 'Security History' },
+          { to: '/incidents', icon: Target, label: 'Incident Response' },
+          { to: '/client-admin/notifications', icon: Radio, label: 'Notifications' },
+        ],
+      },
+      {
+        group: true, icon: Monitor, label: 'Assets & Infrastructure', items: [
+          { to: '/client-admin/asset-inventory', icon: Server, label: 'Monitored Devices' },
+          { to: '/client-admin/monitored-devices', icon: Radar, label: 'Auto Discovery' },
+          { to: '/client-admin/scan-history', icon: Clock, label: 'Scan History' },
+          { to: '/client-admin/agents', icon: MonitorSmartphone, label: 'Collection Agents' },
+          { to: '/client-admin/infrastructure', icon: Network, label: 'Infrastructure Map' },
+          { to: '/network', icon: Wifi, label: 'Network Monitoring' },
+        ],
+      },
+      {
+        group: true, icon: ShieldCheck, label: 'Security Services & Protection', items: [
+          { to: '/client-admin/endpoint-protection', icon: Shield, label: 'Endpoint Protection' },
+          { to: '/client-admin/email-security', icon: Mail, label: 'Email Security' },
+          { to: '/client-admin/cloud-security', icon: Cloud, label: 'Cloud Security' },
+          { to: '/client-admin/dns-filtering', icon: Globe, label: 'DNS Filtering' },
+          { to: '/client-admin/firewall-mgmt', icon: Lock, label: 'Firewall Management' },
+          { to: '/client-admin/vpn-gateway', icon: Wifi, label: 'VPN Gateway' },
+          { to: '/client-admin/sd-wan', icon: Network, label: 'SD-WAN' },
+          { to: '/client-admin/vulnerability-scanning', icon: Scan, label: 'Vulnerability Scanning' },
+          { to: '/client-admin/patch-management', icon: Wrench, label: 'Patch Management' },
+          { to: '/client-admin/backup-dr', icon: Database, label: 'Backup & DR' },
+        ],
+      },
+      {
+        group: true, icon: Target, label: 'Threat Intelligence', items: [
+          { to: '/threats', icon: Target, label: 'Threat Intel Feed' },
         ],
       },
       {
         group: true, icon: Zap, label: 'Respond & Automate', items: [
-          {
-            group: true, icon: Zap, label: 'SOAR Playbooks', items: [
-              { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
-              { to: '/client-admin/soar', icon: Activity, label: 'SOAR Automation' },
-            ],
-          },
-          {
-            group: true, icon: Activity, label: 'Automation & Execution History', items: [
-              { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
-              { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
-            ],
-          },
+          { to: '/client-admin/playbooks', icon: Zap, label: 'Playbooks' },
+          { to: '/client-admin/soar', icon: Activity, label: 'SOAR Automation' },
+          { to: '/client-admin/automation/scripts', icon: Scan, label: 'Scripts' },
+          { to: '/client-admin/automation/runbooks', icon: FileText, label: 'Runbooks' },
         ],
       },
       {
-        group: true, icon: Users, label: 'Services & People', items: [
+        group: true, icon: Users, label: 'MSSP & Service Management', items: [
           { to: '/client-admin/advanced-tickets', icon: Inbox, label: 'Service Desk' },
+          { to: '/client-admin/entitlements', icon: Key, label: 'My Services' },
+          { to: '/projects', icon: FolderKanban, label: 'Project Portfolio' },
           { to: '/client-admin/technicians', icon: UserCog, label: 'Team & Technicians' },
-          {
-            group: true, icon: FolderKanban, label: 'Projects & Service Status', items: [
-              { to: '/projects', icon: FolderKanban, label: 'Project Portfolio' },
-              { to: '/client-admin/entitlements', icon: Key, label: 'My Services' },
-            ],
-          },
         ],
       },
       {
-        group: true, icon: FileBarChart2, label: 'Reports & Proof', items: [
+        group: true, icon: FileBarChart2, label: 'Governance & Reporting', items: [
+          { to: '/client-admin/compliance-reports', icon: FileCheck, label: 'Compliance Reports' },
+          { to: '/compliance', icon: ShieldCheck, label: 'Compliance Posture' },
           { to: '/reports', icon: FileBarChart2, label: 'Advanced Reporting' },
           { to: '/admin/audit', icon: ClipboardList, label: 'Audit Trail' },
         ],
       },
       {
-        group: true, icon: Settings, label: 'Account', items: [
+        group: true, icon: Settings, label: 'Platform Administration', items: [
           { to: '/client-admin/plans', icon: ShieldCheck, label: 'Subscription & Billing' },
-          { to: '/settings', icon: Settings, label: 'Organization & Settings' },
         ],
       },
     ];
@@ -410,20 +391,44 @@ export default function Layout() {
   }
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  // Sidebar inline search — filters nav entries by label/alias while typing.
+  const [navSearch, setNavSearch] = useState('');
   const location = useLocation();
+
+  /** Filter a nav tree by query; groups are kept when they match or contain
+   *  matching leaves. Leaves also match COMMAND_INDEX aliases so legacy names
+   *  ("tickets", "soar"…) still surface the right entry. */
+  const filterEntries = (entries: NavEntry[], q: string): NavEntry[] => {
+    if (!q) return entries;
+    const aliasFor = (to: string) =>
+      COMMAND_INDEX.filter(c => c.to === to).map(c => `${c.label} ${c.aliases}`).join(' ');
+    const out: NavEntry[] = [];
+    for (const e of entries) {
+      if (isGroup(e)) {
+        const labelHit = e.label.toLowerCase().includes(q) || aliasFor(e.label).includes(q);
+        const kids = filterEntries(e.items, q);
+        if (labelHit && kids.length === e.items.length) out.push(e);
+        else if (kids.length) out.push({ ...e, items: kids });
+        else if (labelHit) out.push({ ...e, items: [] });
+      } else if ((e.label + ' ' + aliasFor(e.to)).toLowerCase().includes(q)) {
+        out.push(e);
+      }
+    }
+    return out;
+  };
 
   // Auto-expand any group that contains the active route (direct navigation,
   // refresh, or nested child routes like /admin/tenants/:orgId).
   useEffect(() => {
     const path = location.pathname;
-    const expand = (items: NavEntry[], depth: number) => items.forEach(e => {
+    const expand = (items: NavEntry[], depth: number, prefix: string) => items.forEach(e => {
       if (isGroup(e) && entryRoutes(e).some(r => routeMatches(r, path))) {
-        const key = groupKey(e, depth);
+        const key = groupKey(e, depth, prefix);
         setOpenGroups(g => (g[key] ? g : { ...g, [key]: true }));
-        expand(e.items, depth + 1);
+        expand(e.items, depth + 1, `${prefix}${e.label}/`);
       }
     });
-    expand(operationsNav, 0); expand(adminNav, 0); expand(servicesNav, 0);
+    expand(operationsNav, 0, 'ops/'); expand(adminNav, 0, 'adm/'); expand(servicesNav, 0, 'svc/');
   }, [location.pathname, user?.role]);
 
   /** Active-route detection for a leaf item: NavLink exact match, plus prefix
@@ -431,16 +436,24 @@ export default function Layout() {
   const isItemActive = (to: string) =>
     location.pathname === to || location.pathname.startsWith(to + '/');
 
-  const renderEntries = (items: NavEntry[], color: string = 'cyan', depth: number = 0) =>
-    items.map(item => {
+  const renderEntries = (items: NavEntry[], color: string = 'cyan', depth: number = 0, prefix: string = 'ops/') => {
+    // While the menu filter is active, expand matching top-level groups so
+    // results are visible immediately while typing.
+    const q = navSearch.toLowerCase().trim();
+    if (q && depth === 0) {
+      items.forEach(e => {
+        if (isGroup(e) && e.items.length) {
+          setOpenGroups(g => (g[groupKey(e, 0, prefix)] ? g : { ...g, [groupKey(e, 0, prefix)]: true }));
+        }
+      });
+    }
+    return items.map(item => {
       if (isGroup(item)) {
-        const key = groupKey(item, depth);
-        const expanded = openGroups[key] || collapsed;
+        const key = groupKey(item, depth, prefix);
+        const expanded = openGroups[key] || collapsed || (!!navSearch && depth > 0);
         const groupActive = entryRoutes(item).some(r => isItemActive(r));
         return (
-          <div key={key} className="relative group/group"
-            onMouseEnter={() => setOpenGroups(g => ({ ...g, [key]: true }))}
-            onMouseLeave={() => setOpenGroups(g => ({ ...g, [key]: false }))}>
+          <div key={key} className="relative group/group">
             <button
               onClick={() => setOpenGroups(g => ({ ...g, [key]: !g[key] }))}
               aria-expanded={expanded}
@@ -454,7 +467,7 @@ export default function Layout() {
             </button>
             {expanded && (
               <div className={`${collapsed ? 'absolute left-full top-0 ml-2 z-50 bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-2 shadow-2xl min-w-[200px]' : 'ml-5 border-l border-[var(--ic-border)] pl-2 my-1'} space-y-0.5`}>
-                {renderEntries(item.items, color, depth + 1)}
+                {renderEntries(item.items, color, depth + 1, `${prefix}${item.label}/`)}
               </div>
             )}
           </div>
@@ -462,6 +475,7 @@ export default function Layout() {
       }
       return renderNavItems([item], color);
     });
+  };
 
   const renderNavItemsFlat = (items: NavItem[], color: string) =>
     items.map(item => {
@@ -527,10 +541,25 @@ export default function Layout() {
 
         {/* Nav Items — scrollable region, independent from the rest of the app */}
         <nav className="flex-1 min-h-0 px-3 py-4 space-y-1 overflow-y-auto">
+          {!collapsed && (
+            <div className="mb-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] focus-within:border-cyan-500/40 transition-colors">
+              <Search className="w-3.5 h-3.5 text-[var(--ic-muted)] flex-shrink-0" />
+              <input
+                value={navSearch}
+                onChange={e => setNavSearch(e.target.value)}
+                placeholder="Filter menu…"
+                aria-label="Filter navigation menu"
+                className="w-full bg-transparent text-xs text-[var(--ic-heading)] placeholder-slate-500 outline-none" />
+              {navSearch && (
+                <button onClick={() => setNavSearch('')} aria-label="Clear menu filter"
+                  className="text-[var(--ic-muted)] hover:text-[var(--ic-heading)] text-xs">✕</button>
+              )}
+            </div>
+          )}
           {!collapsed && <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
             {user?.role === 'platform_admin' ? 'Platform Administration' : user?.role === 'client_admin' ? 'Dashboard & Intelligence' : 'Operations'}
           </p>}
-          {renderEntries(operationsNav, user?.role === 'platform_admin' ? 'purple' : 'cyan')}
+          {renderEntries(filterEntries(operationsNav, navSearch.toLowerCase().trim()), user?.role === 'platform_admin' ? 'purple' : 'cyan', 0, 'ops/')}
 
           {adminNav.length > 1 && (
             <>
@@ -538,7 +567,7 @@ export default function Layout() {
                 {user?.role === 'platform_admin' ? 'System' : user?.role === 'client_admin' ? 'Service Delivery & Operations' : 'Account'}
               </p>}
               {collapsed && <div className="my-3 border-t border-[var(--ic-border)]" />}
-              {renderEntries(adminNav, 'cyan')}
+              {renderEntries(filterEntries(adminNav, navSearch.toLowerCase().trim()), 'cyan', 0, 'adm/')}
             </>
           )}
 
@@ -548,8 +577,11 @@ export default function Layout() {
                 Security & Network Services
               </p>}
               {collapsed && <div className="my-3 border-t border-[var(--ic-border)]" />}
-              {renderEntries(servicesNav, 'green')}
+              {renderEntries(filterEntries(servicesNav, navSearch.toLowerCase().trim()), 'green', 0, 'svc/')}
             </>
+          )}
+          {navSearch && !filterEntries(operationsNav.concat(adminNav, servicesNav), navSearch.toLowerCase().trim()).length && (
+            <p className="px-3 py-2 text-xs text-[var(--ic-muted)]">No menu items match “{navSearch}”.</p>
           )}
         </nav>
 
@@ -615,13 +647,13 @@ export default function Layout() {
               <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
                 {user?.role === 'platform_admin' ? 'Platform Administration' : 'Operations'}
               </p>
-              {renderEntries(operationsNav, user?.role === 'platform_admin' ? 'purple' : 'cyan')}
+              {renderEntries(operationsNav, user?.role === 'platform_admin' ? 'purple' : 'cyan', 0, 'ops/')}
               {adminNav.length > 1 && (
                 <>
                   <p className="px-3 pt-4 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
                     {user?.role === 'client_admin' ? 'Administration' : 'Account'}
                   </p>
-                  {renderEntries(adminNav, 'cyan')}
+                  {renderEntries(adminNav, 'cyan', 0, 'adm/')}
                 </>
               )}
               {servicesNav.length > 0 && (
@@ -629,7 +661,7 @@ export default function Layout() {
                   <p className="px-3 pt-4 pb-1 text-[10px] font-semibold text-[var(--ic-muted)] uppercase tracking-widest">
                     Services
                   </p>
-                  {renderEntries(servicesNav, 'green')}
+                  {renderEntries(servicesNav, 'green', 0, 'svc/')}
                 </>
               )}
               {/* Mobile fixed-bottom actions: Settings + logout */}
