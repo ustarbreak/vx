@@ -1,6 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import { Globe, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const DNS_GROUPS: ActionGroup[] = [
+  {
+    title: 'DNS server scans & resolution analysis', icon: 'Scan',
+    fields: [{ name: 'server', label: 'DNS server / resolver to test', placeholder: 'e.g. 8.8.8.8 or ns1.tenant.local', default: '10.0.0.53' }],
+    actions: [
+      { id: 'dns-scan-open-resolvers', label: 'Scan Fleet for Open Resolvers (port 53/UDP)' },
+      { id: 'dns-scan-amplification', label: 'Check DNS Amplification Exposure (TXT/ANY)' },
+      { id: 'dns-test-resolution', label: 'Test Name Resolution Against Server' },
+      { id: 'dns-trace-dnssec', label: 'Validate DNSSEC Chain (dig +dnssec)' },
+      { id: 'dns-zone-transfer', label: 'Probe Zone Transfer Allowed (AXFR test)' },
+      { id: 'dns-recursive-check', label: 'Detect Unauthorised Recursive Service' },
+    ],
+  },
+  {
+    title: 'Investigate blocked / suspicious domains', icon: 'Search',
+    fields: [{ name: 'domain', label: 'Domain under investigation', placeholder: 'e.g. phishing-bank.com' }],
+    actions: [
+      { id: 'dns-lookup-history', label: 'Pull Query History for Domain' },
+      { id: 'dns-whois-enrich', label: 'WHOIS / Registration Age Enrichment' },
+      { id: 'dns-threatintel-enrich', label: 'Threat Intel Lookup (multi-source)' },
+      { id: 'dns-resolve-all', label: 'Resolve All Records (A/AAAA/MX/TXT/CNAME)' },
+      { id: 'dns-similar-domains', label: 'Hunt Typosquat / Lookalike Domains' },
+      { id: 'dns-top-blocked', label: 'Report: Top Blocked Domains (24h)' },
+      { id: 'dns-query-log-export', label: 'Export DNS Query Logs (syslog)' },
+    ],
+  },
+  {
+    title: 'Policy & configuration push', icon: 'Upload',
+    fields: [
+      { name: 'profile', label: 'Filtering profile', options: ['Strict Workstations', 'Server Tier (allow-list)', 'Guest Wi-Fi', 'Blocklists + RPZ Update'] },
+      { name: 'scope', label: 'Scope', options: ['All resolvers', 'Selected site', 'Selected device'] },
+    ],
+    actions: [
+      { id: 'dns-push-policy', label: 'Push Filtering Policy Now' },
+      { id: 'dns-add-blocklist', label: 'Add Domain to Blocklist (RPZ)' },
+      { id: 'dns-remove-block', label: 'Remove / Un-block Domain' },
+      { id: 'dns-switch-upstream', label: 'Switch Upstream Resolver (DoH/DoT)' },
+      { id: 'dns-enable-cache-locking', label: 'Enable Cache Locking & QPS Limits' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'dns-pb-auto-block', label: 'Arm Playbook: Auto-Block New C2 Domains' },
+      { id: 'dns-pb-ticket-on-hit', label: 'Arm Playbook: Ticket on High-Severity Hit' },
+      { id: 'dns-pb-sinkhole', label: 'Arm Playbook: Sinkhole Confirmed Malware Domain' },
+    ],
+  },
+];
 
 interface DNSRule {
   id: string;
@@ -80,6 +132,10 @@ export default function DNSFilteringPage() {
           <p className="text-gray-400 text-sm">Total Hits</p>
         </div>
       </div>
+
+      {/* DNS analysis & operations console — resolver scans, domain hunting,
+          policy push and playbook arming */}
+      <OpsConsole service="dns-filtering" title="DNS Filtering Analysis & Response Console" groups={DNS_GROUPS} />
 
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">

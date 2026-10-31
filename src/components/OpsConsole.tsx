@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import {
   ActionGroup, SecurityActionDef, RunResult, runSecurityAction, downloadActionLog,
-} from '../../services/securityOps';
+} from '../services/securityOps';
 
 const ICONS: Record<string, React.ComponentType<any>> = {
   Zap, Shield, Mail, Cloud, Globe, Lock, Wifi, Network, Scan, Wrench, Database,
