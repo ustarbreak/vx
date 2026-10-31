@@ -7,6 +7,70 @@ import {
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import { useAuth } from '../../context/AuthContext';
 import { demoEmailAlerts } from '../../data/demoWorld';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const EMAIL_GROUPS: ActionGroup[] = [
+  {
+    title: 'Investigation & scope (how far did it spread?)', icon: 'Search',
+    fields: [
+      { name: 'message_id', label: 'Message-ID / subject / sender to trace', placeholder: 'invoice_final@… or <abc123@mailer>' },
+      { name: 'hours', label: 'Lookback window', options: ['24h', '72h', '7 days', '30 days'] },
+    ],
+    actions: [
+      { id: 'em-tenant-search', label: 'Tenant-Wide Search (same mail)' },
+      { id: 'em-trace-clicks', label: 'Trace URL Clicks & Detonations' },
+      { id: 'em-mailbox-audit', label: 'Mailbox Audit Log (read/forwarded)' },
+      { id: 'em-header-analysis', label: 'Full Header / SPF-DKIM-DMARC Analysis' },
+      { id: 'em-sandbox', label: 'Re-Detonate Attachment in Sandbox' },
+      { id: 'em-user-impact', label: 'Who Reported / Who Interacted?' },
+    ],
+  },
+  {
+    title: 'Containment & remediation', icon: 'Ban', danger: true,
+    fields: [{ name: 'ioc', label: 'Sender / URL / attachment hash', placeholder: 'sha256 of attachment or URL' }],
+    actions: [
+      { id: 'em-purge', label: 'Hard Purge from All Mailboxes' },
+      { id: 'em-quarantine-release-review', label: 'Review Quarantine & Release w/ Approval' },
+      { id: 'em-blocklist', label: 'Add Sender/Domain to Tenant Blocklist' },
+      { id: 'em-revoke-links', label: 'Revoke Rewritten URLs / Session Tokens' },
+      { id: 'em-force-oauth-revoke', label: 'Revoke OAuth App Grants for User' },
+      { id: 'em-reset-creds', label: 'Force Password + MFA Re-enrolment' },
+    ],
+  },
+  {
+    title: 'Correlated evidence (alerts · tickets · infected assets)', icon: 'AlertTriangle',
+    actions: [
+      { id: 'em-correlate-endpoints', label: 'Find Infected Endpoints (opened payload)' },
+      { id: 'em-correlate-dns', label: 'Check DNS Hits on Payload Domain' },
+      { id: 'em-correlate-fw', label: 'Check Firewall C2 Attempts' },
+      { id: 'em-open-tickets', label: 'Open Linked Tickets & Alerts' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (one click to arm)', icon: 'Zap',
+    fields: [{ name: 'mode', label: 'Execution mode', options: ['Auto-remediate', 'Suggest only (manual approval)'] }],
+    actions: [
+      { id: 'em-pb-phishing', label: 'Playbook: Phish → Purge → Reset → Ticket' },
+      { id: 'em-pb-bec', label: 'Playbook: BEC / Spoofed Executive Domain' },
+      { id: 'em-pb-malware-mail', label: 'Playbook: Malicious Attachment Outbreak' },
+      { id: 'em-pb-awareness', label: 'Auto-Send Awareness Notice to Recipients' },
+    ],
+  },
+  {
+    title: 'Push email-security configuration', icon: 'Upload',
+    fields: [
+      { name: 'profile', label: 'Policy profile', options: ['Strict inbound (deny SPF fail)', 'Anti-BEC (impersonation protection)', 'Advanced malware detonation', 'Default balanced'] },
+      { name: 'scope', label: 'Scope', options: ['All domains', 'Selected domain', 'Executives only'] },
+    ],
+    actions: [
+      { id: 'em-push-policy', label: 'Push Policy Now' },
+      { id: 'em-enable-dmarc-enforce', label: 'Set DMARC to p=reject (enforced)' },
+      { id: 'em-enable-timeofclick', label: 'Enable Time-of-Click Protection' },
+      { id: 'em-authenticity-check', label: 'Run Domain Authenticity Check' },
+    ],
+  },
+];
 
 interface EmailAlert {
   id: string;
@@ -187,6 +251,9 @@ export default function EmailSecurityPage() {
         </div>
       </div>
 
+      {/* Analyst investigation, containment and playbook console */}
+      <OpsConsole service="email-security" title="Email Investigation & Response Console" groups={EMAIL_GROUPS} />
+
       {/* Alerts List */}
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <div className="overflow-x-auto">
@@ -202,6 +269,7 @@ export default function EmailSecurityPage() {
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Device</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Time</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Ticket</th>
+                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Investigate</th>
               </tr>
             </thead>
             <tbody>
@@ -263,6 +331,31 @@ export default function EmailSecurityPage() {
                     ) : (
                       <span className="text-gray-500 text-sm">No ticket</span>
                     )}
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate('/client-admin/alerts'); }}
+                        title="Related alerts (same sender / recipient / IOC)"
+                        className="text-yellow-400 hover:text-yellow-300"
+                      >
+                        <AlertTriangle className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/client-admin/endpoint-protection?search=${encodeURIComponent(alert.recipient)}`); }}
+                        title="Infected endpoints tied to this recipient"
+                        className="text-red-400 hover:text-red-300"
+                      >
+                        <Server className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate('/client-admin/soar'); }}
+                        title="Arm the phishing response playbook"
+                        className="text-cyan-400 hover:text-cyan-300"
+                      >
+                        <Clock className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

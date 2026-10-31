@@ -7,6 +7,61 @@ import {
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import { useAuth } from '../../context/AuthContext';
 import { demoEndpointAlerts } from '../../data/demoWorld';
+import OpsConsole from '../../components/OpsConsole';
+import type { ActionGroup } from '../../services/securityOps';
+
+const EP_GROUPS: ActionGroup[] = [
+  {
+    title: 'Response actions (contain & eradicate)', icon: 'Ban', danger: true,
+    fields: [
+      { name: 'device', label: 'Target device / hostname', placeholder: 'e.g. WS-FIN-012' },
+      { name: 'reason', label: 'Reason (added to ticket & audit trail)', placeholder: 'Suspected ransomware encryption' },
+    ],
+    actions: [
+      { id: 'ep-isolate', label: 'Network Isolate Host' },
+      { id: 'ep-release', label: 'Release Isolation' },
+      { id: 'ep-agent-live-response', label: 'Run Live Response Shell' },
+      { id: 'ep-kill-process', label: 'Kill Process Tree' },
+      { id: 'ep-quarantine-file', label: 'Quarantine File / Hash' },
+      { id: 'ep-snapshot', label: 'Capture Forensic Snapshot' },
+    ],
+  },
+  {
+    title: 'Hunt & investigate', icon: 'Search',
+    fields: [{ name: 'ioc', label: 'IOC (hash / IP / domain / process)', placeholder: 'sha256 or 185.x.x.x' }],
+    actions: [
+      { id: 'ep-ioc-sweep', label: 'Cross-Fleet IOC Hunt' },
+      { id: 'ep-full-scan', label: 'On-Demand Full Scan' },
+      { id: 'ep-memory-scan', label: 'Memory / Fileless Scan' },
+      { id: 'ep-timeline', label: 'Build Attack Timeline (process tree)' },
+      { id: 'ep-xdr-correlate', label: 'XDR Cross-Correlation (email+net+endpoint)' },
+      { id: 'ep-threat-intel', label: 'Enrich with Threat Intel' },
+    ],
+  },
+  {
+    title: 'Push configuration (policy as code)', icon: 'Upload',
+    fields: [
+      { name: 'policy', label: 'Policy template', options: ['Default Workstations', 'High-Security (locked USB)', 'Server Tier', 'Ransomware Hardening Pack'] },
+      { name: 'scope', label: 'Scope', options: ['All endpoints', 'Selected device', 'Site / group'] },
+    ],
+    actions: [
+      { id: 'ep-push-policy', label: 'Push Policy Now' },
+      { id: 'ep-enable-arm', label: 'Enable Ransomware Rollback (ARM)' },
+      { id: 'ep-disable-macro', label: 'Block Office Macros Policy' },
+      { id: 'ep-usb-control', label: 'Set USB Storage Control' },
+      { id: 'ep-update-agents', label: 'Force Agent Update & Reconnect' },
+    ],
+  },
+  {
+    title: 'Automation playbooks (SOAR-ready)', icon: 'Zap',
+    actions: [
+      { id: 'ep-pb-ransomware', label: 'Arm Playbook: Ransomware Containment' },
+      { id: 'ep-pb-phish-host', label: 'Arm Playbook: Phishing → Host Compromise' },
+      { id: 'ep-pb-auto-ticket', label: 'Auto-Create Ticket + Assign Tier-2' },
+      { id: 'ep-pb-reset-creds', label: 'Force Credential Reset for User' },
+    ],
+  },
+];
 
 interface EndpointAlert {
   id: string;
@@ -180,6 +235,10 @@ export default function EndpointProtectionPage() {
         </div>
       </div>
 
+      {/* Response & Operations console — EDR/XDR containment, hunting,
+          policy push and playbook arming for the SOC analyst */}
+      <OpsConsole service="endpoint-protection" title="EDR / XDR Response Console" groups={EP_GROUPS} />
+
       {/* Alerts List */}
       <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <div className="overflow-x-auto">
@@ -194,6 +253,7 @@ export default function EndpointProtectionPage() {
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Action</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Time</th>
                 <th className="text-left py-3 px-4 text-gray-400 font-semibold">Ticket</th>
+                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Quick Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -250,6 +310,31 @@ export default function EndpointProtectionPage() {
                     ) : (
                       <span className="text-gray-500 text-sm">No ticket</span>
                     )}
+                  </td>
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate('/client-admin/alerts'); }}
+                        title="Related alerts for this device"
+                        className="text-yellow-400 hover:text-yellow-300"
+                      >
+                        <AlertTriangle className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate(`/client-admin/vulnerability-scanning?device=${encodeURIComponent(alert.device)}`); }}
+                        title="Vulns on this asset"
+                        className="text-orange-400 hover:text-orange-300"
+                      >
+                        <Search className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); navigate('/client-admin/soar'); }}
+                        title="Open containment playbook in SOAR"
+                        className="text-cyan-400 hover:text-cyan-300"
+                      >
+                        <Activity className="w-4 h-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
