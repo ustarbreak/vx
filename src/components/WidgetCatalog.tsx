@@ -5,7 +5,15 @@ import {
   Database, Zap, Wrench, Archive, Gauge, ListChecks, Radar, Inbox, FolderOpen,
 } from 'lucide-react';
 import { AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { CatalogEntryPlaceholder, useOptionalLayoutCtx, widgetStorageKey, PageKeyContext, DefaultLayoutContext, type WidgetLayoutEntry } from './DashboardWidget';
+import {
+  CatalogEntryPlaceholder,
+  useOptionalLayoutCtx,
+  widgetStorageKey,
+  PageKeyContext,
+  DefaultLayoutContext,
+  registerCatalogEntryComponent,
+  type WidgetLayoutEntry,
+} from './DashboardWidget';
 import {
   mockAlerts, mockRiskScore, mockNISTMapping, mockNetworkDevices, mockPatches, mockBackups,
 } from '../data/mockData';
@@ -660,6 +668,12 @@ export function CatalogEntry({ id }: { id: string }) {
 export function AllCatalogEntries(): React.ReactElement[] {
   return CATALOG_WIDGETS.map((w) => <CatalogEntry key={w.id} id={w.id} />);
 }
+
+// Register <CatalogEntry/> with the board scanner in DashboardWidget.tsx.
+// Without this, widgets added through "+ Add widget" are recognized nowhere
+// on the board and never render — the "add widget does nothing" bug. The
+// registry avoids a static import cycle between the two modules.
+registerCatalogEntryComponent(CatalogEntry);
 
 /* ------------------------------------------------------------------ */
 /* "Add widget" button + picker modal                                  */

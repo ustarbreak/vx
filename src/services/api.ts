@@ -1289,6 +1289,10 @@ export interface WidgetLayoutEntryDto {
   id: string;
   colSpan: number;
   collapsed: boolean;
+  /** Free pixel height set by edge-resizing (optional — backend accepts it). */
+  heightPx?: number | null;
+  /** Headerless chrome for bare self-carded widgets (attack map, topology…). */
+  hideHeader?: boolean;
 }
 export interface DashboardLayoutOut {
   page_key: string;

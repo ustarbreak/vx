@@ -36,6 +36,8 @@ class LayoutEntry(BaseModel):
     collapsed: bool = False
     # Free pixel height set by edge-resizing the widget (optional).
     heightPx: int | None = Field(default=None, ge=80, le=4000)
+    # Headerless chrome for bare self-carded widgets (attack map, topology…).
+    hideHeader: bool = False
 
 
 class LayoutPut(BaseModel):

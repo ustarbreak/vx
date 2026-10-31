@@ -362,6 +362,13 @@ function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
         // Bare self-carded widget (attack map, topology…) — participates in the
         // board via its registered id so it can be dragged/edge-resized freely.
         push(BARE_WIDGET_REGISTRY.get(t)!.id);
+      } else if (typeof t === 'string' && (child.props as any)['data-widget-id']) {
+        // Wrapper div around a bare widget — unwrap single-element children.
+        const kids = React.Children.toArray((child.props as { children?: React.ReactNode }).children);
+        if (kids.length === 1 && React.isValidElement(kids[0])) {
+          const inner = kids[0] as React.ReactElement;
+          if (BARE_WIDGET_REGISTRY.has(inner.type)) push(BARE_WIDGET_REGISTRY.get(inner.type)!.id);
+        }
       } else if (typeof t !== 'string' && depth < 6) {
         walk((child.props as { children?: React.ReactNode }).children, depth + 1);
       }
@@ -479,6 +486,7 @@ function WidgetCard({
   headerExtra,
   removable,
   className,
+  hideHeader = false,
   children,
   dragHandleProps,
   isDragging,
@@ -491,6 +499,11 @@ function WidgetCard({
   /** Show an ✕ remove button (catalog widgets added via "Add widget"). */
   removable?: boolean;
   className: string;
+  /** Headerless chrome for bare self-carded widgets (attack map, topology…):
+   *  the inner component renders its own card/header, so this wrapper only
+   *  contributes resize edges + a floating grip/remove control — no double
+   *  layering. */
+  hideHeader?: boolean;
   children: React.ReactNode;
   dragHandleProps?: Record<string, unknown>;
   isDragging?: boolean;
@@ -555,6 +568,8 @@ function WidgetCard({
     ? { height: entry.heightPx }
     : {};
 
+  const headerless = hideHeader || entry.hideHeader === true;
+
   // Slot board: every widget lives in a resizable cell. Dragging swaps
   // slots; edge handles change this widget's width/size only.
   return (
@@ -564,17 +579,42 @@ function WidgetCard({
       onPointerUp={endResize}
       onPointerCancel={endResize}
       style={style}
-      className={`relative min-w-0 max-w-full ${entry.heightPx && !entry.collapsed ? '' : 'h-full '}flex flex-col overflow-hidden bg-[var(--ic-surface)] border rounded-xl p-4 sm:p-6 transition-shadow duration-150 ${
+      className={`relative min-w-0 max-w-full ${entry.heightPx && !entry.collapsed ? '' : 'h-full '}flex flex-col overflow-hidden transition-shadow duration-150 rounded-xl ${
+        headerless ? '' : 'bg-[var(--ic-surface)] border p-4 sm:p-6'
+      } ${
         resizing ? 'ring-2 ring-cyan-400/50' : ''
       } ${
         isOver
           ? 'border-cyan-400 ring-2 ring-cyan-400/40'
           : isDragging
           ? 'border-cyan-400/60 shadow-lg shadow-cyan-500/20 z-10 relative'
-          : 'border-[var(--ic-border)]'
+          : headerless ? '' : 'border-[var(--ic-border)]'
       } ${className}`}
     >
       {/* Header row: drag handle + title + controls */}
+      {headerless ? (
+        /* Bare self-carded widget — floating grip/remove control over its own
+           card, plus the four resize edges below. No duplicate header layer. */
+        removable && (
+          <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-0.5 rounded-lg bg-[var(--ic-surface)]/85 border border-[var(--ic-border)] backdrop-blur px-1 py-0.5 opacity-70 hover:opacity-100 transition-opacity">
+            <button
+              type="button"
+              {...(dragHandleProps ?? {})}
+              className={`${btn} cursor-grab active:cursor-grabbing touch-none select-none`}
+              title="Drag to move this widget"
+              aria-label={`Drag to move ${title}`}
+            >
+              <GripVertical className="w-4 h-4 pointer-events-none" />
+            </button>
+            <button type="button"
+              className={`${btn} hover:text-red-400`}
+              onClick={() => setLayout((prev) => prev.filter((w) => w.id !== entry.id))}
+              title={`Remove ${title} from the page`} aria-label={`Remove ${title}`}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )
+      ) : (
       <div className="flex items-center gap-2 mb-4 flex-shrink-0">
         <button
           type="button"
@@ -607,11 +647,12 @@ function WidgetCard({
           )}
         </div>
       </div>
+      )}
 
       {/* Body — hidden when collapsed. `overflow-x-auto` keeps wide content
           (tables, charts, maps) inside the card: it scrolls within the widget
           instead of overflowing the layout or squashing text. */}
-      {!entry.collapsed && <div className="min-w-0 flex-1 overflow-x-auto">{children}</div>}
+      {!entry.collapsed && <div className={`min-w-0 flex-1 overflow-x-auto ${headerless ? 'h-full' : ''}`}>{children}</div>}
 
       {/* Hint shown only while collapsed */}
       {entry.collapsed && (
@@ -891,6 +932,42 @@ function SlotWidgetCell({ index, widgetId, span }: { index: number; widgetId: st
   };
 
   const props = el.props as any;
+  // Bare self-carded widget (WorldAttackMap, OrgTopologyMap…): recognized by
+  // its component type in the registry — wrapped with headerless edge-resize
+  // chrome so it can be dragged and resized on all four edges freely while
+  // keeping its own card/header (no double layering).
+  const bareMeta = BARE_WIDGET_REGISTRY.get(el.type as unknown);
+  if (bareMeta) {
+    // Live layout entry wins (keeps the user's resized height/width), but a
+    // bare widget must always render headerless — force it.
+    const liveEntry = ctx.layout.find((w) => w.id === bareMeta.id);
+    const bareEntry: WidgetLayoutEntry = {
+      ...(liveEntry ?? { id: bareMeta.id, colSpan: span, collapsed: false }),
+      hideHeader: true,
+    };
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        data-slot-index={index}
+        className={`min-w-0 break-inside-avoid mb-0 ${(SPAN_CLASS[span] ?? SPAN_CLASS[1]).join(' ')}`}
+      >
+        <WidgetCard
+          entry={bareEntry}
+          title={bareMeta.title}
+          hideHeader
+          removable
+          className=""
+          dragHandleProps={{ ...attributes, ...listeners }}
+          isDragging={isDragging}
+          isOver={isOver && isDragging}
+        >
+          {el}
+        </WidgetCard>
+      </div>
+    );
+  }
+
   const isPlainWidget = el.type === DashboardWidget;
   const cp = isPlainWidget
     ? props
@@ -963,8 +1040,20 @@ function SlotGrid({
   const board = useContext(BoardContext);
 
   const byId = new Map<string, React.ReactElement>();
-  React.Children.forEach(children, (child) => {
-    if (!React.isValidElement(child)) return;
+  // Bare self-carded widgets (WorldAttackMap, OrgTopologyMap…) are often
+  // wrapped in a plain <div data-widget-id="…"> on the page — unwrap single
+  // children so the board scanner can recognize them.
+  const resolveBare = (child: React.ReactElement): React.ReactElement => {
+    const t = child.type as unknown;
+    if (typeof t === 'string' && (child.props as any)['data-widget-id']) {
+      const kids = React.Children.toArray((child.props as { children?: React.ReactNode }).children);
+      if (kids.length === 1 && React.isValidElement(kids[0])) return kids[0] as React.ReactElement;
+    }
+    return child;
+  };
+  React.Children.forEach(children, (rawChild) => {
+    if (!React.isValidElement(rawChild)) return;
+    const child = resolveBare(rawChild);
     // DashboardWidget / CatalogEntryPlaceholder are declared directly in the
     // page tree. <CatalogEntry/> (defined in WidgetCatalog.tsx, which imports
     // this module — a static import back would be a cycle) is recognized via
@@ -972,6 +1061,8 @@ function SlotGrid({
     if (child.type === DashboardWidget || (child.type as any) === CatalogEntryPlaceholder || (child.type as any) === CATALOG_ENTRY_REF.current) {
       const cid = (child.props as { id?: string }).id;
       if (cid) byId.set(cid, child);
+    } else if (BARE_WIDGET_REGISTRY.has(child.type)) {
+      byId.set(BARE_WIDGET_REGISTRY.get(child.type)!.id, child);
     }
   });
 
@@ -1031,14 +1122,17 @@ export function ResetLayoutButton({
         try {
           localStorage.removeItem(widgetStorageKey(pageKey));
           localStorage.removeItem(widgetAddedCatalogKey(pageKey));
+          // Legacy key from the old fixed-slot system (now `:order`).
           localStorage.removeItem(`${widgetStorageKey(pageKey)}:slots`);
+          localStorage.removeItem(`${widgetStorageKey(pageKey)}:order`);
         } catch {
           /* ignore */
         }
         deleteLayoutOnBackend(pageKey);
-        // Forget the saved slot arrangement, then re-place widgets in order.
+        // Forget the saved arrangement, then restore the page's default
+        // layout exactly as declared (widths + headerless bare widgets).
         if (board) board.setPlacements(defaultLayout.map((d) => d.id));
-        setLayout(defaultLayout.map((d) => ({ ...d, colSpan: 1 })));
+        setLayout(defaultLayout.map((d) => ({ ...d })));
       }}
       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-[var(--ic-muted)] border border-[var(--ic-border)] bg-[var(--ic-surface-2)] hover:text-cyan-400 hover:border-cyan-400/40 transition-colors"
       title="Restore the default widget arrangement"

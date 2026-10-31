@@ -11,17 +11,26 @@ import DashboardWidget, {
   WidgetGrid,
   ResetLayoutButton,
   CustomizeHint,
+  registerBareWidget,
   type WidgetLayoutEntry,
 } from '../../components/DashboardWidget';
 import { AddWidgetButton, AllCatalogEntries } from '../../components/WidgetCatalog';
 import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts } from './DashboardOpsWidgets';
 
-// Only grid widgets are listed here. The bare widgets (attack map, topology,
-// ops summary, ingestion health, value engine) render their own cards outside
-// the slot grid — listing them here would create empty placeholder slots.
+// Register the bare self-carded widgets with the board so they participate in
+// drag/reorder and get headerless four-edge resize chrome (free width/height)
+// instead of being skipped by the scanner. Declared at module scope — runs
+// once before any render.
+registerBareWidget(WorldAttackMap, { id: 'ca-attackmap', title: 'Worldwide Threat Map' });
+registerBareWidget(OrgTopologyMap, { id: 'ca-topology', title: 'Infrastructure Topology' });
+
+// Grid widgets + registered bare widgets (attack map, topology). Bare ones
+// carry hideHeader so their own internal card/header stays the only layer.
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
-  // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 6 / 12).
+  // colSpan in thirds of the row; masonry tracks adapt per breakpoint (1 / 2 / 3).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
+  { id: 'ca-attackmap', colSpan: 3, collapsed: false, hideHeader: true },
+  { id: 'ca-topology', colSpan: 2, collapsed: false, hideHeader: true },
   { id: 'ca-org', colSpan: 2, collapsed: false },
   { id: 'ca-kpis', colSpan: 3, collapsed: false },
 ];
@@ -111,9 +120,14 @@ export default function ClientAdminDashboardPage() {
         </div>
       </div>
 
-      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode).
-          Bare widget, declared OUTSIDE the slot grid: WorldAttackMap renders its own card +
-          header ("Worldwide Threat Map"), so no DashboardWidget chrome is layered on top of it. */}
+      {/* Everything below is a customizable widget grid: drag ⠿ to reorder,
+          resize from all four edges (width + free height), collapse, and add
+          catalog widgets via the "+ Add widget" card after the last widget.
+          The bare widgets (attack map, topology) are registered with the board
+          so they flow inside it too — headerless chrome keeps their own card
+          as the only layer while still being draggable/edge-resizable. */}
+      <WidgetGrid>
+      {/* C — Worldwide Attacking Map (GET /api/security/attack-map; demo fixtures only in Demo Mode). */}
       <div data-widget-id="ca-attackmap">
         <WorldAttackMap
           key={`${period}-${refreshKey}`}
@@ -122,20 +136,14 @@ export default function ClientAdminDashboardPage() {
         />
       </div>
 
-      {/* Everything below is a customizable widget grid: drag ⠿ to reorder,
-          resize between 1–3 columns, collapse, and add catalog widgets via "+ Add widget". */}
-      <WidgetGrid>
       {/* D — Global security posture strip (real backend values, drill-downs) */}
       <DashboardWidget id="ca-posture" title="Security posture" subtitle="Live KPIs across your estate" spanOptions={[2, 3]}>
         <PostureKpiStrip alerts={alerts} probes={probes} assetCount={organization.assetCount} complianceScore={organization.complianceScore} />
       </DashboardWidget>
 
-      {/* Organizational Infrastructure Topology (GET /api/org-topology) —
-          separate, complementary view: "what does my org look like and is it
-          healthy?". Real registered sites + enrolled collectors only; network
-          links are never inferred. Demo fixtures only behind Demo Mode.
-          Bare widget (same pattern as the attack map): OrgTopologyMap renders
-          its own card + toolbar, so no DashboardWidget chrome is layered on top. */}
+      {/* Infrastructure Topology (GET /api/org-topology) — bare widget inside
+          the board: renders its own card + toolbar, wrapped with headerless
+          edge-resize chrome (no double layering). */}
       <div data-widget-id="ca-topology">
         <OrgTopologyMap compact />
       </div>
