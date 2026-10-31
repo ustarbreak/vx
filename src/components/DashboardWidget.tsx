@@ -22,9 +22,25 @@ import { CSS } from '@dnd-kit/utilities';
 // Lazy registry for the <CatalogEntry/> component defined in WidgetCatalog.tsx.
 // A static `import { CatalogEntry }` here would create an import cycle
 // (WidgetCatalog already imports from this module), so WidgetCatalog registers
-// its component reference at load time and we compare against it via `any`
-// (React element `type` identity comparison is not expressible in TS).
+// its component reference at load time (see `registerCatalogEntryComponent`)
+// and we compare against it via `any` (React element `type` identity
+// comparison is not expressible in TS). Without registration the board scanner
+// cannot see catalog widgets declared through AllCatalogEntries(), so they
+// never render after being added — the "add widget does nothing" bug.
 export const CATALOG_ENTRY_REF: { current: any } = { current: null };
+
+/** Called once by WidgetCatalog.tsx at module load to register <CatalogEntry/>. */
+export function registerCatalogEntryComponent(component: unknown) {
+  CATALOG_ENTRY_REF.current = component;
+}
+
+/** Registry for bare self-carded components (WorldAttackMap, OrgTopologyMap…)
+ *  so the board can wrap them with edge-resize chrome instead of skipping them. */
+export const BARE_WIDGET_REGISTRY: Map<unknown, { id: string; title: string }> = new Map();
+
+export function registerBareWidget(component: unknown, meta: { id: string; title: string }) {
+  BARE_WIDGET_REGISTRY.set(component, meta);
+}
 
 /* ------------------------------------------------------------------ */
 /* Layout state — shared per page via context so widgets can reorder,  */
@@ -37,6 +53,9 @@ export interface WidgetLayoutEntry {
   collapsed: boolean;
   /** Free height in pixels when the user has edge-resized this widget. */
   heightPx?: number;
+  /** When true the card chrome hides its own header (self-carded bare widgets
+   *  like the attack map keep their internal toolbar; only resize edges show). */
+  hideHeader?: boolean;
 }
 
 /** Grid slot sizes, smallest → largest. `colSpan` values are 1..3 thirds. */
@@ -339,6 +358,10 @@ function collectDeclaredWidgetIds(node: React.ReactNode): string[] {
       const t = child.type as unknown;
       if (t === DashboardWidget || t === CatalogEntryPlaceholder || t === CATALOG_ENTRY_REF.current) {
         push((child.props as { id?: string }).id);
+      } else if (BARE_WIDGET_REGISTRY.has(t)) {
+        // Bare self-carded widget (attack map, topology…) — participates in the
+        // board via its registered id so it can be dragged/edge-resized freely.
+        push(BARE_WIDGET_REGISTRY.get(t)!.id);
       } else if (typeof t !== 'string' && depth < 6) {
         walk((child.props as { children?: React.ReactNode }).children, depth + 1);
       }
