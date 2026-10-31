@@ -5,7 +5,6 @@ export default {
     './src/**/*.{ts,tsx}',
     './components/**/*.{ts,tsx}',
     './client-admin/**/*.{ts,tsx}',
-    './LandingPage.tsx',
   ],
   theme: {
     extend: {
