@@ -1199,3 +1199,30 @@ class DashboardLayout(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "page_key", name="uq_dashboard_layout_user_page"),
     )
+
+
+class SecurityOpsTask(Base):
+    """Durable record of an operator action dispatched from a Security
+    Services & Protection page (EDR containment, firewall config push,
+    syslog/SNMP/OID extraction, scan run, playbook arming, backup job…).
+
+    Honesty rules mirror DeviceAction: the platform never pretends a command
+    ran. `queued` means a real collector/agent can pick it up on its next
+    poll; `manual` means no channel exists for this tenant yet and a human
+    technician must execute it with their own tooling; `failed` means nothing
+    happened. Every dispatch is also written to the audit trail.
+    """
+    __tablename__ = "security_ops_tasks"
+
+    id = Column(Integer().with_variant(BigInteger, "postgresql"), primary_key=True, autoincrement=True)
+    uid = Column(String, unique=True, index=True, nullable=False)          # SOP-000123
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    service = Column(String(64), nullable=False, index=True)               # endpoint-protection | firewall-mgmt | ...
+    action_id = Column(String(128), nullable=False)                        # ep-isolate, fw-push-config, ...
+    label = Column(String, default="")                                     # human-readable button label
+    vendor = Column(String(64), nullable=True)                             # fortinet | cisco | paloalto | ...
+    status = Column(String, default="queued", index=True)                  # queued|manual|failed
+    reason = Column(Text, default="")                                      # honest explanation (no-agent…)
+    params = Column(JSON, default=dict)                                    # redacted parameters from the UI
+    requested_by = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

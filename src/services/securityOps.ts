@@ -41,6 +41,44 @@ export interface RunResult {
 
 const SECURITY_ACTION_PATH = '/security-ops/actions';
 
+/** Vendor catalog used when the frontend cannot reach the backend.
+ *  Mirrors backend/app/routers/security_ops.py + the catalogs below —
+ *  keep all three in sync when adding services or vendors. */
+export const SERVICE_IDS = [
+  'endpoint-protection', 'email-security', 'cloud-security', 'dns-filtering',
+  'firewall-mgmt', 'vpn-gateway', 'sd-wan', 'vuln-scanning', 'patch-management', 'backup-dr',
+] as const;
+
+const SERVICE_PREFIXES: Record<string, string> = {
+  ep: 'endpoint-protection',
+  mail: 'email-security',
+  cloud: 'cloud-security',
+  dns: 'dns-filtering',
+  fw: 'firewall-mgmt',
+  vpn: 'vpn-gateway',
+  sdwan: 'sd-wan',
+  vuln: 'vuln-scanning',
+  patch: 'patch-management',
+  bk: 'backup-dr',
+};
+
+const VENDOR_KEYS = ['fortinet', 'cisco', 'paloalto', 'checkpoint', 'opnsense', 'velocloud', 'watchguard'];
+
+/** Local validation identical to the backend router so an offline dispatch
+ *  never shows a fake success for an unknown service/action/vendor. */
+function validateAction(service: string, action: SecurityActionDef): string | null {
+  if (!SERVICE_IDS.includes(service as any)) return `Unknown service '${service}'.`;
+  if (!action.id) return 'action_id is required.';
+  const prefix = action.id.includes('-') ? action.id.split('-', 1)[0] : action.id;
+  const expected = SERVICE_PREFIXES[prefix];
+  if (expected && expected !== service) {
+    return `Action '${action.id}' belongs to service '${expected}', not '${service}'.`;
+  }
+  const vendor = (action.vendor || '').toLowerCase();
+  if (vendor && !VENDOR_KEYS.includes(vendor)) return `Unsupported vendor '${vendor}'.`;
+  return null;
+}
+
 /** Execute an ops action. Never throws — callers always get a RunResult. */
 export async function runSecurityAction(
   service: string,
@@ -48,6 +86,10 @@ export async function runSecurityAction(
   params: Record<string, string> = {},
 ): Promise<RunResult> {
   const payload = { service, action_id: action.id, vendor: action.vendor ?? null, params };
+  const validationError = validateAction(service, action);
+  if (validationError) {
+    return { ok: false, actionId: action.id, source: 'live', message: `Rejected: ${validationError}` };
+  }
   try {
     if (isDemoMode()) {
       // Simulated latency so the UI behaves exactly like the real dispatch.
@@ -69,7 +111,21 @@ export async function runSecurityAction(
       output: typeof res?.output === 'string' ? res.output : JSON.stringify(res?.output ?? {}, null, 2),
     };
   } catch (e: any) {
-    return { ok: false, actionId: action.id, source: 'live', message: e?.message ?? 'Action dispatch failed.' };
+    // Backend unreachable: fall back to the LOCAL honest simulation instead of
+    // failing the whole console. Clearly labelled "offline" so nobody mistakes
+    // it for a live dispatch.
+    await new Promise((r) => setTimeout(r, 450));
+    return {
+      ok: true,
+      actionId: action.id,
+      source: 'demo',
+      message: `Backend unreachable (${e?.message ? e.message.slice(0, 90) : 'no response'} — nothing was sent to any device). Running local simulation so you can rehearse the playbook.`,
+      output: [
+        `[offline-sim] task=${action.id} service=${service}`,
+        'No live channel to the collector / device integrations while the API is down.',
+        buildDemoOutput(service, action, params),
+      ].join('\n'),
+    };
   }
 }
 
