@@ -41,8 +41,13 @@ HEAVY_RESOURCES = {
 }
 
 
-def main() -> int:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", default=str(OUT_DIR), help="output directory for YAMLs")
+    args = ap.parse_args(argv)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
     deps_by_service: dict[str, list] = {}
     for rule in SERVICE_DEPENDENCY_RULES:
         deps_by_service.setdefault(rule["service"], []).append(
@@ -50,7 +55,15 @@ def main() -> int:
         )
 
     written = 0
-    for sid, meta in sorted(SERVICE_CONNECTORS.items()):
+    # Platform-internal pseudo-services that exist in the catalog but not in
+    # SERVICE_CONNECTORS (manual YAMLs, kept here so regeneration stays complete).
+    EXTRA_IDS = {"asset-discovery"}
+    for sid in sorted(set(SERVICE_CONNECTORS) | EXTRA_IDS):
+        meta = SERVICE_CONNECTORS.get(sid, {})
+        if sid in EXTRA_IDS:
+            existing = out_dir / f"{sid}.yaml"
+            if existing.exists():
+                continue  # manual file is the source of truth; leave untouched
         spec = {
             "id": sid,
             "name": sid.replace("-", " ").title(),
@@ -69,13 +82,13 @@ def main() -> int:
                 "app/services/service_graph.py:SERVICE_DEPENDENCY_RULES",
             ],
         }
-        (OUT_DIR / f"{sid}.yaml").write_text(
+        (out_dir / f"{sid}.yaml").write_text(
             yaml.safe_dump(spec, sort_keys=False, allow_unicode=True)
         )
         written += 1
-    print(f"Wrote {written} service YAMLs -> {OUT_DIR}")
+    print(f"Wrote {written} service YAMLs -> {out_dir}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
