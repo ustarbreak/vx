@@ -93,6 +93,20 @@ curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/platform/cap
 3. **Case:** `POST /api/platform/actions {"service":"incident-response","action":"case.create","payload":{"title":"drill"}}` → returns ok via native ticketing (dry_run defaults true — set false to write).
 4. **Playbook:** run a non-dangerous SOAR playbook from the Playbooks page; audit log records it.
 
+## Step 6b — EICAR first-success test (T5.2, safe)
+```bash
+python backend/tools/eicar_first_success.py          # writes to temp dir, prints checks, deletes file
+python backend/tools/eicar_first_success.py --keep   # leave it for a manual scan window
+```
+Tick the Wazuh/ClamAV/Rspamd detection rows in the TODO_VERIFY list below after each hit.
+
+## Phase 6 add-on — Greenbone (deferred per decision #8)
+```bash
+docker compose -f deploy/docker-compose.greenbone.yml up -d   # ~8 GB RAM host needed (decision #7)
+bash deploy/greenbone/verify.sh
+```
+`deploy/install.sh --service greenbone` prints these two commands instead of installing.
+
 ## Step 7 — Uninstall / teardown (manual, safe)
 ```bash
 docker compose -f deploy/docker-compose.connectors.yml --profile mvp down        # keeps volumes

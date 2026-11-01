@@ -96,6 +96,11 @@ export default function SDWANPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* T7.3 honest-labeling pass: SD-WAN is a scaffold — vendor APIs not wired. */}
+      <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-300">
+        Scaffold UI — live data requires a vendor SD-WAN connector (status: roadmap).
+        When no live feed is available the tables below show demo sample rows only.
+      </div>
       <div>
         <h1 className="text-3xl font-bold text-[var(--ic-heading)]">SD-WAN Management</h1>
         <p className="text-gray-400 mt-1">Monitor and manage software-defined WAN connections</p>
