@@ -488,15 +488,6 @@ class AlertCorrelationResponse(BaseModel):
     members: List[AlertCorrelationMember] = []
 
 
-class AlertDetailResponse(AlertResponse):
-    """Detail view: related detections/incidents/tickets + notes + history."""
-    related_incidents: List[dict] = []     # real Incident rows referencing this alert
-    related_tickets: List[dict] = []       # real Ticket rows referencing this alert
-    notes: List["AlertNoteResponse"] = []
-    events: List["AlertEventResponse"] = []
-    evidence: List["EventEvidenceSummary"] = []   # additive (Stage 1): per-event stubs
-
-
 class AlertNoteIn(BaseModel):
     body: str = Field(..., min_length=1, max_length=4000)
 
@@ -524,6 +515,21 @@ class AlertEventResponse(BaseModel):
         from_attributes = True
 
 
+# NOTE: EventEvidenceSummary is defined further below in this module; it is
+# re-exported into this namespace right after its definition so that
+# AlertDetailResponse's forward reference resolves under pydantic 2.5.x,
+# which evaluates string annotations at class-creation time.
+
+
+class AlertDetailResponse(AlertResponse):
+    """Detail view: related detections/incidents/tickets + notes + history."""
+    related_incidents: List[dict] = []     # real Incident rows referencing this alert
+    related_tickets: List[dict] = []       # real Ticket rows referencing this alert
+    notes: List["AlertNoteResponse"] = []
+    events: List["AlertEventResponse"] = []
+    evidence: List["EventEvidenceSummary"] = []   # additive (Stage 1): per-event stubs
+
+
 # ---------------------------------------------------------------------------
 # Event evidence (Stage 1 — durable per-event raw payload + provenance).
 # Summary view is additive on alert detail; the FULL payload is only served by
@@ -545,6 +551,11 @@ class EventEvidenceSummary(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# Resolve AlertDetailResponse's forward reference (pydantic 2.5.x evaluates
+# string annotations at class-creation time).
+AlertDetailResponse.model_rebuild()
 
 
 class EventEvidenceDetail(EventEvidenceSummary):

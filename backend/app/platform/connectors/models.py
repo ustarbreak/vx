@@ -36,6 +36,7 @@ class JobState(str, Enum):
     succeeded = "succeeded"
     failed = "failed"
     unsupported = "unsupported"  # honesty rule: capability not implemented
+    blocked = "blocked"          # requires confirmation (four-eyes gating)
 
 
 @dataclass

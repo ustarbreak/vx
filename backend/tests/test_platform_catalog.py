@@ -14,6 +14,7 @@ Covers:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 
@@ -247,3 +248,76 @@ async def test_lifecycle_first_success_flow(session_factory, monkeypatch):
         assert states["endpoint-protection"] == "not_installed"   # catalog default-filled
         r404 = await c.post("/api/platform/services/nope/first-success", json={})
         assert r404.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 (T5.x) — async job runner endpoints. Same flag-gated mounting; jobs
+# run in background tasks, so tests poll the store until terminal state.
+# ---------------------------------------------------------------------------
+
+async def test_jobs_flag_off_not_mounted(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=False, user_id=1) as c:
+        r = await c.post("/api/platform/jobs",
+                         json={"service": "soar", "action": "case.create"})
+        assert r.status_code == 404
+
+
+async def test_job_unknown_service_404(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/jobs",
+                         json={"service": "nope-not-real", "action": "x.y"})
+        assert r.status_code == 404
+
+
+async def test_job_roadmap_action_unsupported(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        # pick any action whose catalog status is roadmap/unsupported
+        from app.platform.catalog.schema import load_catalog
+        target = None
+        for svc, spec in load_catalog().items():
+            for a in spec.actions:
+                if a.status in ("roadmap", "unsupported"):
+                    target = (svc, a.name)
+                    break
+            if target:
+                break
+        if target is None:
+            pytest.skip("catalog has no roadmap actions")
+        r = await c.post("/api/platform/jobs",
+                         json={"service": target[0], "action": target[1]})
+        assert r.status_code == 200
+        assert r.json()["status"] == "unsupported"
+
+
+async def test_job_lifecycle_poll(session_factory):
+    """Enqueue a real provider job and poll GET /jobs/{id} to terminal state."""
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/jobs", json={
+            "service": "soar", "action": "playbook.run",
+            "params": {"playbook_id": 1}, "idempotency_key": "k-1"})
+        assert r.status_code == 202, r.text
+        jid = r.json()["job_id"]
+        assert r.json()["state"] == "queued"
+        # idempotent replay returns same job id
+        r2 = await c.post("/api/platform/jobs", json={
+            "service": "soar", "action": "playbook.run",
+            "params": {"playbook_id": 1}, "idempotency_key": "k-1"})
+        assert r2.json()["job_id"] == jid
+        # poll up to ~3s for terminal state
+        import time as _t
+        state = None
+        deadline = _t.time() + 3
+        while _t.time() < deadline:
+            g = await c.get(f"/api/platform/jobs/{jid}")
+            assert g.status_code == 200
+            state = g.json()["state"]
+            if state in ("succeeded", "failed", "unsupported", "blocked"):
+                break
+            await asyncio.sleep(0.05)
+        assert state in ("succeeded", "failed", "unsupported", "blocked"), state
+        g404 = await c.get("/api/platform/jobs/does-not-exist")
+        assert g404.status_code == 404

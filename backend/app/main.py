@@ -160,7 +160,9 @@ app.include_router(security_ops.router, prefix="/api")
 # ONLY when PLATFORM_CATALOG_ENABLED=true (default false => zero behavior change).
 if settings.PLATFORM_CATALOG_ENABLED:
     from app.platform.router import router as platform_router  # noqa: E402
+    from app.platform.jobs_api import router as platform_jobs_router  # noqa: E402
     app.include_router(platform_router, prefix="/api")
+    app.include_router(platform_jobs_router, prefix="/api")
 
 
 # ---------------------------------------------------------------------------
