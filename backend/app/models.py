@@ -1226,3 +1226,24 @@ class SecurityOpsTask(Base):
     params = Column(JSON, default=dict)                                    # redacted parameters from the UI
     requested_by = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class ServiceLifecycleState(Base):
+    """T4.2 — per-org onboarding lifecycle for a platform service.
+
+    States: not_installed -> installed -> connected -> first_success.
+    Additive table (created by Base.metadata.create_all like the rest).
+    Only read/written when settings.SERVICE_LIFECYCLE_ENABLED is true.
+    """
+    __tablename__ = "service_lifecycle_states"
+    __table_args__ = (UniqueConstraint("org_id", "service_id", name="uq_org_service_lifecycle"),)
+
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
+    service_id = Column(String(64), index=True, nullable=False)
+    state = Column(String(32), nullable=False, default="not_installed")
+    # ISO timestamps persisted as strings to stay dialect-agnostic (SQLite dev / PG prod)
+    installed_at = Column(String(40))
+    connected_at = Column(String(40))
+    first_success_at = Column(String(40))
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

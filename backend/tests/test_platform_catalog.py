@@ -210,3 +210,40 @@ async def test_provider_mode_off_queues_only(session_factory, monkeypatch):
             "payload": {"title": "must not execute"}, "dry_run": False})
         assert r.status_code == 200
         assert r.json()["status"] == "queued"
+
+
+# ---------------------------------------------------------------------------
+# T4.2 lifecycle tests (additive)
+# ---------------------------------------------------------------------------
+
+async def test_lifecycle_flag_off_reports_disabled(session_factory):
+    os.environ["SERVICE_LIFECYCLE_ENABLED"] = "false"
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        # SERVICE_LIFECYCLE_ENABLED default false -> honest "disabled" payload
+        r = await c.get("/api/platform/lifecycle")
+        assert r.status_code == 200
+        assert r.json() == {"enabled": False, "services": []}
+        r2 = await c.post("/api/platform/services/threat-intel/first-success", json={"note": "x"})
+        assert r2.status_code == 409
+
+
+async def test_lifecycle_first_success_flow(session_factory, monkeypatch):
+    os.environ["SERVICE_LIFECYCLE_ENABLED"] = "true"
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/services/threat-intel/first-success", json={"note": "verify.sh ok"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["state"] == "first_success"
+        assert body["installed_at"] and body["connected_at"] and body["first_success_at"]
+        # idempotent second call keeps timestamps stable
+        r2 = await c.post("/api/platform/services/threat-intel/first-success", json={"note": "again"})
+        assert r2.json()["first_success_at"] == body["first_success_at"]
+        lst = (await c.get("/api/platform/lifecycle")).json()
+        assert lst["enabled"] is True
+        states = {s["service_id"]: s["state"] for s in lst["services"]}
+        assert states["threat-intel"] == "first_success"
+        assert states["endpoint-protection"] == "not_installed"   # catalog default-filled
+        r404 = await c.post("/api/platform/services/nope/first-success", json={})
+        assert r404.status_code == 404

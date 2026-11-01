@@ -163,3 +163,56 @@ async def _audit(request: Request, user: User, action: str, resource: str) -> No
         await db.commit()
     except Exception as exc:  # noqa: BLE001 — audit must never break reads
         logger.warning("platform audit write failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# T4.2 — onboarding lifecycle (mounted only with PLATFORM_CATALOG_ENABLED;
+# writes also require SERVICE_LIFECYCLE_ENABLED so the two flags stay honest).
+# ---------------------------------------------------------------------------
+
+@router.get("/lifecycle")
+async def platform_lifecycle(request: Request, user: User = Depends(get_current_user),
+                             db=Depends(get_db)):
+    """Per-org checklist state for every catalog service."""
+    from app.core.config import settings
+    from app.platform import lifecycle
+    from app.models import ServiceLifecycleState
+    from sqlalchemy import select
+    if not settings.SERVICE_LIFECYCLE_ENABLED:
+        return {"enabled": False, "services": []}
+    rows = (await db.execute(
+        select(ServiceLifecycleState).where(ServiceLifecycleState.org_id == user.org_id)
+    )).scalars().all()
+    known = {r.service_id for r in rows}
+    items = [lifecycle.as_dict(r) for r in sorted(rows, key=lambda r: r.service_id)]
+    for sid in load_catalog():
+        if sid not in known:
+            items.append({"service_id": sid, "state": "not_installed",
+                          "installed_at": None, "connected_at": None,
+                          "first_success_at": None})
+    return {"enabled": True, "org_id": user.org_id, "services": items}
+
+
+class FirstSuccessRequest(BaseModel):
+    note: str = ""
+
+
+@router.post("/services/{service_id}/first-success")
+async def platform_first_success(service_id: str, body: FirstSuccessRequest,
+                                 request: Request,
+                                 user: User = Depends(get_current_user),
+                                 db=Depends(get_db)):
+    """Record the brief's 'first success' milestone after deploy/<engine>/verify.sh
+    passes. Idempotent; refuses unknown services and stays disabled without the
+    lifecycle flag."""
+    from app.core.config import settings
+    from app.platform import lifecycle
+    if service_id not in load_catalog():
+        raise HTTPException(status_code=404, detail=f"unknown service {service_id!r}")
+    if not settings.SERVICE_LIFECYCLE_ENABLED:
+        raise HTTPException(status_code=409,
+                            detail="SERVICE_LIFECYCLE_ENABLED=false; enable to record milestones")
+    row = await lifecycle.advance(db, user.org_id, service_id, "first_success")
+    await _audit(request, user, "platform.lifecycle.first_success",
+                 f"/api/platform/services/{service_id}/first-success")
+    return {"status": "ok", **lifecycle.as_dict(row), "note": body.note[:500]}

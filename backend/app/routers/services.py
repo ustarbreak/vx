@@ -49,6 +49,14 @@ async def service_status(
                 "engine": connectors.SERVICE_CONNECTORS[service_id]["engine"]}
     res = await connectors.probe_connector(service_id, cfg)
     res["configured"] = True
+    # T4.2 (additive, flag-gated): advance the per-org onboarding lifecycle
+    # from probe results. Payload shape unchanged unless the flag is on.
+    from app.core.config import settings
+    if settings.SERVICE_LIFECYCLE_ENABLED:
+        from app.platform import lifecycle
+        target = "connected" if res.get("reachable") else "installed"
+        row = await lifecycle.advance(db, current_user.org_id, service_id, target)
+        res["lifecycle"] = lifecycle.as_dict(row)
     return res
 
 

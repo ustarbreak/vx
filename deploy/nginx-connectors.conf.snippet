@@ -1,0 +1,37 @@
+# T3.5 — nginx routing snippet for connector UIs (ADDITIVE; paste into the
+# server block of frontend/nginx.conf or an included site file).
+# Nothing here is active until you install the engines via deploy/install.sh
+# and uncomment these blocks, so today's behavior stays unchanged.
+#
+# TLS note: terminate TLS at this proxy in production (certbot/nginx + 443
+# server block) and keep engine ports bound to 127.0.0.1 as configured in
+# deploy/docker-compose.connectors.yml. Never expose Wazuh/MISP/IRIS directly.
+
+# --- Wazuh Dashboard (profile wazuh|mvp) ---
+# location /wazuh/ {
+#     proxy_pass http://wazuh-dashboard:5601/;
+#     proxy_set_header Host $host;
+#     proxy_http_version 1.1;
+#     proxy_set_header Upgrade $http_upgrade;   # websocket
+#     proxy_set_header Connection "upgrade";
+# }
+
+# --- MISP web (profile misp|mvp) ---
+# location /misp/ {
+#     proxy_pass http://misp-web:80/;
+#     proxy_set_header Host $host;
+#     client_max_body_size 50M;                 # attachment uploads
+# }
+
+# --- DFIR-IRIS (profile iris|mvp) ---
+# location /iris/ {
+#     proxy_pass http://iris-server:8000/;
+#     proxy_set_header Host $host;
+#     proxy_http_version 1.1;
+#     proxy_set_header Upgrade $http_upgrade;
+#     proxy_set_header Connection "upgrade";
+# }
+
+# --- Platform catalog API (only when PLATFORM_CATALOG_ENABLED=true) ---
+# Already covered by the existing `location /api/` proxy to backend:8000;
+# no extra rule needed. Keep it behind the same auth as the rest of /api/.

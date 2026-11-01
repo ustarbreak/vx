@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # actions to the existing engines (tickets/incidents/SOAR); anything else
     # keeps the safe Phase-1 behavior (validate + report unsupported/queued).
     PROVIDER_MODE: str = "native"
+    # T4.2 service lifecycle tracking (not_installed→installed→connected→
+    # first_success), persisted per org in ServiceLifecycleState. Purely
+    # additive; existing /api/services/{id}/status payload is unchanged unless
+    # this flag is on. OFF by default so current UIs see byte-identical JSON.
+    SERVICE_LIFECYCLE_ENABLED: bool = False
 
     class Config:
         env_file = ".env"
