@@ -36,10 +36,14 @@ chmod 600 deploy/.env.connector
 
 ## Step 3 — Launch the MVP connector stack
 ```bash
-docker compose -f deploy/docker-compose.connectors.yml --profile mvp --env-file deploy/.env.connector up -d
-# or one engine at a time:  --profile wazuh | --profile misp | --profile iris
+bash deploy/install.sh --profile mvp      # runs preflight first, then:
+# docker compose -f deploy/docker-compose.connectors.yml --profile mvp --env-file deploy/.env.connector up -d
+# or one engine at a time:  bash deploy/install.sh --service wazuh | misp | iris
 docker compose -f deploy/docker-compose.connectors.yml ps
 ```
+Per-engine first-success checks (safe, read-only): `bash deploy/wazuh/verify.sh`,
+`bash deploy/misp/verify.sh`, `bash deploy/dfir-iris/verify.sh`.
+Teardown: `bash deploy/install.sh --service <id> --down` (volumes kept).
 Wazuh takes ~2–3 min to become healthy. Verify:
 ```bash
 curl -sk -u "$WAZUH_API_USER:$WAZUH_API_PASS" https://localhost:55000/manager/version   # JSON token follows

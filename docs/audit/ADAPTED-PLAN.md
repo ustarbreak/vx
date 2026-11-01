@@ -18,7 +18,7 @@ API prefix in this repo is `/api/...` (not `/api/v1/...`) — see ALIGNMENT §F.
 - T1.3 `GET /api/platform/graph` (+`?format=mermaid`) reading catalog; auth via existing `get_current_user`; audit-log write. ~25 steps.
 - T1.4 `backend/tools/gen_diagram.py` → `docs/architecture/platform.mmd` + per-service mmd + service×page×route matrix CSV. ~25 steps.
 - T1.5 CI bootstrap (none exists): GitHub Actions running pytest + catalog validation + orphan-route/page check. ~30 steps.
-- T1.6 node_modules de-track (**owner decision #9: land with feature work, not at the end**): verify `npm ci && npm run build` clean, then a separate labeled commit — .gitignore entry + `git rm -r --cached node_modules` + `npm ci` step in Dockerfile. ~30 steps.
+^- ✅ T1.6 DONE: node_modules de-track (**owner decision #9: land with feature work, not at the end**): verify `npm ci && npm run build` clean, then a separate labeled commit — .gitignore entry + `git rm -r --cached node_modules` + `npm ci` step in Dockerfile. ~30 steps.
 
 ## Phase 2 — Connector SDK + canonical actions
 - T2.1 `backend/platform/connectors/base.py` + `models.py` (Detection = EndpointAlert shape + MITRE + org_id; severity enums match `triage.SEVERITY_ORDER`). ~30 steps.
@@ -30,10 +30,10 @@ API prefix in this repo is `/api/...` (not `/api/v1/...`) — see ALIGNMENT §F.
 - T2.7 Native-provider adapters: `TriageEngine`, `DiscoveryEngine`, `IncidentResponseRunner`, SOAR runner behind provider interface + `provider_mode` config flag (default `native`). ~35 steps.
 
 ## Phase 3 — MVP installers (compose-based per owner decision #2; fail-loudly on TODO_VERIFY pins)
-- T3.1 `deploy/preflight.sh` + top-level `deploy/install.sh --service …|--profile mvp`. **Owner decision #7: use conservative containerized defaults — min 8 GB RAM / 4 vCPU / 100 GB disk / Docker Engine + Compose v2; per-service needs from catalog YAMLs; defaults marked TODO_VERIFY and checked fail-loudly on the real host at install time.** ~30 steps.
-- T3.2 Wazuh single-node installer + connector registration + `verify.sh` (API reachable, test alert appears via `/api/incidents`). ~35 steps. Versions/checksums: research official pages or emit TODO_VERIFY.
-- T3.3 MISP installer + `verify.sh` (test IoC event queryable) reusing `services/misp.py`. ~30 steps.
-- T3.4 DFIR-IRIS installer + case-create-from-alert verify; **owner decision #4: IRIS confirmed in scope** — native tickets stay default provider, IRIS opt-in per org (`org_id`), TheHive kept as configured connector. ~35 steps.
+- ✅ T3.1 DONE: `deploy/preflight.sh` + `deploy/install.sh --service …|--profile mvp` (thin compose wrapper; runs preflight first; never auto-starts). **Owner decision #7: conservative containerized defaults — min 8 GB RAM / 4 vCPU / 100 GB disk / Docker Engine + Compose v2; defaults TODO_VERIFY-checked fail-loudly on the real host at install time.**
+- ✅ T3.2 DONE (compose form): Wazuh single-node services in `deploy/docker-compose.connectors.yml` (profiles `mvp`,`wazuh`) + `deploy/wazuh/verify.sh` (API token + manager/version, read-only). Pins are TODO_VERIFY until a verified install run. Connector registration = guide step 4 UI wiring, no code.
+- ✅ T3.3 DONE (compose form): MISP + mariadb services (profiles `mvp`,`misp`) + `deploy/misp/verify.sh`; reuses existing `services/misp.py` puller via integration row.
+- ✅ T3.4 DONE (compose form): DFIR-IRIS server/app + postgres services (profiles `mvp`,`iris`) + `deploy/dfir-iris/verify.sh`; **owner decision #4 honored** — native tickets stay default provider, IRIS opt-in per org (`org_id`), TheHive kept as configured connector.
 - ~~T3.5 Greenbone~~ → **moved to Phase 6 (T6.0) per owner decision #8**. MVP profile = Wazuh + MISP + DFIR-IRIS only.
 - T3.5 nginx routing for new UIs under separate paths w/ TLS notes; merge duplicate compose configs found in T0.5. ~25 steps.
 
