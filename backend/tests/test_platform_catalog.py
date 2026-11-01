@@ -97,12 +97,20 @@ async def test_flag_off_means_not_mounted(session_factory):
 
 
 async def test_auth_required(session_factory):
+    # NOTE: FastAPI's HTTPBearer(auto_error=True) in app/core/security.py returns
+    # 403 (not 404/401) when the Authorization header is missing entirely.
+    # That is pre-existing behavior shared by every authenticated route; we pin it
+    # here so regressions are caught, and a future switch to auto_error=False +
+    # explicit 401 would require updating this expectation repo-wide.
     await _seed(session_factory)
     async with make_client(session_factory, mounted=True) as c:
-        assert (await c.get("/api/platform/graph")).status_code == 401
-        assert (await c.get("/api/platform/capabilities")).status_code == 401
+        assert (await c.get("/api/platform/graph")).status_code == 403
+        assert (await c.get("/api/platform/capabilities")).status_code == 403
         assert (await c.post("/api/platform/actions",
-                             json={"service": "soar", "action": "case.create"})).status_code == 401
+                             json={"service": "soar", "action": "case.create"})).status_code == 403
+        # invalid token -> 401 from get_current_user
+        r = await c.get("/api/platform/graph", headers={"Authorization": "Bearer garbage"})
+        assert r.status_code == 401
 
 
 async def test_graph_matches_catalog(session_factory):
