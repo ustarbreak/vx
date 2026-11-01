@@ -1,0 +1,23 @@
+id: compliance
+name: Compliance
+status: ga
+provider: native
+engine: CIS-CAT Lite / Wazuh SCA
+docs_url: https://documentation.wazuh.com/current/user-manual/capabilities/security-config-assessment/index.html
+endpoints:
+  scan: /sca/000/status
+  stats: /manager/version
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: analytics
+  rationale: Les preuves de contrôle (journaux conservés, temps de réponse) sont tirées
+    des données Security Analytics.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

@@ -1,0 +1,30 @@
+id: soar
+name: Soar
+status: ga
+provider: native
+engine: n8n / Shuffle
+docs_url: https://docs.n8n.io/api/api-reference/
+endpoints:
+  workflows: /api/v1/workflows
+  executions: /api/v1/executions
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: incident-response
+  rationale: Les playbooks SOAR se déclenchent sur un incident qualifié et écrivent
+    leur résultat dans le dossier IR.
+- requires: threat-intel
+  rationale: L'enrichissement des steps SOAR (réputation, blocage) consomme les indicateurs
+    Threat Intelligence.
+in_seed: true
+actions:
+- name: playbook.run
+  method: POST
+  dangerous: true
+  status: ga
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

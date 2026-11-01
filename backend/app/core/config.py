@@ -48,7 +48,24 @@ class Settings(BaseSettings):
     # Elastic Integration
     ELASTIC_URL: Optional[str] = None
     ELASTIC_API_KEY: Optional[str] = None
-    
+
+    # --- Platform catalog (additive tree, docs/audit/ADAPTED-PLAN.md T1.1) ---
+    # OFF by default: nothing consumes the catalog unless explicitly opted in.
+    PLATFORM_CATALOG_ENABLED: bool = False
+    # Connector HTTP transport helper (T2.5). Default false == today's lenient
+    # behavior (verify=False in wazuh.py/connectors.py). Owner decision #5:
+    # strict-by-default is a later, explicit migration step. TODO_VERIFY.
+    CONNECTOR_TLS_VERIFY: bool = False
+    # Canonical-action executor mode (T2.6). "native" delegates platform
+    # actions to the existing engines (tickets/incidents/SOAR); anything else
+    # keeps the safe Phase-1 behavior (validate + report unsupported/queued).
+    PROVIDER_MODE: str = "native"
+    # T4.2 service lifecycle tracking (not_installed→installed→connected→
+    # first_success), persisted per org in ServiceLifecycleState. Purely
+    # additive; existing /api/services/{id}/status payload is unchanged unless
+    # this flag is on. OFF by default so current UIs see byte-identical JSON.
+    SERVICE_LIFECYCLE_ENABLED: bool = False
+
     class Config:
         env_file = ".env"
         case_sensitive = True

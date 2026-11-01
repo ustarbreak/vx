@@ -1,0 +1,23 @@
+id: analytics
+name: Analytics
+status: ga
+provider: native
+engine: Grafana + OpenSearch/Loki
+docs_url: https://grafana.com/docs/grafana/latest/developer-resources/http-api/
+endpoints:
+  dashboards: /api/dashboards/db
+  health: /api/health
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: network-monitoring
+  rationale: Le flux d'événements analysés par Security Analytics provient des collecteurs
+    Network Monitoring (NMS).
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

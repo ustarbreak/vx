@@ -1,0 +1,31 @@
+id: incident-response
+name: Incident Response
+status: ga
+provider: native
+engine: TheHive (SOAR-ready case management)
+docs_url: https://thehive-project.org/
+endpoints:
+  cases: /api/v1/query
+  stats: /api/v1/status
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: analytics
+  rationale: Les alertes corrélées par Security Analytics alimentent la file de qualification
+    d'Incident Response.
+in_seed: true
+actions:
+- name: incident.create
+  method: POST
+  dangerous: false
+  status: ga
+- name: incident.status
+  method: POST
+  dangerous: false
+  status: ga
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

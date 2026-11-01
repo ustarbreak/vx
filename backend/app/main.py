@@ -156,6 +156,16 @@ app.include_router(agent_router.web_router, prefix="/api")
 from app.routers import security_ops  # noqa: E402
 app.include_router(security_ops.router, prefix="/api")
 
+# Platform catalog (docs/audit/ADAPTED-PLAN.md T1.3) — additive tree, mounted
+# ONLY when PLATFORM_CATALOG_ENABLED=true (default false => zero behavior change).
+if settings.PLATFORM_CATALOG_ENABLED:
+    from app.platform.router import router as platform_router  # noqa: E402
+    from app.platform.jobs_api import router as platform_jobs_router  # noqa: E402
+    from app.platform.ueba_api import router as platform_ueba_router  # noqa: E402
+    app.include_router(platform_router, prefix="/api")
+    app.include_router(platform_jobs_router, prefix="/api")
+    app.include_router(platform_ueba_router, prefix="/api")
+
 
 # ---------------------------------------------------------------------------
 # Agent binary distribution — clients download goinfra + install scripts from

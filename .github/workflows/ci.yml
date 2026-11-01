@@ -1,0 +1,51 @@
+name: CI
+
+# T1.5 (docs/audit/ADAPTED-PLAN.md): minimal, additive guardrails.
+# Gates: backend tests, catalog drift test, frontend typecheck+build.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install deps
+        run: pip install -r backend/requirements.txt
+      - name: Regenerate catalog and check drift (T1.2)
+        # gen_catalog.py writes platform/catalog YAMLs from live code sources;
+        # any uncommitted diff means seed/connectors/catalog drifted.
+        run: |
+          python backend/tools/gen_catalog.py --out backend/app/platform/catalog
+          git add -A backend/app/platform/catalog
+          git diff --cached --exit-code -q || { echo "::error::platform catalog out of sync - run backend/tools/gen_catalog.py and commit"; git diff --cached --stat; exit 1; }
+      - name: Run backend tests
+        env:
+          DATABASE_URL: sqlite:///./ci_test.db
+          SECRET_KEY: ci-only-not-a-real-secret
+        run: python -m pytest backend/tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+        continue-on-error: true   # pre-existing errors tracked; non-blocking for now
+      - name: Build
+        run: npm run build

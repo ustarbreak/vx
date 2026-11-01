@@ -1,0 +1,13 @@
+# Platform-internal component (not a sellable service): feeds discovery data
+# into the entitlement graph. Generated manually; drift test whitelists it.
+id: asset-discovery
+name: Asset Discovery
+status: ga
+provider: native
+engine: "native discovery.py (nmap + SNMP, honest fallback)"
+docs_url: ""
+endpoints: {}
+resources: {cpu: "1", memory: "512M", disk: "5G"}
+dependencies: []
+in_seed: false
+actions: []

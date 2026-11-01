@@ -1,0 +1,175 @@
+# ---------------------------------------------------------------------------
+# Infracentra — connector stack (MVP profile per owner decisions #2/#7/#8)
+#   MVP = Wazuh + MISP + DFIR-IRIS.  Greenbone/OpenVAS deferred to Phase 6.
+#   Run MANUALLY following docs/guides/CONNECTOR-INSTALL.md — never started
+#   automatically by the platform.
+#
+#   Usage:  docker compose -f deploy/docker-compose.connectors.yml --profile mvp up -d
+#   Preflight first: bash deploy/preflight.sh
+#
+#   Versions are TODO_VERIFY pins: bump only after a verified install run.
+#   All engines join `infracentra-network` when you also run the main
+#   docker-compose.yml from repo root (same external network).
+# ---------------------------------------------------------------------------
+name: infracentra-connectors
+
+networks:
+  infracentra-network:
+    external: true   # created by root docker-compose.yml; preflight checks it
+
+volumes:
+  wazuh-manager-config:
+  wazuh-manager-logs:
+  wazuh-dashboard-data:
+  misp-db-data:
+  misp-files-data:
+  iris-db-data:
+  iris-files-data:
+
+services:
+  # ----------------------------- WAZUH ------------------------------------
+  wazuh-db:
+    profiles: ["mvp", "wazuh"]
+    image: wazuh/wazuh-db:4.9  # TODO_VERIFY
+    container_name: infracentra-wazuh-db
+    environment:
+      - ALLOWED_IPS=0.0.0.0/0
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/wazuhdb_getstatus"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  wazuh-manager:
+    profiles: ["mvp", "wazuh"]
+    image: wazuh/wazuh-manager:4.9  # TODO_VERIFY
+    container_name: infracentra-wazuh-manager
+    depends_on:
+      wazuh-db: { condition: service_healthy }
+    environment:
+      # Set these in deploy/.env.connector BEFORE `up` (guide step 2)
+      - INDEXER_NAME=${INDEXER_NAME:-wazuh-indexer}
+      - API_USERNAME=${WAZUH_API_USER:-wazuh}
+      - API_PASSWORD=${WAZUH_API_PASS:?set WAZUH_API_PASS in deploy/.env.connector}
+      # Active Response: enable per guide before using endpoint.isolate
+      - AR_ENABLED=${WAZUH_AR_ENABLED:-false}
+    ports:
+      - "1514:1514"     # agent enrollment/communication
+      - "1515:1515"     # agent registration
+      - "55000:55000"   # Wazuh REST API (backend connector api_endpoint)
+    volumes:
+      - wazuh-manager-config:/var/ossec/etc
+      - wazuh-manager-logs:/var/ossec/logs
+    restart: unless-stopped
+
+  wazuh-indexer:
+    profiles: ["mvp", "wazuh"]
+    image: wazuh/wazuh-indexer:4.9  # TODO_VERIFY
+    container_name: infracentra-wazuh-indexer
+    environment:
+      - node.name=wazuh-indexer
+      - discovery.type=single-node
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${WAZUH_INDEXER_PASS:?set WAZUH_INDEXER_PASS}
+    ports:
+      - "9200:9200"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    restart: unless-stopped
+
+  wazuh-dashboard:
+    profiles: ["mvp", "wazuh"]
+    image: wazuh/wazuh-dashboard:4.9  # TODO_VERIFY
+    container_name: infracentra-wazuh-dashboard
+    depends_on: [wazuh-manager]
+    environment:
+      - APISERVER_PORT=55000
+    ports:
+      - "443:443"       # change if it collides with nginx; see guide step 0
+    restart: unless-stopped
+
+  # ------------------------------ MISP -------------------------------------
+  misp-db:
+    profiles: ["mvp", "misp"]
+    image: mariadb:10.11  # TODO_VERIFY
+    container_name: infracentra-misp-db
+    command: --innodb-buffer-pool-size=512M
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MISP_DB_ROOT_PASS:?set MISP_DB_ROOT_PASS}
+      - MYSQL_DATABASE=misp_db
+      - MYSQL_USER=misp
+      - MYSQL_PASSWORD=${MISP_DB_PASS:?set MISP_DB_PASS}
+    volumes:
+      - misp-db-data:/var/lib/mysql
+    restart: unless-stopped
+
+  misp:
+    profiles: ["mvp", "misp"]
+    image: andriux/misp:20240901  # TODO_VERIFY — official community build
+    container_name: infracentra-misp
+    depends_on:
+      misp-db: { condition: service_healthy }
+    ports:
+      - "8081:80"       # backend connector api_endpoint = http://misp (internal) or host :8081
+    volumes:
+      - misp-files-data:/var/www/MISP/app/files
+    environment:
+      - db_host=misp-db
+      - db_database=misp_db
+      - db_user=misp
+      - db_pass=${MISP_DB_PASS}
+      - mysql_root_password=${MISP_DB_ROOT_PASS}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/users/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------- DFIR-IRIS -----------------------------------
+  iris-db:
+    profiles: ["mvp", "iris"]
+    image: postgres:15-alpine  # TODO_VERIFY (IRIS requires PG <16)
+    container_name: infracentra-iris-db
+    environment:
+      - POSTGRES_DB=iris_db
+      - POSTGRES_USER=iris_db
+      - POSTGRES_PASSWORD=${IRIS_DB_PASS:?set IRIS_DB_PASS}
+    volumes:
+      - iris-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  iris-server:
+    profiles: ["mvp", "iris"]
+    image: dfiriris/iris:latest  # TODO_VERIFY — pin exact tag after first verified run
+    container_name: infracentra-iris
+    depends_on: [iris-db]
+    ports:
+      - "8001:8000"     # UI + API for the incident-response connector
+    volumes:
+      - iris-files-data:/app/web_server/uploads
+    environment:
+      - POSTGRES_SERVER=iris-db
+      - POSTGRES_DB=iris_db
+      - POSTGRES_USER=iris_db
+      - POSTGRES_PASSWORD=${IRIS_DB_PASS}
+      - IRIS_SECRET_KEY=${IRIS_SECRET_KEY:?set IRIS_SECRET_KEY (openssl rand -hex 32)}
+      - IRIS_SECURITY_PASSWORD_SALT=${IRIS_SALT:?set IRIS_SALT (openssl rand -hex 16)}
+      - IRIS_UPSTREAM_SERVER=iris-app
+    restart: unless-stopped
+
+  iris-app:
+    profiles: ["mvp", "iris"]
+    image: dfiriris/iris:latest  # TODO_VERIFY
+    container_name: infracentra-iris-app
+    depends_on: [iris-server, iris-db]
+    environment:
+      - POSTGRES_SERVER=iris-db
+      - POSTGRES_DB=iris_db
+      - POSTGRES_USER=iris_db
+      - POSTGRES_PASSWORD=${IRIS_DB_PASS}
+      - IRIS_SECRET_KEY=${IRIS_SECRET_KEY}
+      - IRIS_SECURITY_PASSWORD_SALT=${IRIS_SALT}
+    volumes:
+      - iris-files-data:/app/web_server/uploads
+    restart: unless-stopped

@@ -1,0 +1,23 @@
+id: endpoint-protection
+name: Endpoint Protection
+status: ga
+provider: native
+engine: Wazuh agents + ClamAV
+docs_url: https://documentation.wazuh.com/current/user-manual/registering/index.html
+endpoints:
+  agents: /agents
+  vulns: /vulnerability/reports
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: analytics
+  rationale: Les événements EDR/XDR remontent au pipeline SIEM pour corrélation avec
+    les autres sources.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES
