@@ -1,0 +1,67 @@
+# T6.0 — Greenbone Community Edition (Open Scanner) minimal stack.
+# Owner decision #8: deferred from MVP; heaviest profile (~8 GB RAM).
+# Owner decision #7: sizing assumes default containerized host; verify on the
+# real host with deploy/preflight.sh before first run.
+#
+# Usage (manual, per docs/guides/CONNECTOR-INSTALL.md "Greenbone" appendix):
+#   cd deploy
+#   docker compose -f docker-compose.greenbone.yml --env-file .env.connector up -d
+#   ./greenbone/verify.sh
+#
+# Image pins are TODO_VERIFY — confirm tags + digests at install time and
+# record them in docs/guides/CONNECTOR-INSTALL.md checklist. Never expose these
+# ports publicly; bind to 127.0.0.1 and front via nginx snippet if needed.
+
+services:
+  gvmd:
+    image: greenbone/gvmd:latest   # TODO_VERIFY pin digest
+    restart: unless-stopped
+    mem_limit: 3g
+    volumes:
+      - gvmd-data:/var/lib/openvas/mgr/
+      - gvmd-config:/etc/openvas/
+    environment:
+      GVMD_DB_HOST: postgresql
+    depends_on: [postgresql]
+    networks: [greenbone]
+
+  openvas-scanner:
+    image: greenbone/openvas-scanner:latest   # TODO_VERIFY pin digest
+    restart: unless-stopped
+    mem_limit: 4g
+    cap_add: [NET_ADMIN]
+    security_opt: [seccomp=unconfined]        # required by scanner; review before prod exposure
+    volumes:
+      - scanner-data:/var/lib/openvas/
+      - gvmd-data:/var/lib/openvas/mgr/:ro
+    networks: [greenbone]
+
+  gsad:
+    image: greenbone/gsad:latest   # TODO_VERIFY pin digest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9392:80"       # local only — proxy via nginx, never public
+    environment:
+      GSAD_HOST: gvmd
+    depends_on: [gvmd, openvas-scanner]
+    networks: [greenbone]
+
+  postgresql:
+    image: greenbone/postgres:latest   # TODO_VERIFY pin digest
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${GREENBONE_DB_PASS:?set GREENBONE_DB_PASS in .env.connector}
+      POSTGRES_USER: gvmd
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [greenbone]
+
+volumes:
+  gvmd-data: {}
+  gvmd-config: {}
+  scanner-data: {}
+  pg-data: {}
+
+networks:
+  greenbone:
+    driver: bridge
