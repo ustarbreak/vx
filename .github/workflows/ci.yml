@@ -62,6 +62,6 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
-        continue-on-error: true   # pre-existing errors tracked; non-blocking for now
+        continue-on-error: true   # pre-existing tsc errors tracked separately; non-blocking
       - name: Build
         run: npm run build
