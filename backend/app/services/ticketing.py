@@ -63,7 +63,10 @@ def sla_state(ticket: Ticket) -> str:
         if now > due:
             return "breached"
         remaining = (due - now).total_seconds() / 60
-        total = max(1, (due - (ticket.created_at or now)).total_seconds() / 60)
+        created = ticket.created_at or now
+        if created.tzinfo is None:      # SQLite round-trips naive datetimes
+            created = created.replace(tzinfo=timezone.utc)
+        total = max(1, (due - created).total_seconds() / 60)
         return "at_risk" if remaining / total < 0.25 else "on_track"
 
     resp = _state(ticket.due_response_at, ticket.first_response_at)

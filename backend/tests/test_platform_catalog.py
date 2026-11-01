@@ -181,9 +181,10 @@ async def test_action_native_case_create_executes(session_factory):
         assert body["ticket_uid"].startswith("TCK-")
         assert body["provider"] == "native"
         # the ticket really exists via the native engine route
+        # (GET /api/tickets/{uid} returns a flat TicketResponse, not a wrapper)
         t = await c.get(f"/api/tickets/{body['ticket_uid']}")
         assert t.status_code == 200
-        assert t.json()["ticket"]["title"] == "Live platform case"
+        assert t.json()["title"] == "Live platform case"
 
 
 async def test_action_dangerous_requires_confirm(session_factory):
@@ -197,12 +198,13 @@ async def test_action_dangerous_requires_confirm(session_factory):
 
 
 async def test_provider_mode_off_queues_only(session_factory, monkeypatch):
-    import importlib
-    import app.core.config as config_mod
-    importlib.reload(config_mod)
-    monkeypatch.setattr(config_mod.settings, "PROVIDER_MODE", "off", raising=False)
+    # NOTE: make_client() reloads app.core.config internally, which re-creates
+    # settings from env — so PROVIDER_MODE must be patched AFTER the client is
+    # built. The platform router reads `settings.PROVIDER_MODE` at request time.
     await _seed(session_factory)
     async with make_client(session_factory, mounted=True, user_id=1) as c:
+        import app.core.config as config_mod
+        monkeypatch.setattr(config_mod.settings, "PROVIDER_MODE", "off", raising=False)
         r = await c.post("/api/platform/actions", json={
             "service": "advanced-ticketing", "action": "case.create",
             "payload": {"title": "must not execute"}, "dry_run": False})

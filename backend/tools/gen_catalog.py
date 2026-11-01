@@ -40,6 +40,26 @@ HEAVY_RESOURCES = {
     "analytics": {"cpu": "2", "memory": "2G", "disk": "20G"},           # Grafana (+Loki)
 }
 
+# T2.6 canonical actions per service (owner decision #6: thin adapter over the
+# engines that already exist). Source of truth for WHAT may execute is
+# app/platform/native_actions.py:execute_native; here we only declare which
+# service exposes which action and its gating. `dangerous: true` keeps the
+# four-eyes/dry-run gate in the SOAR engine. Anything not listed stays honest:
+# POST /api/platform/actions answers "unsupported" for it.
+NATIVE_ACTIONS: dict[str, list[dict]] = {
+    "advanced-ticketing": [
+        {"name": "case.create", "method": "POST", "dangerous": False, "status": "ga"},
+        {"name": "case.update", "method": "POST", "dangerous": False, "status": "ga"},
+    ],
+    "incident-response": [
+        {"name": "incident.create", "method": "POST", "dangerous": False, "status": "ga"},
+        {"name": "incident.status", "method": "POST", "dangerous": False, "status": "ga"},
+    ],
+    "soar": [
+        {"name": "playbook.run", "method": "POST", "dangerous": True, "status": "ga"},
+    ],
+}
+
 
 def main(argv=None) -> int:
     import argparse
@@ -75,7 +95,7 @@ def main(argv=None) -> int:
             "resources": HEAVY_RESOURCES.get(sid, DEFAULT_RESOURCES),
             "dependencies": deps_by_service.get(sid, []),
             "in_seed": sid in ALL_SERVICES,
-            "actions": [],                       # filled in Phase 2 (T2.6 canonical actions)
+            "actions": NATIVE_ACTIONS.get(sid, []),   # T2.6 canonical actions (see NATIVE_ACTIONS above)
             "_generated_from": [
                 "app/services/connectors.py:SERVICE_CONNECTORS",
                 "app/services/seed.py:ALL_SERVICES",
