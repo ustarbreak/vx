@@ -71,7 +71,21 @@ async def platform_capabilities(
     org_id: Optional[int] = None,
     user: User = Depends(get_current_user),
 ):
-    """Honest capability list: ga | beta | roadmap | unsupported per action."""
+    """Honest capability list: ga | beta | roadmap | unsupported per action.
+
+    Also reports which connector providers have CODE shipped in the SDK
+    (app/platform/connectors/providers/) — code existing does NOT mean the
+    engine is deployed; deployment status stays on /api/services/{id}/status.
+    """
+    from app.platform.connectors import providers as _  # noqa: F401  (populate registry)
+    from app.platform.connectors.base import _REGISTRY
+
+    coded = {}
+    for cls in _REGISTRY.values():
+        m = getattr(cls, "manifest", None)
+        if m:
+            coded.setdefault(m.service_id, []).append(m.id)
+
     specs = load_catalog()
     out = []
     for sid, spec in sorted(specs.items()):
@@ -79,6 +93,7 @@ async def platform_capabilities(
             "service": sid,
             "status": spec.status,
             "provider": spec.provider,
+            "connector_code_shipped": sorted(coded.get(sid, [])),
             "actions": [{"name": a.name, "dangerous": a.dangerous, "status": a.status}
                         for a in spec.actions],
         })
