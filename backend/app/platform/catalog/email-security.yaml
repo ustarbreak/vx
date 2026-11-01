@@ -1,0 +1,23 @@
+id: email-security
+name: Email Security
+status: beta
+provider: native
+engine: Rspamd / Mailcow (DMARC aggregate parsing)
+docs_url: https://rspamd.com/doc/api.html
+endpoints:
+  auth: /auth/check
+  stats: /statsscores
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: threat-intel
+  rationale: Le filtrage des liens/pièces jointes compare les extraits aux indicateurs
+    Threat Intelligence.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

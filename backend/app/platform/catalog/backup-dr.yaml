@@ -1,0 +1,23 @@
+id: backup-dr
+name: Backup Dr
+status: ga
+provider: native
+engine: Restic / BorgBackup via Borgmatic
+docs_url: https://restic.readthedocs.io/en/latest/030_command_reference.html
+endpoints:
+  snapshots: /api/v1/snapshots
+  repo: /api/v1/repo/stats
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: cloud-security
+  rationale: Les politiques de sauvegarde DR s'appliquent aux charges de travail déclarées
+    par le posture Cloud.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES

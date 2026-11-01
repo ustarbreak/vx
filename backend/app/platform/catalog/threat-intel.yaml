@@ -1,0 +1,23 @@
+id: threat-intel
+name: Threat Intel
+status: ga
+provider: native
+engine: MISP + AlienVault OTX
+docs_url: https://www.misp-project.org/
+endpoints:
+  events: /events/restSearch
+  stats: /servers/getVersion
+resources:
+  cpu: '2'
+  memory: 2G
+  disk: 20G
+dependencies:
+- requires: analytics
+  rationale: Les correspondances IoC ⇄ événements sont calculées sur le pipeline de
+    détection de Security Analytics.
+in_seed: true
+actions: []
+_generated_from:
+- app/services/connectors.py:SERVICE_CONNECTORS
+- app/services/seed.py:ALL_SERVICES
+- app/services/service_graph.py:SERVICE_DEPENDENCY_RULES
