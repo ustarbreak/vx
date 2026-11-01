@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # behavior (verify=False in wazuh.py/connectors.py). Owner decision #5:
     # strict-by-default is a later, explicit migration step. TODO_VERIFY.
     CONNECTOR_TLS_VERIFY: bool = False
+    # Canonical-action executor mode (T2.6). "native" delegates platform
+    # actions to the existing engines (tickets/incidents/SOAR); anything else
+    # keeps the safe Phase-1 behavior (validate + report unsupported/queued).
+    PROVIDER_MODE: str = "native"
 
     class Config:
         env_file = ".env"

@@ -13,7 +13,15 @@ resources:
   disk: 20G
 dependencies: []
 in_seed: false
-actions: []
+actions:
+- name: case.create
+  method: POST
+  dangerous: false
+  status: ga
+- name: case.update
+  method: POST
+  dangerous: false
+  status: ga
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES

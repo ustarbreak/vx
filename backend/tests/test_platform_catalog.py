@@ -152,3 +152,59 @@ async def test_action_unknown_and_unsupported(session_factory):
                           json={"service": "soar", "action": "case.create"})
         assert r2.status_code == 200
         assert r2.json()["status"] == "unsupported"  # Phase-1: nothing executes
+
+
+# ---------------------------------------------------------------- T2.6 native delegation
+
+async def test_action_native_case_create_dry_run(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/actions", json={
+            "service": "advanced-ticketing", "action": "case.create",
+            "payload": {"title": "Test case from platform action"}, "dry_run": True})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "dry_run"
+        assert body["would_do"] == "ticketing.create_ticket"
+
+
+async def test_action_native_case_create_executes(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/actions", json={
+            "service": "advanced-ticketing", "action": "case.create",
+            "payload": {"title": "Live platform case", "priority": "p2"},
+            "dry_run": False})
+        assert r.status_code == 201, r.text
+        body = r.json()
+        assert body["status"] == "created"
+        assert body["ticket_uid"].startswith("TCK-")
+        assert body["provider"] == "native"
+        # the ticket really exists via the native engine route
+        t = await c.get(f"/api/tickets/{body['ticket_uid']}")
+        assert t.status_code == 200
+        assert t.json()["ticket"]["title"] == "Live platform case"
+
+
+async def test_action_dangerous_requires_confirm(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/actions", json={
+            "service": "soar", "action": "playbook.run",
+            "payload": {"playbook_id": 999}, "dry_run": False})
+        assert r.status_code == 200
+        assert r.json()["status"] == "requires_confirmation"
+
+
+async def test_provider_mode_off_queues_only(session_factory, monkeypatch):
+    import importlib
+    import app.core.config as config_mod
+    importlib.reload(config_mod)
+    monkeypatch.setattr(config_mod.settings, "PROVIDER_MODE", "off", raising=False)
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/actions", json={
+            "service": "advanced-ticketing", "action": "case.create",
+            "payload": {"title": "must not execute"}, "dry_run": False})
+        assert r.status_code == 200
+        assert r.json()["status"] == "queued"

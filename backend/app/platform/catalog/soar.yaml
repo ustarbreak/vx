@@ -19,7 +19,11 @@ dependencies:
   rationale: L'enrichissement des steps SOAR (réputation, blocage) consomme les indicateurs
     Threat Intelligence.
 in_seed: true
-actions: []
+actions:
+- name: playbook.run
+  method: POST
+  dangerous: true
+  status: ga
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES

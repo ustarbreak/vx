@@ -16,7 +16,15 @@ dependencies:
   rationale: Les alertes corrélées par Security Analytics alimentent la file de qualification
     d'Incident Response.
 in_seed: true
-actions: []
+actions:
+- name: incident.create
+  method: POST
+  dangerous: false
+  status: ga
+- name: incident.status
+  method: POST
+  dangerous: false
+  status: ga
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES

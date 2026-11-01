@@ -17,9 +17,11 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
+from app.database import get_db
 from app.models import AuditLog, User
 from app.platform.catalog.schema import load_catalog
 
@@ -88,15 +90,22 @@ class ActionRequest(BaseModel):
     action: str
     payload: dict = {}
     dry_run: bool = True
+    confirm: bool = False
 
 
 @router.post("/actions")
 async def platform_action(body: ActionRequest, request: Request,
-                          user: User = Depends(get_current_user)):
-    """Canonical action adapter (T2.6). Phase-1 behavior: validate against the
-    catalog and report honestly. Actual delegation to engines lands in
-    Phase 2 (T2.7) behind provider_mode=native — until then nothing executes,
-    which is the safe default the brief's honesty rule requires."""
+                          user: User = Depends(get_current_user),
+                          db=Depends(get_db)):
+    """Canonical action adapter (T2.6, owner decision #6: thin delegation only).
+
+    Validates against the YAML catalog, then — when settings.PROVIDER_MODE ==
+    "native" — delegates to the SAME engine functions the native routes use
+    (ticketing.create_ticket / incidents / soar). Anything without a native
+    executor reports "unsupported" honestly; nothing is ever faked."""
+    from app.core.config import settings
+    from app.platform.native_actions import execute_native
+
     specs = load_catalog()
     spec = specs.get(body.service)
     if spec is None:
@@ -107,9 +116,23 @@ async def platform_action(body: ActionRequest, request: Request,
                      f"/api/platform/actions:{body.service}.{body.action}")
         return {"status": "unsupported", "service": body.service, "action": body.action,
                 "reason": "no deployed connector/native executor registered yet"}
-    if act.dangerous and body.dry_run is False:
-        return {"status": "blocked", "reason": "dry-run required until four-eyes gating (T2.5)"}
-    return {"status": "queued", "note": "executor wiring scheduled at T2.7", "echo": body.payload}
+    if act.dangerous and body.dry_run is False and not body.confirm:
+        await _audit(request, user, "platform.action.blocked",
+                     f"/api/platform/actions:{body.service}.{body.action}")
+        return {"status": "requires_confirmation",
+                "reason": "dangerous action: resend with dry_run=false AND confirm=true "
+                          "(four-eyes gating stays inside the SOAR engine)"}
+    if settings.PROVIDER_MODE != "native":
+        return {"status": "queued",
+                "note": f"PROVIDER_MODE={settings.PROVIDER_MODE!r}: native delegation disabled",
+                "echo": body.payload}
+    status_code, result = await execute_native(
+        db, user, body.action, body.payload, body.dry_run, body.confirm)
+    await _audit(request, user, f"platform.action.{result.get('status', 'unknown')}",
+                 f"/api/platform/actions:{body.service}.{body.action}")
+    result.setdefault("service", body.service)
+    result.setdefault("action", body.action)
+    return JSONResponse(status_code=status_code, content=result)
 
 
 async def _audit(request: Request, user: User, action: str, resource: str) -> None:
