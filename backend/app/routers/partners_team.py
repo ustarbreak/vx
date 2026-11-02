@@ -29,12 +29,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user, get_password_hash
 from app.database import get_db
-from app.models import AuditLog, Organization, UserTotpSecret, User
-from app.routers.partners import _audit, _children, _partner_out, _rate_limit, _resolve_partner
+from app.models import AuditLog, Organization, TenantSetting, UserTotpSecret, User
+from app.routers.partners import (
+    _audit, _children, _partner_out, _rate_limit, _resolve_partner,
+    _save_settings, _settings,
+)
 
 router = APIRouter(prefix="/partners", tags=["Partner Portal Team"])
 
 TEAM_ROLES = ("partner_admin", "analyst", "billing", "read_only")
+
+
+async def partner_requires_mfa(db: AsyncSession, org_id: int) -> bool:
+    """Per-partner MFA enforcement policy (Phase 5.1). Stored in the existing
+    TenantSetting JSON under key 'mfa_policy' — no schema change, no migration.
+    Default: not enforced."""
+    data = await _settings(db, org_id)
+    return bool((data.get("mfa_policy") or {}).get("require_mfa", False))
 
 
 class TeamUserOut(BaseModel):
@@ -45,6 +56,8 @@ class TeamUserOut(BaseModel):
     status: str
     mfa_enabled: bool
     last_login: Optional[str] = None
+    mfa_required: bool = False       # per-partner enforcement policy
+    mfa_enrollment_pending: bool = False  # required but not enrolled yet
 
 
 class TeamUserIn(BaseModel):
@@ -61,11 +74,18 @@ class TeamUserPatch(BaseModel):
     status: Optional[Literal["active", "pending", "disabled"]] = None
 
 
-def _out(u: User) -> dict:
+class MfaPolicyIn(BaseModel):
+    require_mfa: bool
+
+
+def _out(u: User, mfa_required: bool = False) -> dict:
     return TeamUserOut(
         id=u.id, name=u.name or "", email=u.email, role=u.role,
         status=u.status or "active", mfa_enabled=bool(u.mfa_enabled),
         last_login=u.last_login.isoformat() if u.last_login else None,
+        mfa_required=mfa_required,
+        mfa_enrollment_pending=bool(mfa_required and not u.mfa_enabled
+                                    and (u.status or "active") == "active"),
     ).model_dump()
 
 
@@ -78,7 +98,57 @@ async def team_list(pid: str, request: Request,
         raise HTTPException(403, "Insufficient permissions")
     rows = (await db.execute(select(User).where(User.org_id == partner.id).order_by(User.id))
             ).scalars().all()
-    return {"items": [_out(u) for u in rows]}
+    required = await partner_requires_mfa(db, partner.id)
+    return {"items": [_out(u, required) for u in rows]}
+
+
+# --------------------------------------------------------------------------- #
+# 5.1 MFA enforcement policy (per-partner toggle)                             #
+# --------------------------------------------------------------------------- #
+@router.get("/{pid}/mfa-policy")
+async def get_mfa_policy(pid: str, user: User = Depends(get_current_user),
+                         db: AsyncSession = Depends(get_db)):
+    """Current enforcement state + compliance snapshot (partner_admin only)."""
+    partner = await _resolve_partner(pid, user, db)
+    if user.role not in ("partner_admin", "platform_admin"):
+        raise HTTPException(403, "Insufficient permissions")
+    required = await partner_requires_mfa(db, partner.id)
+    team = (await db.execute(select(User).where(User.org_id == partner.id))
+            ).scalars().all()
+    active = [u for u in team if (u.status or "active") == "active"]
+    enrolled = [u for u in active if u.mfa_enabled]
+    return {
+        "require_mfa": required,
+        "team_size": len(active),
+        "mfa_enrolled": len(enrolled),
+        "non_compliant_emails": sorted(u.email for u in active if not u.mfa_enabled)
+                                if required else [],
+    }
+
+
+@router.put("/{pid}/mfa-policy")
+async def put_mfa_policy(pid: str, body: MfaPolicyIn, request: Request,
+                         user: User = Depends(get_current_user),
+                         db: AsyncSession = Depends(get_db)):
+    """Enable/disable MFA enforcement for all active team members of this partner.
+
+    Enforcement point: /api/auth/login checks this policy and returns an explicit
+    mfa_setup_required challenge for non-enrolled accounts (see auth.py). No
+    password is ever bypassed; enabling the policy never locks anyone out — it
+    routes them through /mfa/setup first."""
+    _rate_limit(f"mfapol:{user.id}", max_calls=10)
+    partner = await _resolve_partner(pid, user, db)
+    if user.role != "partner_admin" and user.role != "platform_admin":
+        raise HTTPException(403, "Insufficient permissions")
+    data = await _settings(db, partner.id)
+    data["mfa_policy"] = {"require_mfa": body.require_mfa,
+                          "updated_at": datetime.now(timezone.utc).isoformat(),
+                          "updated_by": user.email}
+    await _save_settings(db, partner.id, data)
+    db.add(_audit(user, "partner.mfa_policy.update", str(partner.id),
+                  f"require_mfa={body.require_mfa}", partner.id))
+    await db.commit()
+    return {"ok": True, "require_mfa": body.require_mfa}
 
 
 @router.post("/{pid}/team", status_code=201)
@@ -104,7 +174,7 @@ async def team_create(pid: str, body: TeamUserIn, request: Request,
                   f"{body.role} {body.email.lower()} org={partner.id}", partner.id))
     await db.commit()
     await db.refresh(u)
-    return _out(u)
+    return _out(u, await partner_requires_mfa(db, partner.id))
 
 
 @router.patch("/{pid}/team/{uid}")
@@ -132,7 +202,7 @@ async def team_patch(pid: str, uid: int, body: TeamUserPatch, request: Request,
     db.add(_audit(user, "partner.team.update", str(target.id),
                   ", ".join(changes) or "noop", partner.id))
     await db.commit()
-    return _out(target)
+    return _out(target, await partner_requires_mfa(db, partner.id))
 
 
 @router.delete("/{pid}/team/{uid}", status_code=204)
