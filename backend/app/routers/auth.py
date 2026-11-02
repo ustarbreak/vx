@@ -76,6 +76,26 @@ class TokenWithUser(Token):
     user: UserResponse | None = None
     mfa_required: bool = False        # real backend MFA: continue at POST /api/mfa/verify
     email: str | None = None
+    mfa_setup_required: bool = False  # partner policy enforced but user not enrolled yet
+    reason: str | None = None         # e.g. "partner_mfa_policy"
+
+
+async def _partner_mfa_enforced(db: AsyncSession, user: User) -> bool:
+    """Phase 5.1 enforcement point: if the user's org is a partner with the
+    require_mfa policy set (stored in TenantSetting JSON key 'mfa_policy'),
+    every active member must have TOTP enrolled before receiving a JWT.
+    Kept local (no import from partners_team) to avoid an import cycle."""
+    if not user.org_id or user.role == "platform_admin":
+        return False
+    org = await db.get(Organization, user.org_id)
+    if org is None or not getattr(org, "is_partner", False):
+        return False
+    from app.models import TenantSetting
+    row = (await db.execute(
+        select(TenantSetting).where(TenantSetting.org_id == user.org_id)
+    )).scalar_one_or_none()
+    data = dict(row.data or {}) if row else {}
+    return bool((data.get("mfa_policy") or {}).get("require_mfa", False))
 
 
 @router.post("/login")  # response_model removed on purpose: may return MFA challenge
@@ -125,6 +145,26 @@ async def login(
     if getattr(user, "mfa_enabled", False):
         return {"access_token": None, "token_type": "bearer", "user": None,
                 "mfa_required": True, "email": user.email}
+
+    # ---- Phase 5.1 partner MFA enforcement: policy says require_mfa but this
+    # active member has not enrolled yet -> no token; explicit setup challenge.
+    # Never a silent bypass, never a lockout: after /api/mfa/setup + confirm,
+    # login proceeds normally (or via /api/mfa/verify second factor).
+    if await _partner_mfa_enforced(db, user):
+        audit_log = AuditLog(
+            actor_id=user.id, actor_name=user.name, actor_role=user.role,
+            org_id=user.org_id,
+            action="user.login_mfa_setup_required",
+            resource="User", resource_id=str(user.id),
+            details="Partner MFA policy enforced; TOTP enrollment pending",
+            ip_address=request.client.host if request.client else None,
+            outcome="blocked",
+        )
+        db.add(audit_log)
+        await db.commit()
+        return {"access_token": None, "token_type": "bearer", "user": None,
+                "mfa_required": False, "mfa_setup_required": True,
+                "reason": "partner_mfa_policy", "email": user.email}
 
     # Create access token
     access_token = create_access_token(

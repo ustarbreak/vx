@@ -366,7 +366,14 @@ export interface BackendUser {
 }
 
 export async function backendLogin(email: string, password: string): Promise<BackendUser> {
-  const tok = await api.post<{ access_token: string; user?: BackendUser }>('/auth/login', { email, password });
+  const tok = await api.post<{ access_token: string | null; user?: BackendUser;
+                               mfa_required?: boolean; mfa_setup_required?: boolean;
+                               reason?: string }>('/auth/login', { email, password });
+  // Second factor already enrolled -> caller must complete POST /api/mfa/verify.
+  if (tok.mfa_required) throw new ApiError(401, 'MFA_REQUIRED');
+  // Partner MFA policy enforced but TOTP not enrolled yet -> explicit setup flow.
+  if (tok.mfa_setup_required) throw new ApiError(403, 'MFA_SETUP_REQUIRED');
+  if (!tok.access_token) throw new ApiError(401, 'Session token rejected by backend');
   setToken(tok.access_token);
   // Newer backends return the user object with the token — use it directly.
   if (tok.user) return tok.user;
