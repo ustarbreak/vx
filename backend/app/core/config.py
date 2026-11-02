@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     # behavior (verify=False in wazuh.py/connectors.py). Owner decision #5:
     # strict-by-default is a later, explicit migration step. TODO_VERIFY.
     CONNECTOR_TLS_VERIFY: bool = False
+    # T5.1 Velociraptor scaffold (roadmap). Empty URL => connector reports not_configured.
+    VELOCIRAPTOR_URL: str = ""
+    VELOCIRAPTOR_TOKEN: str = ""
+    ALLOW_LIVE_RESPONSE: bool = False  # triple-gate for destructive live-response actions
+    # T5.3 Unbound / Rspamd read-only scaffolds (roadmap). Empty => not_configured.
+    UNBOUND_CONTROL_CMD: str = ""
+    RSPAMD_URL: str = ""
+    RSPAMD_KEY: str = ""
     # Canonical-action executor mode (T2.6). "native" delegates platform
     # actions to the existing engines (tickets/incidents/SOAR); anything else
     # keeps the safe Phase-1 behavior (validate + report unsupported/queued).

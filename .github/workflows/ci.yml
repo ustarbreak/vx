@@ -19,19 +19,35 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
       - name: Install deps
-        run: pip install -r backend/requirements.txt
+        # requirements.txt = runtime pins (pymisp==2.4.189.1 was NOT on PyPI ->
+        # "Could not find a version that satisfies the requirement" broke CI).
+        # Test tooling is installed explicitly here, kept out of runtime deps.
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest==7.4.4 pytest-asyncio==0.21.1 aiosqlite==0.22.1
       - name: Regenerate catalog and check drift (T1.2)
         # gen_catalog.py writes platform/catalog YAMLs from live code sources;
         # any uncommitted diff means seed/connectors/catalog drifted.
         run: |
           python backend/tools/gen_catalog.py --out backend/app/platform/catalog
           git add -A backend/app/platform/catalog
-          git diff --cached --exit-code -q || { echo "::error::platform catalog out of sync - run backend/tools/gen_catalog.py and commit"; git diff --cached --stat; exit 1; }
+          # NOTE: `-q` belongs to git-diff, not to the shell; combining it with
+          # --exit-code here previously produced exit 129 (usage error) on CI.
+          if ! git diff --cached --quiet --exit-code; then
+            echo "::error::platform catalog out of sync - run backend/tools/gen_catalog.py and commit"
+            git diff --cached --stat
+            exit 1
+          fi
       - name: Run backend tests
         env:
-          DATABASE_URL: sqlite:///./ci_test.db
+          # async engine requires the aiosqlite driver ("sqlite+aiosqlite://");
+          # plain sqlite:/// would fail at create_async_engine on CI only.
+          DATABASE_URL: sqlite+aiosqlite:///./ci_test.db
           SECRET_KEY: ci-only-not-a-real-secret
-        run: python -m pytest backend/tests -q
+        # run from backend/ so pytest.ini (asyncio_mode=strict) is picked up;
+        # -p no:libtmux mirrors the documented local invocation in tests/*.py
+        working-directory: backend
+        run: python -m pytest tests -q -p no:libtmux --durations=10
 
   frontend:
     runs-on: ubuntu-latest
@@ -46,6 +62,6 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
-        continue-on-error: true   # pre-existing errors tracked; non-blocking for now
+        continue-on-error: true   # pre-existing tsc errors tracked separately; non-blocking
       - name: Build
         run: npm run build

@@ -34,6 +34,33 @@ def _redis():
 class JobStore:
     def __init__(self):
         self._mem: Dict[str, Dict[str, Any]] = {}  # fallback + tests
+        self._redis_ok: Optional[bool] = None      # tri-state: unknown/yes/no
+
+    async def _redis_available(self) -> bool:
+        """One cheap PING decides whether we trust Redis for this process.
+
+        Without this probe, a reachable-but-absent Redis (redis-py installed,
+        no server) makes every command raise asynchronously; writes are then
+        silently lost while reads fall back to memory — breaking idempotency.
+        """
+        if self._redis_ok is not None:
+            return self._redis_ok
+        r = _redis()
+        if r is None:
+            self._redis_ok = False
+            return False
+        try:
+            await r.ping()
+            self._redis_ok = True
+        except Exception as e:  # noqa: BLE001 - honest fallback, logged once
+            logger.info("redis unreachable (%s); using in-memory job store", e)
+            self._redis_ok = False
+        finally:
+            try:
+                await r.aclose()
+            except Exception:
+                pass
+        return self._redis_ok
 
     async def create(self, action: str, org_id: int, params: Dict[str, Any],
                      idempotency_key: Optional[str] = None) -> Dict[str, Any]:
@@ -52,8 +79,8 @@ class JobStore:
         }
         await self._save(job)
         if idempotency_key:
-            r = _redis()
-            if r:
+            if await self._redis_available():
+                r = _redis()
                 try:
                     await r.setex(f"{_PREFIX}key:{idempotency_key}", _TTL, job["id"])
                 except Exception as e:
@@ -74,8 +101,8 @@ class JobStore:
         await self._save(job)
 
     async def get(self, job_id: str) -> Optional[Dict[str, Any]]:
-        r = _redis()
-        if r:
+        if await self._redis_available():
+            r = _redis()
             try:
                 raw = await r.get(f"{_PREFIX}{job_id}")
                 if raw:
@@ -87,8 +114,8 @@ class JobStore:
         return self._mem.get(job_id)
 
     async def _get_by_key(self, key: str) -> Optional[Dict[str, Any]]:
-        r = _redis()
-        if r:
+        if await self._redis_available():
+            r = _redis()
             try:
                 jid = await r.get(f"{_PREFIX}key:{key}")
                 if jid:
@@ -101,9 +128,9 @@ class JobStore:
         return self._mem.get(jid) if jid else None
 
     async def _save(self, job: Dict[str, Any]):
-        self._mem[job["id"]] = job
-        r = _redis()
-        if r:
+        self._mem[job["id"]] = job  # always keep an in-process copy
+        if await self._redis_available():
+            r = _redis()
             try:
                 await r.setex(f"{_PREFIX}{job['id']}", _TTL, json.dumps(job, default=str))
             except Exception as e:

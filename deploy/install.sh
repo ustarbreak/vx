@@ -23,6 +23,9 @@ while [ $# -gt 0 ]; do
 done
 
 case "$PROFILE" in mvp|wazuh|misp|iris) ;; 
+  greenbone) echo "Greenbone is a SEPARATE Phase-6 stack (decision #8). Run:"; \
+             echo "  docker compose -f deploy/docker-compose.greenbone.yml up -d"; \
+             echo "  bash deploy/greenbone/verify.sh"; exit 0;;
   *) echo "ERROR: --profile/--service must be mvp|wazuh|misp|iris (Greenbone is Phase 6, decision #8)"; exit 2;; esac
 
 [ -f "$ENVF" ] || { echo "ERROR: $ENVF missing — cp .env.connector.example $ENVF, chmod 600, fill secrets (guide step 2)"; exit 1; }
