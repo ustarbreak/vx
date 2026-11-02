@@ -22,7 +22,7 @@ Date: 2026-11-02 | Branch tip before this report: `62109f50` (task snapshot cont
 
 ## Remaining TODO_VERIFY (owner-side, cannot be done in sandbox)
 1. Run docs/guides/CONNECTOR-INSTALL.md once on target container host → pins/checksums, nginx snippet activation, Wazuh/MISP/DFIR-IRIS first-success.
-2. Add pinned `elasticsearch` to backend/requirements.txt (or confirm transitive install path) before next CI run.
+2. ~~elasticsearch missing from requirements~~ FIXED: `elasticsearch==8.13.0` added; suite re-run green with it installed.
 3. Push branch manually (decision #1); merge PR; watch CI-backend go green.
 
 ## Not done (declared, per plan)
