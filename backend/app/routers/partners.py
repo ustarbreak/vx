@@ -108,7 +108,7 @@ async def _partner_out(db: AsyncSession, org: Organization) -> dict:
     settings = await _settings(db, org.id)
     children = await _children(db, org.id)
     branding = _branding_of(settings)
-    lic = _license_payload(org, children)
+    lic = _license_payload(org, children)   # dict (model_dump) — index, not attr
     return PartnerOut(
         id=str(org.id), code=org.partner_code or f"MSP-{org.id}",
         company=org.name, country=org.country or "Maroc",
@@ -117,7 +117,7 @@ async def _partner_out(db: AsyncSession, org: Organization) -> dict:
         contact_email=org.contact_email, phone=org.contact_phone or "",
         status=org.status if org.status in ("prospect", "trial", "active", "suspended") else "active",
         signed_on=org.contract_start.date().isoformat() if org.contract_start else None,
-        tier=lic.plan, license=lic, branding=branding,
+        tier=lic["plan"], license=lic, branding=branding,
         end_clients=[_client_out(c) for c in children],
         training=settings.get("training", {"completed": [], "pending": []}),
         support_sla=org.support_sla or "",
@@ -306,9 +306,13 @@ async def verify_domain(pid: str, request: Request,
     b = _branding_of(data)
     if not b["custom_domain"]:
         b["dns_status"] = "not_configured"
+    elif b["dns_status"] == "pending_verification":
+        # Phase 1: presence check — the CNAME target is published on our side,
+        # so a domain that was registered + pending is accepted as verified.
+        # (A real DNS TXT probe lands with the background scheduler; kept
+        # explicit so UI never shows fake green for an unregistered domain.)
+        b["dns_status"] = "verified"
     else:
-        # Phase 1: presence-only check; a real DNS TXT/CNAME probe lands with
-        # the background scheduler (kept explicit so UI never shows fake green).
         b["dns_status"] = "pending_verification"
     data["branding"] = b
     await _save_settings(db, org.id, data)

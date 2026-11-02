@@ -1,0 +1,511 @@
+"""Partner Portal — Phase 1 (/api/partners) & Phase 2 (/api/partners/{pid}/ops).
+
+Run from backend/:
+    DATABASE_URL="sqlite+aiosqlite:///:memory:" pytest tests/test_partners_portal.py -p no:libtmux -q
+
+Covers the HARD RULES:
+  * rule 1 tenant isolation — a partner only ever sees its own org + children;
+    cross-partner addressing -> 403 "Cross-partner access denied"; queue/assign,
+    impersonation targets and template-apply targets are re-checked against the
+    caller's own child set.
+  * rule 2 cross-tenant switch is time-boxed via the EXISTING grants mechanism
+    (TenantServiceGrant service_id="partner_console", expires_at) and audited.
+  * rule 3 real mode never falls back to mock data — non-partner orgs -> 404
+    "not configured"; empty tables -> empty lists (no seeding anywhere).
+  * rule 4 currency MAD everywhere; tiers/discounts come from
+    core/pricing_config.json through app.services.pricing_engine (asserted
+    against the raw config so drift fails the suite).
+  * rule 5 auth required on every route, writes rate-limited, inputs validated
+    with Pydantic Literals (free-text tier/status rejected with 422).
+"""
+from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+from sqlalchemy.dialects import postgresql  # noqa: E402
+from sqlalchemy.ext.compiler import compiles  # noqa: E402
+
+
+@compiles(postgresql.JSONB, "sqlite")
+def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test shim
+    return "JSON"
+
+
+from app.database import Base, get_db  # noqa: E402
+from app.core.security import create_access_token, get_password_hash  # noqa: E402
+from app.models import (  # noqa: E402
+    Alert, AgentProbe, AuditLog, Incident, NotificationRule, Organization,
+    Playbook, TenantServiceGrant, Ticket, User,
+)
+from app.main import app  # noqa: E402
+from app.routers import partners as partners_router  # noqa: E402
+from app.services.pricing_engine import PRICING_CONFIG  # noqa: E402
+
+NOW = datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+@pytest_asyncio.fixture()
+async def session_factory():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool, future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+async def _seed(factory):
+    """Two MSSP partners with children, one plain client org, users per role."""
+    async with factory() as s:
+        s.add_all([
+            # --- partner A (id 1) : gold by units (600 assets across kids) ---
+            Organization(id=1, name="Atlas MSP", tier="enterprise", status="active",
+                         contact_email="boss@atlas.ma", country="Maroc", is_partner=True,
+                         partner_code="MSP-ATL", asset_count=0, seat_limit=40,
+                         contract_start=NOW - timedelta(days=200), contract_end=NOW + timedelta(days=165)),
+            Organization(id=11, name="Banque Atlas", tier="mid-market", status="active",
+                         contact_email="dpo@banque.ma", industry="Banking", country="Casablanca",
+                         parent_org_id=1, asset_count=400, member_count=80, plan_tier="pro",
+                         monthly_revenue=90_000, contract_start=NOW - timedelta(days=100)),
+            Organization(id=12, name="Retail Atlas", tier="sme", status="active",
+                         contact_email="it@retail.ma", industry="Retail", country="Rabat",
+                         parent_org_id=1, asset_count=200, member_count=30, plan_tier="starter",
+                         monthly_revenue=30_000, contract_start=NOW - timedelta(days=10)),
+            # --- partner B (id 2) : silver by units (120 assets) ---
+            Organization(id=2, name="Dakhla Sec", tier="mid-market", status="active",
+                         contact_email="root@dakhla.ma", country="Maroc", is_partner=True,
+                         partner_code="MSP-DKH"),
+            Organization(id=21, name="Port Dakhla", tier="sme", status="active",
+                         contact_email="ops@port.ma", parent_org_id=2, asset_count=120,
+                         member_count=15, plan_tier="starter", monthly_revenue=20_000),
+            # --- not a partner at all (rule 3: must 404, never seed) ---
+            Organization(id=3, name="Plain Corp", tier="sme", status="active", contact_email="a@b.c"),
+            # --- users ---
+            User(id=1, email="boss@atlas.ma", hashed_password=get_password_hash("x"),
+                 name="Boss Atlas", role="partner_admin", org_id=1),
+            User(id=2, email="analyst@atlas.ma", hashed_password=get_password_hash("x"),
+                 name="Ana Lyse", role="analyst", org_id=1),
+            User(id=3, email="root@dakhla.ma", hashed_password=get_password_hash("x"),
+                 name="Boss Dakhla", role="partner_admin", org_id=2),
+            User(id=4, email="plat@infracentra.io", hashed_password=get_password_hash("x"),
+                 name="Platform", role="platform_admin", org_id=3),
+            User(id=5, email="ca@plain.io", hashed_password=get_password_hash("x"),
+                 name="Plain Admin", role="client_admin", org_id=3),
+            # --- queue data under partner A children ---
+            Alert(id=101, uid="ALR-000101", org_id=11, title="Ransomware lateral movement",
+                  severity="critical", status="open", source="siem", resource="dc-01",
+                  created_at=NOW - timedelta(hours=2)),
+            Alert(id=102, uid="ALR-000102", org_id=12, title="Disk usage high",
+                  severity="low", status="resolved", source="agent", resource="srv-web",
+                  created_at=NOW - timedelta(days=2)),
+            Ticket(id=201, uid="TCK-000201", org_id=11, title="VPN outage", priority="p1",
+                   status="in_progress", source="manual", asset="fw-01",
+                   due_resolve_at=NOW - timedelta(hours=1), created_at=NOW - timedelta(hours=6)),
+            Ticket(id=202, uid="TCK-000202", org_id=12, title="New laptop setup", priority="p4",
+                   status="new", source="email", asset="hp-zbook",
+                   due_resolve_at=NOW + timedelta(days=1), created_at=NOW - timedelta(hours=1)),
+            Incident(id=301, uid="INC-000301", org_id=11, title="Phishing campaign",
+                     severity="high", status="investigating", affected_assets=["mail-01"],
+                     created_at=NOW - timedelta(hours=3)),
+            # foreign-org alert that must NEVER surface for partner A
+            Alert(id=103, uid="ALR-000103", org_id=3, title="Foreign critical alert",
+                  severity="critical", status="open", source="siem",
+                  created_at=NOW - timedelta(minutes=5)),
+            # agents: 2 online + 1 stale under org 11; none under org 12
+            AgentProbe(id=401, org_id=11, hostname="dc-01", status="online", last_seen=NOW),
+            AgentProbe(id=402, org_id=11, hostname="fw-01", status="online", last_seen=NOW),
+            AgentProbe(id=403, org_id=11, hostname="srv-old", status="online",
+                       last_seen=NOW - timedelta(hours=4)),
+        ])
+        await s.commit()
+
+
+def client_for(session_factory, user_id=None):
+    async def _get_db():
+        async with session_factory() as s:
+            yield s
+
+    app.dependency_overrides[get_db] = _get_db
+    headers = {}
+    if user_id is not None:
+        headers["Authorization"] = f"Bearer {create_access_token({'sub': str(user_id)})}"
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://t", headers=headers)
+
+
+pytestmark = pytest.mark.asyncio
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    partners_router._writes.clear()
+    yield
+    partners_router._writes.clear()
+
+
+# --------------------------------------------------------------------------- #
+# Authentication / role gating                                                #
+# --------------------------------------------------------------------------- #
+async def test_auth_required_on_all_partner_routes(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory) as c:
+        for path in ("/api/partners", "/api/partners/stats", "/api/partners/1",
+                     "/api/partners/1/license", "/api/partners/1/branding",
+                     "/api/partners/1/clients", "/api/partners/1/queue",
+                     "/api/partners/1/health", "/api/partners/1/handovers",
+                     "/api/partners/1/templates"):
+            r = await c.get(path)
+            assert r.status_code in (401, 403), path
+        r = await c.put("/api/partners/1/branding", json={"brand_name": "X"})
+        assert r.status_code in (401, 403)
+
+
+async def test_stats_platform_only(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:      # partner_admin
+        assert (await c.get("/api/partners/stats")).status_code == 403
+    async with client_for(session_factory, 4) as c:      # platform_admin
+        r = await c.get("/api/partners/stats")
+        assert r.status_code == 200
+        st = r.json()
+        assert st["partners_total"] == 2 and st["end_clients"] == 3
+        assert st["wholesale_mrr_mad"] > 0              # MAD, never EUR keys
+        assert set(st) == {"partners_total", "partners_active", "trials", "end_clients",
+                           "devices_managed", "wholesale_mrr_mad", "retail_mrr_mad",
+                           "channel_margin_pct", "white_labels_live", "dns_pending"}
+
+
+# --------------------------------------------------------------------------- #
+# Rule 1 — tenant isolation                                                   #
+# --------------------------------------------------------------------------- #
+async def test_partner_list_scoped_to_self(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.get("/api/partners")
+        assert [p["id"] for p in r.json()] == ["1"]
+    async with client_for(session_factory, 3) as c:
+        assert [p["id"] for p in (await c.get("/api/partners")).json()] == ["2"]
+    async with client_for(session_factory, 4) as c:
+        assert {p["id"] for p in (await c.get("/api/partners")).json()} == {"1", "2"}
+
+
+async def test_cross_partner_access_denied_everywhere(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        for path in ("/api/partners/2", "/api/partners/2/license", "/api/partners/2/branding",
+                     "/api/partners/2/clients", "/api/partners/2/queue", "/api/partners/2/health",
+                     "/api/partners/2/handovers", "/api/partners/2/templates"):
+            r = await c.get(path)
+            assert r.status_code == 403 and r.json()["detail"] == "Cross-partner access denied", path
+        r = await c.put("/api/partners/2/branding", json={"brand_name": "Evil"})
+        assert r.status_code == 403
+        r = await c.post("/api/partners/2/clients",
+                         json={"name": "Intrus", "devices": 5, "users": 5})
+        assert r.status_code == 403
+        # queue of partner B must not leak foreign items into partner A either
+        q = (await c.get("/api/partners/1/queue")).json()
+        uids = {it["uid"] for it in q["items"]}
+        assert "ALR-000103" not in uids          # other org's alert invisible
+        assert {"ALR-000101", "TCK-000201", "TCK-000202", "INC-000301"} <= uids
+
+
+# --------------------------------------------------------------------------- #
+# Rule 3 — no mock fallback, explicit states                                  #
+# --------------------------------------------------------------------------- #
+async def test_non_partner_is_not_configured_never_seeded(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 5) as c:
+        r = await c.get("/api/partners/3")
+        assert r.status_code == 404 and "not configured" in r.json()["detail"]
+    async with client_for(session_factory, 1) as c:
+        assert (await c.get("/api/partners/999")).status_code == 404
+        assert (await c.get("/api/partners/abc")).status_code == 404   # garbage id -> 404 too
+
+
+async def test_empty_states_are_explicit_lists(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 3) as c:     # partner B has no queue data
+        q = (await c.get("/api/partners/2/queue")).json()
+        assert q["items"] == [] and q["counts"]["alerts_open"] == 0
+        h = (await c.get("/api/partners/2/health")).json()
+        assert len(h["clients"]) == 1 and h["clients"][0]["agents_total"] == 0
+        assert (await c.get("/api/partners/2/handovers")).json() == []
+        assert (await c.get("/api/partners/2/templates")).json() == []
+
+
+# --------------------------------------------------------------------------- #
+# Rule 4 — license model from pricing_config.json, MAD                        #
+# --------------------------------------------------------------------------- #
+async def test_license_tiers_and_progress_from_pricing_config(session_factory):
+    await _seed(session_factory)
+    tiers = PRICING_CONFIG["partner"]["tiers"]
+    async with client_for(session_factory, 1) as c:
+        lic = (await c.get("/api/partners/1/license")).json()
+        assert lic["managed_units"] == 600 and lic["plan"] == "gold"
+        assert lic["tier_discount"] == 0.30
+        assert lic["next_tier"] == "platinum"
+        assert lic["units_to_next_tier"] == 1500 - 600
+        assert lic["price_month_mad"] > 0 and lic["resale_price_from_mad"] > 0
+        assert not any("eur" in k.lower() for k in lic)
+        assert lic["margin_pct"] == max(round(100 * (120_000 - lic["price_month_mad"]) / 120_000), 0)
+    async with client_for(session_factory, 3) as c:
+        lic2 = (await c.get("/api/partners/2/license")).json()
+        assert lic2["managed_units"] == 120 and lic2["plan"] == "silver"
+        assert lic2["tier_discount"] == 0.25 and lic2["next_tier"] == "gold"
+        assert lic2["units_to_next_tier"] == 500 - 120
+    # wholesale math mirrors the config exactly: pack price x max(units,minUnits) x (1-disc)
+    disc = min(0.30, PRICING_CONFIG["partner"]["totalDiscountCap"])
+    expected = int(PRICING_CONFIG["packs"]["pro"]["price"] * 600 * (1 - disc))
+    async with client_for(session_factory, 1) as c:
+        assert (await c.get("/api/partners/1/license")).json()["price_month_mad"] == expected
+
+
+# --------------------------------------------------------------------------- #
+# Branding + verify-domain                                                    #
+# --------------------------------------------------------------------------- #
+async def test_branding_put_resets_dns_and_verify_domain_flips(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        b0 = (await c.get("/api/partners/1/branding")).json()
+        assert b0["dns_status"] == "not_configured" and b0["cname_target"] == "edge.infracentra.io"
+        r = await c.put("/api/partners/1/branding",
+                        json={"brand_name": "Atlas SOC", "primary_color": "#1d4ed8",
+                              "custom_domain": "soc.atlas.ma", "hide_infracentra": True})
+        assert r.status_code == 200, r.text
+        b1 = r.json()
+        assert b1["brand_name"] == "Atlas SOC" and b1["dns_status"] == "pending_verification"
+        # invalid payload rejected (rule 5)
+        assert (await c.put("/api/partners/1/branding", json={"primary_color": "bleu"})).status_code == 422
+        v = await c.post("/api/partners/1/verify-domain")
+        assert v.status_code == 200 and v.json()["dns_status"] == "verified"
+        # clearing the domain resets to not_configured, verify cannot invent success
+        await c.put("/api/partners/1/branding", json={"custom_domain": ""})
+        assert (await c.post("/api/partners/1/verify-domain")).json()["dns_status"] == "not_configured"
+
+
+# --------------------------------------------------------------------------- #
+# Clients CRUD — seat limit, validation, audit                                #
+# --------------------------------------------------------------------------- #
+async def test_client_crud_seat_limit_and_audit(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        before = len((await c.get("/api/partners/1/clients")).json())
+        r = await c.post("/api/partners/1/clients",
+                         json={"name": "Clinique Atlas", "industry": "Santé", "city": "Casa",
+                               "devices": 25, "users": 60, "plan": "pro",
+                               "monthly_mrr_mad": 12_000, "contact_email": "cto@clinique.ma"})
+        assert r.status_code == 201
+        cid = r.json()["id"]
+        assert len((await c.get("/api/partners/1/clients")).json()) == before + 1
+        assert (await c.patch(f"/api/partners/1/clients/{cid}",
+                              json={"status": "active"})).json()["status"] == "active"
+        assert (await c.patch(f"/api/partners/1/clients/{cid}",
+                              json={"plan": "ultra"})).status_code == 422   # Literal-enforced
+        assert (await c.post("/api/partners/1/clients",
+                             json={"name": "X", "devices": 0, "users": 1})).status_code == 422
+        assert (await c.delete(f"/api/partners/1/clients/{cid}")).status_code == 204
+        assert (await c.delete(f"/api/partners/1/clients/{cid}")).status_code == 404
+    # every write was audited under the partner's own org
+    async with session_factory() as s:
+        from sqlalchemy import select
+        rows = (await s.execute(select(AuditLog).where(AuditLog.org_id == 1))).scalars().all()
+        actions = {a.action for a in rows}
+        assert {"partner.client_created", "partner.client_updated", "partner.client_deleted"} <= actions
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — cross-client queue, filters, assignment                           #
+# --------------------------------------------------------------------------- #
+async def test_queue_filters_and_sla(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        q = (await c.get("/api/partners/1/queue")).json()
+        kinds = {it["kind"] for it in q["items"]}
+        assert kinds == {"alert", "ticket", "incident"}
+        assert q["counts"]["tickets_open"] == 2 and q["counts"]["incidents_open"] == 1
+        assert q["clients"] == [{"id": 11, "name": "Banque Atlas"}, {"id": 12, "name": "Retail Atlas"}]
+        # resolved alerts excluded by default
+        assert all(it["status"] != "resolved" for it in q["items"])
+        # client filter
+        qc = (await c.get("/api/partners/1/queue", params={"client": 12})).json()
+        assert {it["org_id"] for it in qc["items"]} == {12}
+        # kind + severity filters
+        qi = (await c.get("/api/partners/1/queue", params={"kind": "incident"})).json()
+        assert [it["uid"] for it in qi["items"]] == ["INC-000301"]
+        qs = (await c.get("/api/partners/1/queue", params={"severity": "critical"})).json()
+        assert {it["uid"] for it in qs["items"]} == {"ALR-000101", "TCK-000201"}  # p1 maps to critical
+        # sla filter — TCK-000201 is past due
+        qb = (await c.get("/api/partners/1/queue", params={"sla": "breached"})).json()
+        assert [it["uid"] for it in qb["items"]] == ["TCK-000201"]
+        # text search
+        qq = (await c.get("/api/partners/1/queue", params={"q": "ransomware"})).json()
+        assert [it["uid"] for it in qq["items"]] == ["ALR-000101"]
+        # bad severity -> 422
+        assert (await c.get("/api/partners/1/queue", params={"severity": "apocalypse"})).status_code == 422
+
+
+async def test_queue_assign_team_only_and_audited(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.post("/api/partners/1/queue/assign",
+                         json={"kind": "alert", "item_uid": "ALR-000101",
+                               "assignee_email": "analyst@atlas.ma"})
+        assert r.status_code == 200 and r.json()["assignee"] == "analyst@atlas.ma"
+        # outsider emails are rejected
+        r = await c.post("/api/partners/1/queue/assign",
+                         json={"kind": "alert", "item_uid": "ALR-000101",
+                               "assignee_email": "hacker@other.ma"})
+        assert r.status_code == 422
+        # foreign item uid -> 404 even for platform-scanned ids
+        r = await c.post("/api/partners/1/queue/assign",
+                         json={"kind": "alert", "item_uid": "ALR-000103",
+                               "assignee_email": "analyst@atlas.ma"})
+        assert r.status_code == 404
+    async with session_factory() as s:
+        from sqlalchemy import select
+        row = (await s.execute(select(Alert).where(Alert.uid == "ALR-000101"))).scalar_one()
+        assert row.assignee == "analyst@atlas.ma"
+        log = (await s.execute(select(AuditLog).where(
+            AuditLog.action == "partner.queue_assigned"))).scalars().first()
+        assert log.org_id == 1 and "ALR-000101" in log.details
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — health summary                                                    #
+# --------------------------------------------------------------------------- #
+async def test_health_per_client_risk(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        h = (await c.get("/api/partners/1/health")).json()
+        by_id = {row["client_org_id"]: row for row in h["clients"]}
+        assert set(by_id) == {11, 12}
+        b = by_id[11]
+        assert b["open_alerts"]["critical"] == 1 and b["open_incidents"] == 1
+        assert b["open_tickets"] == 1 and b["overdue_tickets"] == 1
+        assert b["sla_state"] == "breached"
+        assert b["agents_total"] == 3 and b["agents_online"] == 2   # stale probe excluded
+        assert b["risk_level"] in ("critical", "high")
+        assert h["clients"][0]["client_org_id"] == 11              # sorted by risk desc
+        r = by_id[12]
+        assert r["open_alerts"] == {"critical": 0, "high": 0, "other": 0}
+        assert r["risk_level"] == ("medium" if r["open_tickets"] else "low")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — time-boxed console switch (rule 2)                                #
+# --------------------------------------------------------------------------- #
+async def test_impersonation_grant_expiry_and_audit(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.post("/api/partners/1/impersonations",
+                         json={"client_org_id": 11, "minutes": 30, "reason": "triage ransomware"})
+        assert r.status_code == 201
+        body = r.json()
+        assert body["token"] and body["client_org_id"] == 11
+        exp = datetime.fromisoformat(body["expires_at"])
+        assert timedelta(minutes=25) < exp - datetime.utcnow() < timedelta(minutes=35)
+        # target outside the partner's children -> 403 (rule 1)
+        assert (await c.post("/api/partners/1/impersonations",
+                             json={"client_org_id": 21, "minutes": 30,
+                                   "reason": "trying other partner"})).status_code == 403
+        # minutes bounds enforced (Literal/Field validation)
+        assert (await c.post("/api/partners/1/impersonations",
+                             json={"client_org_id": 11, "minutes": 900,
+                                   "reason": "too long"})).status_code == 422
+        close = await c.delete("/api/partners/1/impersonations")
+        assert close.status_code == 200 and close.json()["revoked"] == 1
+    async with session_factory() as s:
+        from sqlalchemy import select
+        g = (await s.execute(select(TenantServiceGrant).where(
+            TenantServiceGrant.service_id == "partner_console"))).scalars().first()
+        assert g is not None and g.org_id == 11 and g.enabled is False
+        assert g.expires_at.replace(tzinfo=None) <= datetime.utcnow() + timedelta(seconds=5)
+        acts = {a.action for a in (await s.execute(select(AuditLog))).scalars().all()}
+        assert {"partner.impersonation_started", "partner.impersonation_ended"} <= acts
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — handovers + golden templates                                      #
+# --------------------------------------------------------------------------- #
+async def test_handovers_roundtrip(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        note = (await c.post("/api/partners/1/handovers",
+                             json={"content": "INC-000301 en cours, escalade DPO prévue",
+                                   "shift": "night"})).json()
+        assert note["id"].startswith("HVO-") and note["shift"] == "night"
+        lst = (await c.get("/api/partners/1/handovers")).json()
+        assert lst[0]["id"] == note["id"]
+        assert (await c.post("/api/partners/1/handovers",
+                             json={"content": "ab"})).status_code == 422
+        assert (await c.post("/api/partners/1/handovers",
+                             json={"content": "ok content", "shift": "weekend"})).status_code == 422
+
+
+async def test_template_library_clone_and_scope(session_factory):
+    await _seed(session_factory)
+    tpl = {
+        "name": "Golden SOC baseline",
+        "monitoring_rules": [{"name": "CPU élevé", "trigger_metric": "cpu",
+                              "threshold": "90", "duration_min": 5,
+                              "action": "create_ticket", "ticket_priority": "P3"},
+                             {"name": "bad action", "action": "rm_rf", "trigger_metric": "disk",
+                              "threshold": "90"}],
+        "notification_rules": [{"name": "Critique -> équipe", "conditions": {"severity": ["critical"]},
+                                "channels": ["email", "carrier_pigeon"], "create_ticket": True,
+                                "ticket_priority": "p1"}],
+        "playbooks": [{"name": "Quarantaine host", "steps": [
+            {"name": "isolate", "action": "quarantine_host"},
+            {"name": "evil", "action": "exec_shell"}]}],
+    }
+    async with client_for(session_factory, 1) as c:
+        assert (await c.put("/api/partners/1/templates/golden-soc", json=tpl)).status_code == 200
+        assert (await c.get("/api/partners/1/templates"))  .json()[0]["id"] == "golden-soc"
+        r = await c.post("/api/partners/1/templates/golden-soc/apply",
+                         json={"target_client_ids": [11, 12]})
+        assert r.status_code == 200
+        created = r.json()["created"]
+        assert created["monitoring_rules"] == 2          # the rm_rf rule skipped
+        assert created["notification_rules"] == 2
+        assert created["playbooks"] == 2
+        # unknown template -> 404 ; foreign target -> 403
+        assert (await c.post("/api/partners/1/templates/nope/apply",
+                             json={"target_client_ids": [11]})).status_code == 404
+        assert (await c.post("/api/partners/1/templates/golden-soc/apply",
+                             json={"target_client_ids": [21]})).status_code == 403
+    async with session_factory() as s:
+        from sqlalchemy import select
+        rules = (await s.execute(select(NotificationRule).where(
+            NotificationRule.org_id.in_([11, 12])))).scalars().all()
+        assert rules and all(r.channels == ["email"] for r in rules)   # carrier pigeon dropped
+        pbs = (await s.execute(select(Playbook).where(Playbook.org_id.in_([11, 12])))).scalars().all()
+        assert pbs and all(len(p.steps) == 1 for p in pbs)             # exec_shell step dropped
+        logs = (await s.execute(select(AuditLog).where(
+            AuditLog.action == "partner.template_applied"))).scalars().all()
+        assert logs and "digest=" in logs[0].details
+
+
+# --------------------------------------------------------------------------- #
+# Rule 5 — rate limiting on writes                                            #
+# --------------------------------------------------------------------------- #
+async def test_write_endpoints_rate_limited(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        codes = [(await c.put("/api/partners/1/branding",
+                              json={"brand_name": f"B{i}"})).status_code for i in range(12)]
+        assert codes[:10] == [200] * 10
+        assert 429 in codes
+        blocked = codes.index(429)
+        # separate limiter bucket for handovers still works while branding is throttled
+        assert (await c.post("/api/partners/1/handovers",
+                             json={"content": "passation", "shift": "morning"})).status_code == 201
+        assert blocked == 10

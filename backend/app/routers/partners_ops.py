@@ -36,7 +36,7 @@ from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
@@ -207,7 +207,7 @@ async def partner_queue(pid: str, client: Optional[int] = None, kind: Optional[s
     org = await _resolve_partner(pid, current_user, db)
     children = await _children(db, org.id)
     org_ids = [c.id for c in children]
-    names = {c.id: c.name for c in children}
+    names = {c.id: c.name for c in children}  # id -> name (ints)
     if severity and severity not in SEVERITIES:
         raise HTTPException(422, f"severity must be one of {SEVERITIES}")
     items, counts = await _collect_queue(db, org_ids, kind=kind, client=client, severity=severity,
@@ -217,7 +217,8 @@ async def partner_queue(pid: str, client: Optional[int] = None, kind: Optional[s
         items = [it for it in items if it["sla_state"] == sla]
     for it in items:
         it["client_name"] = names.get(it["org_id"], "")
-    return {"items": items, "counts": counts, "clients": [{"id": c.id, "name": n} for c, n in names.items()]}
+    return {"items": items, "counts": counts,
+            "clients": [{"id": oid, "name": nm} for oid, nm in sorted(names.items())]}
 
 
 @router.post("/{pid}/queue/assign")
@@ -285,13 +286,14 @@ async def client_health(pid: str, db: AsyncSession = Depends(get_db),
     now = _now()
 
     alerts = (await db.execute(select(Alert.org_id, Alert.severity).where(
-        Alert.org_id.in_(ids), Alert.status != "resolved"))).all()
+        Alert.org_id.in_(ids), Alert.status.notin_(("resolved", "closed"))))).all()
     tickets = (await db.execute(
         select(Ticket).where(Ticket.org_id.in_(ids), Ticket.status.in_(OPEN_TICKET_STATUSES))
     )).scalars().all()
     incidents = (await db.execute(
-        select(Incident.org_id).where(Incident.org_id.in_(ids), Incident.status.in_(OPEN_INCIDENT_STATUSES))
-    )).scalars().all()
+        select(Incident.org_id, func.count()).select_from(Incident)
+        .where(Incident.org_id.in_(ids), Incident.status.in_(OPEN_INCIDENT_STATUSES))
+        .group_by(Incident.org_id))).all()
     probes = (await db.execute(select(AgentProbe.org_id, AgentProbe.last_seen, AgentProbe.status).where(
         AgentProbe.org_id.in_(ids)))).all()
 
@@ -299,9 +301,7 @@ async def client_health(pid: str, db: AsyncSession = Depends(get_db),
     for oid, sev in alerts:
         d = open_alerts.setdefault(oid, {"critical": 0, "high": 0, "other": 0})
         d["critical" if sev == "critical" else "high" if sev == "high" else "other"] += 1
-    inc_count: dict[int, int] = {}
-    for oid in incidents:
-        inc_count[oid] = inc_count.get(oid, 0) + 1
+    inc_count: dict[int, int] = {oid: n for oid, n in incidents}
     tk_by_org: dict[int, list[Ticket]] = {}
     for t in tickets:
         tk_by_org.setdefault(t.org_id, []).append(t)
