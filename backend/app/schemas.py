@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, computed_field
-from typing import Optional, List
+from typing import Optional, List, Literal, Dict
 from datetime import datetime
 
 
@@ -821,13 +821,134 @@ class GrantOut(BaseModel):
 
 
 class PartnerUpdateIn(BaseModel):
-    company: Optional[str] = None
+    company: Optional[str] = Field(None, max_length=120)
+    contact_name: Optional[str] = Field(None, max_length=120)
+    contact_email: Optional[EmailStr] = None
+    tier: Optional[Literal["registered", "silver", "gold", "platinum"]] = None
+    status: Optional[Literal["prospect", "trial", "active", "suspended"]] = None
+    support_sla: Optional[str] = Field(None, max_length=200)
+
+
+
+
+# --------------------------------------------------------------------------- #
+# Partner Portal (Phase 1) — shapes mirror src/services/partnersApi.ts +      #
+# src/data/partnerWorld.ts. Currency MAD; tiers from pricing_config.json.     #
+# --------------------------------------------------------------------------- #
+PartnerTierId = Literal["registered", "silver", "gold", "platinum"]
+PartnerStatusT = Literal["prospect", "trial", "active", "suspended"]
+DnsStatusT = Literal["not_configured", "pending_verification", "verified"]
+EndClientStatusT = Literal["active", "onboarding", "suspended"]
+
+
+class WhiteLabelIn(BaseModel):
+    """PUT /partners/{pid}/branding — partial update, validated fields only."""
+    brand_name: Optional[str] = Field(None, max_length=80)
+    logo_data_url: Optional[str] = None
+    primary_color: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    custom_domain: Optional[str] = Field(None, max_length=253)
+    email_sender: Optional[str] = Field(None, max_length=254)
+    hide_infracentra: Optional[bool] = None
+
+
+class PartnerLicenseOut(BaseModel):
+    id: str
+    plan: PartnerTierId
+    client_seats: int
+    client_seats_used: int
+    device_allowance: int
+    devices_used: int
+    price_month_mad: int
+    resale_price_from_mad: int
+    margin_pct: int
+    renews_on: Optional[str] = None
+    services_included: List[str] = []
+    ticketing: bool = True
+    tier_discount: float = 0.0
+    managed_units: int = 0
+    next_tier: Optional[PartnerTierId] = None
+    units_to_next_tier: int = 0
+
+
+class PartnerEndClientOut(BaseModel):
+    id: str
+    partner_id: str
+    name: str
+    industry: str
+    city: str
+    devices: int
+    users: int
+    plan: str
+    monthly_mrr_mad: int
+    status: EndClientStatusT
+    since: str
+
+
+class PartnerBrandingOut(BaseModel):
+    brand_name: str = ""
+    logo_data_url: Optional[str] = None
+    primary_color: str = "#0ea5e9"
+    custom_domain: str = ""
+    cname_target: str
+    dns_status: DnsStatusT = "not_configured"
+    email_sender: str = ""
+    hide_infracentra: bool = False
+
+
+class PartnerOut(BaseModel):
+    id: str
+    code: str
+    company: str
+    country: str
     contact_name: Optional[str] = None
-    contact_email: Optional[str] = None
-    tier: Optional[str] = None
-    status: Optional[str] = None
-    support_sla: Optional[str] = None
+    contact_email: str
+    phone: str = ""
+    status: PartnerStatusT = "active"
+    signed_on: Optional[str] = None
+    tier: PartnerTierId
+    license: PartnerLicenseOut
+    branding: Dict  # WhiteLabelConfig shape (dict persisted in tenant_settings)
+    end_clients: List[PartnerEndClientOut] = []
+    training: Dict = {"completed": [], "pending": []}
+    support_sla: str = ""
+
+
+class PartnerStatsOut(BaseModel):
+    partners_total: int
+    partners_active: int
+    trials: int
+    end_clients: int
+    devices_managed: int
+    wholesale_mrr_mad: int
+    retail_mrr_mad: int
+    channel_margin_pct: int
+    white_labels_live: int
+    dns_pending: int
+
+
+class EndClientIn(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+    industry: str = Field("Non spécifié", max_length=60)
+    city: str = Field("Casablanca", max_length=80)
+    devices: int = Field(..., ge=1, le=20000)
+    users: int = Field(..., ge=1, le=50000)
+    plan: Literal["starter", "pro", "souverain"] = "starter"
+    monthly_mrr_mad: int = Field(0, ge=0, le=10_000_000)
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = Field(None, max_length=32)
+
+
+class EndClientPatch(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=120)
+    industry: Optional[str] = Field(None, max_length=60)
+    city: Optional[str] = Field(None, max_length=80)
+    devices: Optional[int] = Field(None, ge=1, le=20000)
+    users: Optional[int] = Field(None, ge=1, le=50000)
+    plan: Optional[Literal["starter", "pro", "souverain"]] = None
+    monthly_mrr_mad: Optional[int] = Field(None, ge=0, le=10_000_000)
+    status: Optional[EndClientStatusT] = None
 
 
 class PartnerMigrateIn(BaseModel):
-    plan: str                     # Starter | Business | Scale
+    """Repurposed platform-admin migrate: force a pricing_config partner tier."""
+    tier: PartnerTierId

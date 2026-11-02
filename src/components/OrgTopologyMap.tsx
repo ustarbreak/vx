@@ -155,7 +155,7 @@ export default function OrgTopologyMap({ compact = false }: { compact?: boolean 
   const zoom = (f: number) => setView((v) => ({ ...v, k: Math.min(3, Math.max(0.3, v.k * f)) }));
 
   if (loading) {
-    return <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 h-[{compact ? 320 : 480}px] flex items-center justify-center gap-2 text-[var(--ic-muted)] text-sm"><RefreshCw className="w-4 h-4 animate-spin" /> Loading organizational topology…</div>;
+    return <div className={`bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6 h-[${compact ? 320 : 480}px] flex items-center justify-center gap-2 text-[var(--ic-muted)] text-sm`}><RefreshCw className="w-4 h-4 animate-spin" /> Loading organizational topology…</div>;
   }
   if (error) {
     return (

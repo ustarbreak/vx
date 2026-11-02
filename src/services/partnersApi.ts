@@ -14,8 +14,8 @@ export interface PartnerProgramStats {
   trials: number;
   end_clients: number;
   devices_managed: number;
-  wholesale_mrr_eur: number;
-  retail_mrr_eur: number;
+  wholesale_mrr_mad: number;
+  retail_mrr_mad: number;
   channel_margin_pct: number;
   white_labels_live: number;
   dns_pending: number;

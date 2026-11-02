@@ -46,6 +46,10 @@ import {
   PartnerDashboardPage, PartnerClientsPage, PartnerValuePage,
   PartnerLicensingPage, PartnerBrandingPage, PartnerTrainingPage,
 } from './pages/partner/PartnerPortalPages';
+import {
+  PartnerOpsCenterPage, PartnerTemplatesPage, PartnerOnboardingPage,
+  PartnerDealsQuotesPage, PartnerBillingPage,
+} from './pages/partner/PartnerOpsPages';
 import AdvancedTicketingPage from './pages/client-admin/AdvancedTicketingPage';
 import NotificationEnginePage from './pages/client-admin/NotificationEnginePage';
 import ClientPortalPage from './pages/ClientPortalPage';
@@ -199,6 +203,11 @@ function AppRoutes() {
         <Route path="partner/licensing" element={<PartnerLicensingPage />} />
         <Route path="partner/branding" element={<PartnerBrandingPage />} />
         <Route path="partner/training" element={<PartnerTrainingPage />} />
+        <Route path="partner/ops" element={<PartnerOpsCenterPage />} />
+        <Route path="partner/templates" element={<PartnerTemplatesPage />} />
+        <Route path="partner/onboarding" element={<PartnerOnboardingPage />} />
+        <Route path="partner/deals" element={<PartnerDealsQuotesPage />} />
+        <Route path="partner/billing" element={<PartnerBillingPage />} />
 
         {/* Cross-role service consoles (Advanced Ticketing + Notification Engine) */}
         <Route path="client-admin/advanced-tickets" element={<AdvancedTicketingPage />} />

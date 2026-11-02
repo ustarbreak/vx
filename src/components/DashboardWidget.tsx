@@ -588,7 +588,7 @@ function WidgetCard({
       onPointerCancel={endResize}
       style={style}
       className={`relative min-w-0 max-w-full ${entry.heightPx && !entry.collapsed ? '' : 'h-full '}flex flex-col overflow-hidden transition-shadow duration-150 rounded-xl ${
-        headerless ? '' : 'bg-[var(--ic-surface)] border p-4 sm:p-6'
+        headerless ? '' : 'bg-[var(--ic-surface)] border p-3 sm:p-4'
       } ${
         resizing ? 'ring-2 ring-cyan-400/50' : ''
       } ${
@@ -623,7 +623,7 @@ function WidgetCard({
           </div>
         )
       ) : (
-      <div className="flex items-center gap-2 mb-4 flex-shrink-0">
+      <div className="flex items-center gap-2 mb-3 flex-shrink-0">
         <button
           type="button"
           {...(dragHandleProps ?? {})}
@@ -657,10 +657,12 @@ function WidgetCard({
       </div>
       )}
 
-      {/* Body — hidden when collapsed. `overflow-x-auto` keeps wide content
-          (tables, charts, maps) inside the card: it scrolls within the widget
-          instead of overflowing the layout or squashing text. */}
-      {!entry.collapsed && <div className={`min-w-0 flex-1 overflow-x-auto ${headerless ? 'h-full' : ''}`}>{children}</div>}
+      {/* Body — hidden when collapsed. The card clips its own bounds
+          (overflow-hidden); content adapts to the container via flex sizing.
+          Lists/tables that genuinely need it opt into ONE internal vertical
+          scroll (`min-h-0 flex-1 overflow-y-auto`) — never horizontal page
+          scroll, never double scrolling. */}
+      {!entry.collapsed && <div className={`min-w-0 flex-1 overflow-hidden ${headerless ? 'h-full' : ''}`}>{children}</div>}
 
       {/* Hint shown only while collapsed */}
       {entry.collapsed && (
@@ -735,9 +737,9 @@ export default function DashboardWidget({
     // Rendered outside a WidgetLayoutProvider — degrade to a plain card so the
     // section is still visible in the grid instead of silently disappearing.
     return (
-      <div className="min-w-0 max-w-full overflow-hidden bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 sm:p-6">
-        <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">{title}</h3>
-        <div className="min-w-0 overflow-x-auto">{children}</div>
+      <div className="min-w-0 max-w-full overflow-hidden bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-3 sm:p-4">
+        <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-3">{title}</h3>
+        <div className="min-w-0 overflow-hidden">{children}</div>
       </div>
     );
   }
@@ -805,14 +807,17 @@ export const PageKeyContext = createContext<string | null>(null);
 /** Default layout of the active provider — fallback for catalogue helpers. */
 export const DefaultLayoutContext = createContext<WidgetLayoutEntry[]>([]);
 
-/** Responsive masonry board: 1 col (mobile) → 2 cols (md) → 3 cols (xl+). */
-const MASONRY_CLASSES = 'columns-1 md:columns-2 xl:columns-3 gap-4 lg:gap-6 space-y-4 lg:space-y-6';
+/** Responsive grid board: 1 col (mobile) → 2 cols (md) → 3 cols (xl+).
+ *  A real CSS grid (not CSS-columns masonry): rows are meaningful again,
+ *  widgets never clip mid-chart, and spans map cleanly to thirds. */
+const MASONRY_CLASSES = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 items-stretch content-start gap-4 lg:gap-6';
 
-/** Column span classes for edge-resized widgets at each breakpoint. */
+/** Column span classes for edge-resized widgets at each breakpoint.
+ *  Mobile always stacks full-width; md is a 2-track grid; xl a 3-track grid. */
 const SPAN_CLASS: Record<number, string[]> = {
-  1: ['w-full'],
-  2: ['md:w-[calc(50%-0.75rem)]', 'xl:w-[calc((100%-3rem)/3*2+1.5rem)]'],
-  3: ['w-full'],
+  1: ['col-span-1'],
+  2: ['md:col-span-2', 'xl:col-span-2'],
+  3: ['md:col-span-2', 'xl:col-span-3'],
 };
 
 type BoardCtx = PlacementCtx;
@@ -1159,7 +1164,7 @@ export function CustomizeHint() {
   return (
     <span className="hidden md:inline-flex items-center gap-1 text-[11px] text-[var(--ic-muted)]">
       <GripVertical className="w-3 h-3" />
-      Drag ⠿ to place a widget in any slot · click an empty “+” slot to add one
+      Drag ⠿ to reorder · drag any edge to resize · “−” collapses · “Add widget” appends
     </span>
   );
 }

@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, 
 import { mockRiskScore, mockAlerts, mockAlertTimeline, mockThreatTrend } from '../data/mockData';
 import { computeDemoStats, isDemoWorldInstalled } from '../data/demoWorld';
 import { isDemoMode } from '../services/demoMode';
+import { alertsApi } from '../services/api';
 import DashboardWidget, {
   WidgetLayoutProvider,
   WidgetGrid,
@@ -41,7 +42,7 @@ function KpiTile({
   return (
     <div className="flex items-center gap-3 min-w-0">
       <span className={`${tone} flex-shrink-0`}>{icon}</span>
-      <p className={`text-2xl sm:text-3xl font-bold text-[var(--ic-heading)] leading-tight truncate ${tone}`}>
+      <p className={`text-xl sm:text-2xl font-bold text-[var(--ic-heading)] leading-none tabular-nums truncate ${tone}`}>
         {value}
       </p>
     </div>
@@ -73,8 +74,8 @@ function RiskGauge({ score }: { score: number }) {
   const dashOffset = circumference - (animatedScore / 100) * circumference * 0.75;
 
   return (
-    <div className="relative flex flex-col items-center">
-      <svg width="200" height="160" viewBox="0 0 200 160">
+    <div className="relative flex flex-col items-center w-full min-w-0">
+      <svg viewBox="0 0 200 160" className="w-full h-auto max-w-[200px]">
         <circle cx="100" cy="100" r="70" fill="none" stroke="rgba(100,116,139,0.1)" strokeWidth="12" strokeLinecap="round"
           strokeDasharray={`${circumference * 0.75} ${circumference * 0.25}`} transform="rotate(135, 100, 100)" />
         <circle cx="100" cy="100" r="70" fill="none" stroke={color.stroke} strokeWidth="12" strokeLinecap="round"
@@ -82,8 +83,8 @@ function RiskGauge({ score }: { score: number }) {
           transform="rotate(135, 100, 100)" className="transition-all duration-500"
           style={{ filter: `drop-shadow(0 0 8px ${color.stroke}40)` }} />
       </svg>
-      <div className="absolute top-12 text-center">
-        <div className={`text-4xl font-bold ${color.text}`}>{animatedScore}</div>
+      <div className="absolute inset-x-0 top-[38%] -translate-y-1/2 text-center">
+        <div className={`text-3xl font-bold tabular-nums ${color.text}`}>{animatedScore}</div>
         <div className="text-xs text-[var(--ic-muted)] mt-1">/ 100</div>
       </div>
       <div className={`text-sm font-medium mt-2 ${color.text}`}>{color.label}</div>
@@ -103,9 +104,10 @@ export default function DashboardPage() {
         return;
       }
       try {
-        const res: any = await fetch(((import.meta as any).env?.VITE_API_URL || '/api/v1') + '/alerts');
-        const arr = Array.isArray(res) ? res : (res?.items ?? []);
-        if (alive && arr.length) setCounts(c => ({ ...c, activeThreats: arr.filter((a: any) => ['critical','high'].includes(a.severity)).length }));
+        // Real FastAPI backend mounts alerts at GET /api/alerts (there is no
+        // /api/v1 prefix). Use the shared JWT-authenticated, demo-aware client.
+        const arr = await alertsApi.list();
+        if (alive && arr.length) setCounts(c => ({ ...c, activeThreats: arr.filter((a) => ['critical','high'].includes(a.severity)).length }));
       } catch { /* real backend unreachable — keep defaults honest */ }
     }
     load();
@@ -137,38 +139,36 @@ export default function DashboardPage() {
             inside one oversized card. */}
         <WidgetGrid>
           <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
-            <KpiTile icon={<AlertTriangle className="w-6 h-6" />} tone="text-red-400"
+            <KpiTile icon={<AlertTriangle className="w-5 h-5" />} tone="text-red-400"
               value={mockAlerts.filter(a => a.status === 'open').length} />
           </DashboardWidget>
           <DashboardWidget id="kpi-threats" title="Active Threats" spanOptions={[1, 2]}>
-            <KpiTile icon={<Target className="w-6 h-6" />} tone="text-orange-400"
+            <KpiTile icon={<Target className="w-5 h-5" />} tone="text-orange-400"
               value={counts.activeThreats} />
           </DashboardWidget>
           <DashboardWidget id="kpi-compliance" title="Compliance" spanOptions={[1, 2]}>
-            <KpiTile icon={<Shield className="w-6 h-6" />} tone="text-green-400"
+            <KpiTile icon={<Shield className="w-5 h-5" />} tone="text-green-400"
               value={`${mockRiskScore.compliance}%`} />
           </DashboardWidget>
           <DashboardWidget id="kpi-remediated" title="Auto-Remediated" spanOptions={[1, 2]}>
-            <KpiTile icon={<Zap className="w-6 h-6" />} tone="text-cyan-400"
+            <KpiTile icon={<Zap className="w-5 h-5" />} tone="text-cyan-400"
               value={counts.autoRemediated} />
           </DashboardWidget>
 
           <DashboardWidget id="risk-gauge" title="Predictive Risk Score">
-            <div className="flex justify-center min-w-0 overflow-x-auto">
-              <RiskGauge score={mockRiskScore.overall} />
-            </div>
+            <RiskGauge score={mockRiskScore.overall} />
           </DashboardWidget>
 
           <DashboardWidget id="recent-alerts" title="Recent Security Alerts" spanOptions={[2, 3]}>
-            <div className="space-y-2 max-h-80 overflow-y-auto">
+            <div className="flex flex-col gap-2 h-full min-h-0 max-h-[320px] overflow-y-auto pr-1">
               {mockAlerts.slice(0, 5).map(alert => (
-                <div key={alert.id} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--ic-surface-2)]">
+                <div key={alert.id} className="flex items-start gap-3 p-2.5 rounded-lg bg-[var(--ic-surface-2)] min-w-0">
                   <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                     alert.severity === 'critical' ? 'bg-cyber-red animate-pulse' :
                     alert.severity === 'high' ? 'bg-cyber-orange' : 'bg-cyber-yellow'
                   }`} />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-[var(--ic-heading)]">{alert.title}</p>
+                    <p className="text-sm font-medium text-[var(--ic-heading)] truncate">{alert.title}</p>
                     <div className="flex items-center gap-3 mt-1">
                       <span className="text-xs text-[var(--ic-muted)]">{alert.source}</span>
                       <span className="text-xs text-[var(--ic-muted)]">•</span>
@@ -181,7 +181,8 @@ export default function DashboardPage() {
           </DashboardWidget>
 
           <DashboardWidget id="alert-volume" title="24h Alert Volume" spanOptions={[1, 2, 3]}>
-            <ResponsiveContainer width="100%" height={200}>
+            <div className="h-full min-h-[180px] max-h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={mockAlertTimeline}>
                 <defs><linearGradient id="alertGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#00d4ff" stopOpacity={0.3}/><stop offset="95%" stopColor="#00d4ff" stopOpacity={0}/></linearGradient></defs>
                 <XAxis dataKey="time" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
@@ -190,10 +191,12 @@ export default function DashboardPage() {
                 <Area type="monotone" dataKey="alerts" stroke="#00d4ff" fill="url(#alertGrad)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
+            </div>
           </DashboardWidget>
 
           <DashboardWidget id="threat-trend" title="Threat Detection vs Blocked" spanOptions={[1, 2, 3]}>
-            <ResponsiveContainer width="100%" height={200}>
+            <div className="h-full min-h-[180px] max-h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart data={mockThreatTrend}>
                 <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
                 <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
@@ -202,6 +205,7 @@ export default function DashboardPage() {
                 <Bar dataKey="blocked" fill="#00ff88" radius={[4, 4, 0, 0]} opacity={0.8} />
               </BarChart>
             </ResponsiveContainer>
+            </div>
           </DashboardWidget>
 
           {/* Catalog widgets the user added via “Add widget” render here */}

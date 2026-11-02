@@ -12,6 +12,8 @@
 // Turning Demo Mode OFF instantly restores 100% real-backend behaviour.
 // ---------------------------------------------------------------------------
 
+import { bindDemoOpsFeeds } from './demoOpsFeeds';
+import { installPartnerOpsHandlers } from './partnerOpsDemo';
 import {
   demoTenants, demoDevices, demoAlertSeeds, demoTicketSeeds, demoPlaybookSeeds, demoTechnicians,
   computeDemoStats, isDemoWorldInstalled, markDemoWorldInstalled, DEMO_WORLD_VERSION,
@@ -650,6 +652,7 @@ const incListDemo = (query: URLSearchParams) => {
 // board is non-empty and every relationship (alert → incident → ticket) is
 // consistent with the same dataset the SIEM/ticket pages show.
 const incidents: any[] = [];
+bindDemoOpsFeeds(alerts, tickets, incidents);
 demoAlertSeeds
   .filter(a => ['critical', 'high'].includes(a.severity))
   .slice(0, 8)
@@ -2108,6 +2111,9 @@ export const demoStore = {
     // is scoped to its own partner id; cross-partner access returns 403 exactly
     // like the real backend would.
     if (root === 'partners') {
+      const __opsHandled = await partnerOpsTryHandle<T>(path, method, b);
+      if (__opsHandled !== undefined) return __opsHandled;
+
       const s = demoSession();
       const callerPartnerId = s.role === 'partner_admin' ? String(s.orgId ?? '') : null;
       const isPlatform = s.role === 'platform_admin';
@@ -2143,17 +2149,21 @@ export const demoStore = {
       }
       if (method === 'POST' && parts[2] === 'migrate') {
         if (demoSession().role !== 'platform_admin') throw httpErr(403, 'Réservé aux administrateurs plateforme');
-        const plans = ['Starter', 'Business', 'Scale'] as const;
-        const target = String(b.plan ?? '');
-        if (!(plans as readonly string[]).includes(target)) throw httpErr(400, `Plan invalide — attendu: ${plans.join('|')}`);
-        const quotas: Record<string, { seats: number; devices: number; price: number }> = {
-          Starter: { seats: 5, devices: 300, price: 190 }, Business: { seats: 15, devices: 1200, price: 520 }, Scale: { seats: 40, devices: 4000, price: 1180 },
+        // pricing_config.json "partner" tiers (MAD) — single source of truth.
+        const tierQuotas: Record<string, { seats: number; devices: number; wholesale_from_mad: number }> = {
+          registered: { seats: 5, devices: 300, wholesale_from_mad: 2150 },
+          silver: { seats: 15, devices: 1200, wholesale_from_mad: 6450 },
+          gold: { seats: 40, devices: 4000, wholesale_from_mad: 21500 },
+          platinum: { seats: 100, devices: 20000, wholesale_from_mad: 64500 },
         };
+        const target = String(b.tier ?? b.plan ?? '').toLowerCase();
+        if (!(target in tierQuotas)) throw httpErr(400, `Tier invalide — attendu: ${Object.keys(tierQuotas).join('|')}`);
+        partner.tier = target as any;
         partner.license.plan = target as any;
-        partner.license.client_seats = quotas[target].seats;
-        partner.license.device_allowance = quotas[target].devices;
-        partner.license.price_month_eur = quotas[target].price;
-        pushPlatformAudit('partner.migrated', `Licence ${partner.company} migrée vers ${target} (${quotas[target].price} €/mois)`);
+        partner.license.client_seats = tierQuotas[target].seats;
+        partner.license.device_allowance = tierQuotas[target].devices;
+        partner.license.price_month_mad = tierQuotas[target].wholesale_from_mad;
+        pushPlatformAudit('partner.migrated', `Licence ${partner.company} migrée vers le tier ${target} (wholesale dès ${tierQuotas[target].wholesale_from_mad} MAD/mois)`);
         return delay(partner.license as any) as unknown as T;
       }
       if (method === 'DELETE' && parts.length === 2) {
@@ -2183,7 +2193,7 @@ export const demoStore = {
             id: `ec-${partner.code.toLowerCase()}-${partner.end_clients.length + 1}`, partner_id: partner.id,
             name: b.name ?? 'Nouveau client', industry: b.industry ?? 'Non spécifié', city: b.city ?? 'Casablanca',
             devices: Number(b.devices ?? 0), users: Number(b.users ?? 0), plan: b.plan ?? 'SME',
-            monthly_mrr_eur: Number(b.monthly_mrr_eur ?? 0), status: 'onboarding' as const, since: new Date().toISOString().slice(0, 10),
+            monthly_mrr_mad: Number(b.monthly_mrr_mad ?? 0), status: 'onboarding' as const, since: new Date().toISOString().slice(0, 10),
           };
           partner.end_clients.push(c);
           partner.license.client_seats_used += 1;
@@ -2712,3 +2722,21 @@ export const demoStore = {
     throw httpErr(404, `Demo mode: no simulated handler for ${method} /api${path}`);
   },
 };
+
+// ---- Partner Phase-2/3 demo handlers (delegated to partnerOpsDemo.ts) ----
+const __partnerOps = installPartnerOpsHandlers({ httpErr, delay, demoSession });
+const stripApiPath = (p: string) => p.replace(/^\/api/, '').split('?')[0];
+// Paths handled by partnerOpsDemo.ts (Phase-2 ops + Phase-3 commercial). Everything
+// else under /api/partners keeps being served by the Phase-1 block above.
+function isPartnerOpsPath(path: string): boolean {
+  const joined = stripApiPath(path).split('/').filter(Boolean).join('/');   // 'partners/pid/...'
+  if (/^partners\/[^/]+\/(queue|handovers|health|impersonations|templates)(\/|$)/.test(joined)) return true;
+  if (/^partners\/[^/]+\/clients\/\d+\/(onboarding|offboarding)/.test(joined)) return true;
+  if (/^partners\/[^/]+\/billing\/(statement|invoice|analytics|export)/.test(joined)) return true;
+  if (/^partners\/(deals|quotes)(\/|$)/.test(joined)) return true;
+  return false;
+}
+async function partnerOpsTryHandle<T>(path: string, method: string, body: any): Promise<T | undefined> {
+  if (!isPartnerOpsPath(path)) return undefined;
+  return __partnerOps<T>(stripApiPath(path), method, body);
+}

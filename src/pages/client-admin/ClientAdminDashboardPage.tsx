@@ -23,16 +23,25 @@ import { PostureKpiStrip, OpsSummaryTable, InfraHealthCard, useDashboardAlerts }
 // once before any render.
 registerBareWidget(WorldAttackMap, { id: 'ca-attackmap', title: 'Worldwide Threat Map' });
 registerBareWidget(OrgTopologyMap, { id: 'ca-topology', title: 'Infrastructure Topology' });
+// These three also render their own card/section — register them as bare
+// widgets so the board actually renders (and lets you move/resize/collapse)
+// them instead of silently dropping the unregistered elements.
+registerBareWidget(OpsSummaryTable, { id: 'ca-ops', title: 'Security Operations' });
+registerBareWidget(InfraHealthCard, { id: 'ca-infra', title: 'Infrastructure Health' });
+registerBareWidget(ValueEngineSection, { id: 'ca-value', title: 'Value & Executive Reporting' });
 
 // Grid widgets + registered bare widgets (attack map, topology). Bare ones
 // carry hideHeader so their own internal card/header stays the only layer.
 const CA_DASH_LAYOUT: WidgetLayoutEntry[] = [
-  // colSpan in thirds of the row; masonry tracks adapt per breakpoint (1 / 2 / 3).
+  // colSpan in thirds of the row; grid tracks adapt per breakpoint (1 / 2 / 3).
   { id: 'ca-posture', colSpan: 3, collapsed: false },
-  { id: 'ca-attackmap', colSpan: 3, collapsed: false, hideHeader: true },
-  { id: 'ca-topology', colSpan: 2, collapsed: false, hideHeader: true },
-  { id: 'ca-org', colSpan: 2, collapsed: false },
-  { id: 'ca-kpis', colSpan: 3, collapsed: false },
+  { id: 'ca-attackmap', colSpan: 3, collapsed: false, hideHeader: true, heightPx: 520 },
+  { id: 'ca-topology', colSpan: 2, collapsed: false, hideHeader: true, heightPx: 480 },
+  { id: 'ca-ops', colSpan: 1, collapsed: false, hideHeader: true, heightPx: 480 },
+  { id: 'ca-infra', colSpan: 1, collapsed: false, hideHeader: true },
+  { id: 'ca-org', colSpan: 1, collapsed: false },
+  { id: 'ca-kpis', colSpan: 2, collapsed: false },
+  { id: 'ca-value', colSpan: 3, collapsed: false, hideHeader: true },
 ];
 
 /** Reporting-period presets feeding valueApi.get(period) (YYYY-MM server-side). */
