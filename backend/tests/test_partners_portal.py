@@ -397,7 +397,10 @@ async def test_health_per_client_risk(session_factory):
         assert h["clients"][0]["client_org_id"] == 11              # sorted by risk desc
         r = by_id[12]
         assert r["open_alerts"] == {"critical": 0, "high": 0, "other": 0}
-        assert r["risk_level"] == ("medium" if r["open_tickets"] else "low")
+        # risk is score-based (alerts*10/4 + incidents*5 + overdue*3); a single
+        # open, non-overdue p4 ticket scores below the medium threshold (5) -> low.
+        assert r["open_tickets"] == 1 and r["overdue_tickets"] == 0
+        assert r["risk_score"] < 5 and r["risk_level"] == "low"
 
 
 # --------------------------------------------------------------------------- #
