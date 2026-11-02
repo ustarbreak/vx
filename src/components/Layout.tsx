@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth, isDemoMode } from '../context/AuthContext';
+import { useAuth, isDemoMode, setDemoMode } from '../context/AuthContext';
 import { DEMO_WORLD_VERSION, computeDemoStats, isDemoWorldInstalled } from '../data/demoWorld';
 
 import { useTheme } from '../context/ThemeContext';
@@ -39,10 +39,11 @@ function PushDemoButton() {
   const push = async () => {
     setState('pushing');
     try {
-      // Same path as the real API client — in Demo Mode it is answered by the
-      // in-memory simulated backend (services/demoMode.ts), never the network.
-      const base = (import.meta as any).env?.VITE_API_URL || '/api/v1';
-      await fetch(`${base}/settings/push-demo-world`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      // The demo world lives entirely client-side (services/demoMode.ts):
+      // enabling Demo Mode already installs it; there is no backend endpoint
+      // for it. Calling a non-existent /api/v1 URL only produced 404 noise,
+      // so just make sure the mode (and with it the dataset) is active.
+      if (!isDemoMode()) setDemoMode(true);
     } catch { /* demo fetch always resolves via interceptor; ignore */ }
     setState('done');
     window.dispatchEvent(new Event('demo-world-pushed'));
