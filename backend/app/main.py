@@ -19,7 +19,7 @@ from app.routers import pricing_v2
 from app.routers import reports as reports_router
 from app.routers import analytics as analytics_router
 # Phase 4 — Tenant Manager avancé + Partner Program management
-from app.routers import tenant_manager, partners_admin, partners, partners_ops, partners_commercial, partners_service
+from app.routers import tenant_manager, partners_admin, partners, partners_ops, partners_commercial, partners_service, partners_team, partners_keys, partners_connectors
 from app.routers import agent as agent_router
 from app.routers import dashboard_layout
 from app.routers.settings import router as settings_router, router_playbooks
@@ -150,6 +150,9 @@ app.include_router(partners.router, prefix="/api")   # Partner Portal (Phase 1) 
 app.include_router(partners_ops.router, prefix="/api")  # Partner Portal (Phase 2): queue / health / impersonations / templates
 app.include_router(partners_commercial.router, prefix="/api")  # Partner Portal (Phase 3): onboarding / deals / quotes / billing
 app.include_router(partners_service.router, prefix="/api")  # Partner Portal (Phase 4): reports/PDF / white-label extras / SLA+escalation+roster+runbooks
+app.include_router(partners_team.router, prefix="/api")  # Phase 5.1/5.4: team users + partner audit + sales-kit/support escalation
+app.include_router(partners_keys.router, prefix="/api")  # Phase 5.2: scoped API keys (hashed) + outgoing webhooks (HMAC)
+app.include_router(partners_connectors.router, prefix="/api")  # Phase 5.3: PSA/RMM + Microsoft 365 connectors
 app.include_router(partners_admin.router, prefix="/api")  # platform-admin PATCH/suspend/migrate(force tier)/DELETE
 # goinfra collection agent: /api/agent/* (probe API) + /api/agent-tokens/* (UI)
 # + /api/agents/* (JWT-authenticated fleet reads for the Agents page)
