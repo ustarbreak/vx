@@ -48,7 +48,7 @@ export interface PartnerEndClient {
   users: number;
   plan: string;                   // retail plan sold by the partner
   monthly_mrr_mad: number;        // revenue the partner bills the end-client (MAD HT)
-  status: 'active' | 'onboarding' | 'suspended';
+  status: 'active' | 'onboarding' | 'suspended' | 'disabled';
   since: string;
 }
 

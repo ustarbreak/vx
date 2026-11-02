@@ -11,7 +11,7 @@ import {
   Shield, LayoutDashboard, AlertTriangle, Target, FileCheck, FileBarChart2,
   Activity, Settings, LogOut, ChevronLeft, ChevronRight,
   Bell, Search, Menu, Zap, Users, Building2, Network,
-  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck,
+  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
@@ -261,7 +261,9 @@ export default function Layout() {
     const me = partnerById(String(user.orgId ?? ''));
     operationsNav = [
       { to: '/partner/dashboard', icon: LayoutDashboard, label: `${me?.branding.brand_name ?? 'Partner'} Dashboard` },
+      { to: '/partner/ops', icon: Inbox, label: 'Ops Center' },
       { to: '/partner/clients', icon: Building2, label: 'My Clients' },
+      { to: '/partner/onboarding', icon: FolderKanban, label: 'Onboarding' },
       { to: '/client-admin/alerts', icon: AlertTriangle, label: 'Active Incidents' },
       { to: '/client-admin/advanced-tickets', icon: Inbox, label: 'Service Desk' },
       {
@@ -277,6 +279,9 @@ export default function Layout() {
     ];
     adminNav = [
       { to: '/partner/value', icon: TrendingUp, label: 'Value & Loyalty' },
+      { to: '/partner/deals', icon: Coins, label: 'Deals & Quotes' },
+      { to: '/partner/billing', icon: FileBarChart2, label: 'Billing' },
+      { to: '/partner/templates', icon: ClipboardList, label: 'Template Library' },
       { to: '/partner/licensing', icon: ShieldCheck, label: 'Licensing & Usage' },
       { to: '/partner/branding', icon: Globe, label: 'Branding & Domain' },
       { to: '/partner/training', icon: Users, label: 'Team Training' },

@@ -7,7 +7,9 @@
 // Money: MAD only (canonical pricing_config values via PRICING_CONFIG_V2).
 // ---------------------------------------------------------------------------
 import { partners } from '../data/partnerWorld';
-import { alerts, tickets, incidents } from '../data/demoOpsSeed';
+// Demo operational feeds live in demoMode.ts (single source of truth); they are
+// injected here via installPartnerOpsHandlers deps to avoid a circular import.
+import { alerts, tickets, incidents } from './demoOpsFeeds';
 import { quote, partnerTierFor } from './pricingEngine';
 import { PRICING_CONFIG_V2 } from '../data/pricingConfig';
 

@@ -12,6 +12,8 @@
 // Turning Demo Mode OFF instantly restores 100% real-backend behaviour.
 // ---------------------------------------------------------------------------
 
+import { bindDemoOpsFeeds } from './demoOpsFeeds';
+import { installPartnerOpsHandlers } from './partnerOpsDemo';
 import {
   demoTenants, demoDevices, demoAlertSeeds, demoTicketSeeds, demoPlaybookSeeds, demoTechnicians,
   computeDemoStats, isDemoWorldInstalled, markDemoWorldInstalled, DEMO_WORLD_VERSION,
@@ -650,6 +652,7 @@ const incListDemo = (query: URLSearchParams) => {
 // board is non-empty and every relationship (alert → incident → ticket) is
 // consistent with the same dataset the SIEM/ticket pages show.
 const incidents: any[] = [];
+bindDemoOpsFeeds(alerts, tickets, incidents);
 demoAlertSeeds
   .filter(a => ['critical', 'high'].includes(a.severity))
   .slice(0, 8)
@@ -2108,6 +2111,9 @@ export const demoStore = {
     // is scoped to its own partner id; cross-partner access returns 403 exactly
     // like the real backend would.
     if (root === 'partners') {
+      const __opsHandled = await partnerOpsTryHandle<T>(path, method, b);
+      if (__opsHandled !== undefined) return __opsHandled;
+
       const s = demoSession();
       const callerPartnerId = s.role === 'partner_admin' ? String(s.orgId ?? '') : null;
       const isPlatform = s.role === 'platform_admin';
@@ -2716,3 +2722,21 @@ export const demoStore = {
     throw httpErr(404, `Demo mode: no simulated handler for ${method} /api${path}`);
   },
 };
+
+// ---- Partner Phase-2/3 demo handlers (delegated to partnerOpsDemo.ts) ----
+const __partnerOps = installPartnerOpsHandlers({ httpErr, delay, demoSession });
+const stripApiPath = (p: string) => p.replace(/^\/api/, '').split('?')[0];
+// Paths handled by partnerOpsDemo.ts (Phase-2 ops + Phase-3 commercial). Everything
+// else under /api/partners keeps being served by the Phase-1 block above.
+function isPartnerOpsPath(path: string): boolean {
+  const joined = stripApiPath(path).split('/').filter(Boolean).join('/');   // 'partners/pid/...'
+  if (/^partners\/[^/]+\/(queue|handovers|health|impersonations|templates)(\/|$)/.test(joined)) return true;
+  if (/^partners\/[^/]+\/clients\/\d+\/(onboarding|offboarding)/.test(joined)) return true;
+  if (/^partners\/[^/]+\/billing\/(statement|invoice|analytics|export)/.test(joined)) return true;
+  if (/^partners\/(deals|quotes)(\/|$)/.test(joined)) return true;
+  return false;
+}
+async function partnerOpsTryHandle<T>(path: string, method: string, body: any): Promise<T | undefined> {
+  if (!isPartnerOpsPath(path)) return undefined;
+  return __partnerOps<T>(stripApiPath(path), method, body);
+}
