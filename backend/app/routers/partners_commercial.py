@@ -44,6 +44,7 @@ import hashlib
 import io
 import json
 import secrets
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal as D
 from typing import Any, Dict, List, Literal, Optional
@@ -67,6 +68,16 @@ router = APIRouter(prefix="/partners", tags=["Partner Portal Commercial"])
 
 DRA = PRICING_CONFIG["partner"]["dealRegistrationBonus"]          # {points: .05, months: 12}
 BONUS_WINDOW_DAYS = int(DRA["months"]) * 31                        # engine parity (pricing_engine.py:171)
+_LEGAL_SUFFIXES = {"sarl", "sarl", "sa", "sas", "eurl", "sh", "spa", "ltd", "inc", "llc", "gmbh", "sarlau"}
+
+
+def _normalize_company(name: str) -> str:
+    """Lowercase, strip punctuation and common legal suffixes -> conflict key."""
+    n = re.sub(r"[^a-z0-9 ]+", " ", (name or "").lower())
+    toks = [t for t in n.split() if t not in _LEGAL_SUFFIXES]
+    return " ".join(toks)
+
+
 PACK_IDS = ("starter", "pro", "souverain")                          # pricing_config packs
 DEAL_STATUSES = ("registered", "conflict", "approved", "rejected", "expired", "won")
 
@@ -151,7 +162,7 @@ def _deal_state(d: PartnerDealRegistration) -> str:
         return "won"
     if d.status == "rejected":
         return "rejected"
-    if d.approved_at and _now() - _naive(d.approved_at) > timedelta(days=BONUS_WINDOW_DAYS):
+    if d.approved_at and _naive(_now()) - _naive(d.approved_at) > timedelta(days=BONUS_WINDOW_DAYS):
         return "expired"
     return d.status if d.status in DEAL_STATUSES else "registered"
 
@@ -320,11 +331,13 @@ async def create_deal(pid: str, body: DealCreateIn,
                       db: AsyncSession = Depends(get_db)):
     partner = await _resolve_partner(pid, user, db)
     _rate_limit(f"deal:{user.id}", 10, 60)
-    norm = " ".join(body.prospect_company.lower().split())
+    norm = _normalize_company(body.prospect_company)
     # Conflict detection: another ACTIVE deal (ours or any partner's) on the same company.
-    others = (await db.execute(select(PartnerDealRegistration).where(
-        func.lower(PartnerDealRegistration.prospect_company).like(f"%{norm[:40]}%"),
+    # Match on a normalized key (lowercase, legal suffixes stripped, non-alnum removed)
+    # so "Acme Industries" vs "ACME Industries SARL" collide as required.
+    rows = (await db.execute(select(PartnerDealRegistration).where(
         PartnerDealRegistration.status.in_(("registered", "approved", "conflict"))))).scalars().all()
+    others = [d for d in rows if _normalize_company(d.prospect_company) == norm]
     clash_foreign = [d for d in others if d.partner_org_id != partner.id]
     clash_own = [d for d in others if d.partner_org_id == partner.id]
     if clash_own:
@@ -523,6 +536,7 @@ async def billing_statement(pid: str, client_org_id: int = Query(...), month: st
     line = _billable_for_client(child, st)
     tier = (await _partner_tier(db, partner))["tier"]
     out_line = _apply_tier(line, D(str(tier["discount"])), D(str(PRICING_CONFIG["partner"]["totalDiscountCap"])))
+    out_line = {**out_line, "tier": tier["id"]}   # tier id echoed on the statement line too
     return {"partner_org_id": partner.id, "month": month, "tier": tier["id"], "statement": out_line}
 
 
