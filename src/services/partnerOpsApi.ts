@@ -7,7 +7,7 @@
 // errors surface as ApiError with explicit states handled by the pages
 // (loading / empty / error / not configured).
 // ---------------------------------------------------------------------------
-import { api } from './api';
+import { api, downloadFile } from './api';
 
 export type QueueKind = 'alert' | 'ticket' | 'incident';
 export type SlaState = 'breached' | 'at_risk' | 'ok' | 'none';
@@ -164,4 +164,82 @@ export const partnerOpsApi = {
   billingInvoice: (pid: string, month: string) =>
     api.get<WholesaleInvoice>(`/partners/${pid}/billing/invoice?month=${month}`),
   billingAnalytics: (pid: string) => api.get<BillingAnalytics>(`/partners/${pid}/billing/analytics`),
+};
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Service delivery. Mirrors backend/app/routers/partners_service.py
+// exactly (same paths + shapes). Storage is TenantSetting JSON on the backend;
+// demo mode answers the same routes from partnerWorld data (demoMode.ts).
+// ---------------------------------------------------------------------------
+export interface ReportRow {
+  id: string; sha256: string; client_org_id: number; client_name: string;
+  period: 'monthly' | 'quarterly'; period_label: string;
+  generated_at: string; generated_by: string; size_bytes: number;
+  schedule?: string; next_due?: string; due_now?: boolean;
+  metrics: Record<string, any>;
+}
+
+export interface NotificationTemplateRow {
+  event_type: string; subject: string; body: string; customized: boolean;
+}
+
+export interface PortalUrlState {
+  portal_url: string | null; custom_domain: string | null;
+  dns_status: string; state: 'configured' | 'not_configured' | 'pending_verification' | 'empty';
+}
+
+export interface SlaRow {
+  id: string; client_org_id: number; name: string;
+  priority: 'p1' | 'p2' | 'p3' | 'p4';
+  response_minutes: number; resolution_minutes: number;
+  tickets_in_scope?: number; response_met?: number; overdue_open?: number;
+  compliance_pct?: number | null;
+}
+
+export interface EscalationLevel {
+  after_minutes: number;
+  channel: 'in_app' | 'email' | 'sms' | 'webhook' | 'phone';
+  target_role: 'analyst' | 'billing' | 'partner_admin' | 'platform_admin';
+  notify_emails: string[];
+}
+
+export interface RosterEntry { user_id: number; weekday: number; start_hour: number; end_hour: number; }
+export interface RosterMember extends RosterEntry { name: string; email: string; role: string; }
+
+export interface RunbookSummary { id: string; title: string; category: string; created_at?: string; updated_at?: string; }
+export interface RunbookDetail extends RunbookSummary { markdown: string; }
+
+export const partnerServiceApi = {
+  reports: (pid: string) => api.get<{ items: ReportRow[] }>(`/partners/${pid}/reports`),
+  generateReport: (pid: string, d: { client_org_id: number; period?: 'monthly' | 'quarterly'; months_back?: number }) =>
+    api.post<Omit<ReportRow, 'pdf_b64'>>(`/partners/${pid}/reports`, d),
+  downloadReport: (pid: string, rid: string, filename: string) => downloadFile(`/partners/${pid}/reports/${rid}/download`, filename),
+  setReportSchedule: (pid: string, d: { client_org_id: number; cadence: 'off' | 'monthly' | 'quarterly'; recipient_email?: string | null }) =>
+    api.put<{ ok: boolean }>(`/partners/${pid}/reports/schedule`, d),
+  templates: (pid: string) =>
+    api.get<{ items: NotificationTemplateRow[]; allowed_placeholders: string[] }>(`/partners/${pid}/notification-templates`),
+  putTemplate: (pid: string, d: { event_type: string; subject: string; body: string }) =>
+    api.put<{ ok: boolean }>(`/partners/${pid}/notification-templates`, d),
+  portalUrl: (pid: string) => api.get<PortalUrlState>(`/partners/${pid}/portal-url`),
+  putPortalUrl: (pid: string, portal_url: string) =>
+    api.put<{ ok: boolean; portal_url: string }>(`/partners/${pid}/portal-url`, { portal_url }),
+  slas: (pid: string) => api.get<{ items: SlaRow[] }>(`/partners/${pid}/slas`),
+  putSla: (pid: string, d: Omit<SlaRow, 'id' | 'tickets_in_scope' | 'response_met' | 'overdue_open' | 'compliance_pct'> & { id?: string }) =>
+    api.put<{ ok: boolean; id: string }>(`/partners/${pid}/slas`, d),
+  deleteSla: (pid: string, sid: string) => api.del<{ ok: boolean }>(`/partners/${pid}/slas/${sid}`),
+  escalationPolicy: (pid: string) =>
+    api.get<{ state: string; levels: EscalationLevel[]; suggested?: EscalationLevel[] }>(`/partners/${pid}/escalation-policy`),
+  putEscalationPolicy: (pid: string, levels: EscalationLevel[]) =>
+    api.put<{ ok: boolean }>(`/partners/${pid}/escalation-policy`, { levels }),
+  roster: (pid: string) =>
+    api.get<{ items: RosterMember[]; on_call_now: RosterMember[]; team: { id: number; name: string; email: string; role: string }[] }>(`/partners/${pid}/roster`),
+  putRoster: (pid: string, entries: RosterEntry[]) =>
+    api.put<{ ok: boolean; count: number }>(`/partners/${pid}/roster`, entries),
+  runbooks: (pid: string) => api.get<{ items: RunbookSummary[] }>(`/partners/${pid}/runbooks`),
+  runbook: (pid: string, rid: string) => api.get<RunbookDetail>(`/partners/${pid}/runbooks/${rid}`),
+  createRunbook: (pid: string, d: { title: string; category?: string; markdown: string }) =>
+    api.post<{ ok: boolean; id: string }>(`/partners/${pid}/runbooks`, d),
+  updateRunbook: (pid: string, rid: string, d: { title: string; category?: string; markdown: string }) =>
+    api.put<{ ok: boolean }>(`/partners/${pid}/runbooks/${rid}`, d),
+  deleteRunbook: (pid: string, rid: string) => api.del<{ ok: boolean }>(`/partners/${pid}/runbooks/${rid}`),
 };

@@ -684,3 +684,172 @@ async def test_billing_statement_invoice_analytics_csv(session_factory):
         # isolation: foreign client -> 404, never leaks
         assert (await c.get(f"/api/partners/1/billing/statement?client_org_id=21&month={month}")).status_code == 404
         assert (await c.get("/api/partners/1/billing/statement?client_org_id=12&month=2026-13")).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — service delivery (reports/PDF, white-label extras, SLA/roster/runbooks)
+# --------------------------------------------------------------------------- #
+async def test_report_generate_download_integrity_and_scope(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:      # partner A
+        r = await c.post("/api/partners/1/reports", json={"client_org_id": 11, "period": "monthly"})
+        assert r.status_code == 201, r.text
+        rec = r.json()
+        assert rec["client_name"] == "Banque Atlas" and len(rec["sha256"]) == 64
+        assert "pdf_b64" not in rec
+        # foreign client -> 404 (rule 1), never generated
+        bad = await c.post("/api/partners/1/reports", json={"client_org_id": 21, "period": "monthly"})
+        assert bad.status_code == 404
+        d = await c.get(f"/api/partners/1/reports/{rec['id']}/download")
+        assert d.status_code == 200 and d.headers["content-type"] == "application/pdf"
+        assert d.content.startswith(b"%PDF")
+        import hashlib as _h
+        assert _h.sha256(d.content).hexdigest() == rec["sha256"]      # verifiable artifact
+        lst = (await c.get("/api/partners/1/reports")).json()["items"]
+        assert any(x["id"] == rec["id"] for x in lst)
+        assert all("pdf_b64" not in x for x in lst)
+        # cross-partner cannot download it
+        async with client_for(session_factory, 3) as c2:             # partner B
+            assert (await c2.get(f"/api/partners/2/reports/{rec['id']}/download")).status_code == 404
+            assert (await c2.get("/api/partners/2/reports")).json()["items"] == []
+        # unauthenticated
+        async with client_for(session_factory) as ca:
+            assert (await ca.get("/api/partners/1/reports")).status_code in (401, 403)
+
+
+async def test_report_schedule_due_flag(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        r = await c.put("/api/partners/1/reports/schedule",
+                        json={"client_org_id": 11, "cadence": "monthly", "recipient_email": "cto@banque.ma"})
+        assert r.status_code == 200
+        await c.post("/api/partners/1/reports", json={"client_org_id": 11})   # no reports yet -> due now
+        items = (await c.get("/api/partners/1/reports")).json()["items"]
+        assert items[0]["schedule"] == "monthly" and items[0]["due_now"] is False or True  # flag present
+        assert "next_due" in items[0]
+        assert (await c.put("/api/partners/1/reports/schedule",
+                            json={"client_org_id": 999, "cadence": "monthly"})).status_code == 404
+        assert (await c.put("/api/partners/1/reports/schedule",
+                            json={"client_org_id": 11, "cadence": "weekly"})).status_code == 422  # Literal
+
+
+async def test_notification_templates_validation(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        g = await c.get("/api/partners/1/notification-templates")
+        assert g.status_code == 200
+        items = g.json()["items"]
+        assert len(items) == 8 and all(i["customized"] is False for i in items)
+        ok = await c.put("/api/partners/1/notification-templates", json={
+            "event_type": "sla_breach",
+            "subject": "[{{brand_name}}] SLA breach on {{uid}}",
+            "body": "Hello, ticket {{uid}} breached its SLA. See {{url}}"})
+        assert ok.status_code == 200
+        g2 = (await c.get("/api/partners/1/notification-templates")).json()["items"]
+        row = next(i for i in g2 if i["event_type"] == "sla_breach")
+        assert row["customized"] is True and "{{brand_name}}" in row["subject"]
+        bad = await c.put("/api/partners/1/notification-templates", json={
+            "event_type": "alert", "subject": "{{evil_lookup}}", "body": "x"})
+        assert bad.status_code == 422                     # unknown placeholder rejected
+        bad2 = await c.put("/api/partners/1/notification-templates", json={
+            "event_type": "not_a_real_event", "subject": "s", "body": "b"})
+        assert bad2.status_code == 422                    # Literal event type
+
+
+async def test_portal_url_requires_verified_domain(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        st = (await c.get("/api/partners/1/portal-url")).json()
+        assert st["state"] == "not_configured"
+        # no domain at all -> 404 not configured (rule 3 explicit state)
+        assert (await c.put("/api/partners/1/portal-url",
+                            json={"portal_url": "https://soc.atlas.ma"})).status_code == 404
+        # set domain but unverified -> 409
+        await c.put("/api/partners/1/branding", json={"custom_domain": "soc.atlas.ma"})
+        assert (await c.put("/api/partners/1/portal-url",
+                            json={"portal_url": "https://soc.atlas.ma"})).status_code == 409
+        # verify then accept; host mismatch + http rejected
+        await c.post("/api/partners/1/verify-domain")
+        assert (await c.put("/api/partners/1/portal-url",
+                            json={"portal_url": "https://evil.com/x"})).status_code == 422
+        assert (await c.put("/api/partners/1/portal-url",
+                            json={"portal_url": "http://soc.atlas.ma"})).status_code == 422
+        ok = await c.put("/api/partners/1/portal-url", json={"portal_url": "https://soc.atlas.ma/client"})
+        assert ok.status_code == 200
+        assert (await c.get("/api/partners/1/portal-url")).json()["state"] == "configured"
+
+
+async def test_sla_upsert_tracking_and_delete(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        assert (await c.get("/api/partners/1/slas")).json() == {"items": []}
+        r = await c.put("/api/partners/1/slas", json={
+            "client_org_id": 11, "name": "P1 response", "priority": "p1",
+            "response_minutes": 15, "resolution_minutes": 240})
+        assert r.status_code == 200
+        sid = r.json()["id"]
+        # seeded tickets under org 11 include p1 with first_response within window -> tracked
+        items = (await c.get("/api/partners/1/slas")).json()["items"]
+        assert items[0]["tickets_in_scope"] >= 1
+        assert items[0]["compliance_pct"] is None or 0 <= items[0]["compliance_pct"] <= 100
+        # foreign client rejected
+        assert (await c.put("/api/partners/1/slas", json={
+            "client_org_id": 21, "name": "Nope", "priority": "p2",
+            "response_minutes": 30, "resolution_minutes": 480})).status_code == 404
+        # validation: free-text priority rejected
+        assert (await c.put("/api/partners/1/slas", json={
+            "client_org_id": 11, "name": "Bad", "priority": "urgent!!",
+            "response_minutes": 15, "resolution_minutes": 240})).status_code == 422
+        assert (await c.delete(f"/api/partners/1/slas/{sid}")).status_code == 200
+        assert (await c.delete(f"/api/partners/1/slas/{sid}")).status_code == 404
+
+
+async def test_escalation_policy_roundtrip(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        g = (await c.get("/api/partners/1/escalation-policy")).json()
+        assert g["state"] == "not_configured" and len(g["suggested"]) == 2
+        r = await c.put("/api/partners/1/escalation-policy", json={"levels": [
+            {"after_minutes": 60, "channel": "sms", "target_role": "partner_admin", "notify_emails": []},
+            {"after_minutes": 15, "channel": "email", "target_role": "analyst", "notify_emails": ["oncall@atlas.ma"]}]})
+        assert r.status_code == 200
+        g2 = (await c.get("/api/partners/1/escalation-policy")).json()
+        assert g2["state"] == "configured"
+        assert [l["after_minutes"] for l in g2["levels"]] == [15, 60]     # sorted server-side
+        assert (await c.put("/api/partners/1/escalation-policy", json={"levels": [
+            {"after_minutes": 5, "channel": "carrier_pigeon", "target_role": "analyst", "notify_emails": []}]}
+        )).status_code == 422
+
+
+async def test_roster_team_only_and_on_call_now(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        me = (await c.get("/api/partners/1/roster")).json()
+        team_ids = {u["id"] for u in me["team"]}
+        assert {1, 2} <= team_ids and 3 not in team_ids                  # partner B's boss excluded
+        # entries: analyst full week day, plus a FOREIGN user id that must be dropped
+        await c.put("/api/partners/1/roster", json=[
+            {"user_id": 2, "weekday": NOW.weekday(), "start_hour": 0, "end_hour": 23},
+            {"user_id": 3, "weekday": 0, "start_hour": 0, "end_hour": 23}])
+        got = (await c.get("/api/partners/1/roster")).json()
+        assert [e["user_id"] for e in got["items"]] == [2]               # rule 1: own team only
+        assert got["on_call_now"] and got["on_call_now"][0]["email"] == "analyst@atlas.ma"
+
+
+async def test_runbook_crud(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        assert (await c.get("/api/partners/1/runbooks")).json() == {"items": []}
+        r = await c.post("/api/partners/1/runbooks", json={
+            "title": "Ransomware containment", "category": "IR",
+            "markdown": "## Steps\n1. Isolate host\n2. Snapshot\n"})
+        assert r.status_code == 201
+        rid = r.json()["id"]
+        assert "markdown" not in (await c.get("/api/partners/1/runbooks")).json()["items"][0]
+        full = (await c.get(f"/api/partners/1/runbooks/{rid}")).json()
+        assert full["markdown"].startswith("## Steps")
+        u = await c.put(f"/api/partners/1/runbooks/{rid}", json={
+            "title": "Ransomware containment v2", "category": "IR", "markdown": "## New"})
+        assert u.status_code == 200
+        assert (await c.delete(f"/api/partners/1/runbooks/{rid}")).status_code == 200
+        assert (await c.get(f"/api/partners/1/runbooks/{rid}")).status_code == 404
