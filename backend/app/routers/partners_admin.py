@@ -1,82 +1,56 @@
 """Phase 4 — Partner Program management (plateforme admin).
 
-Miroir EXACT des handlers `partners` de src/services/demoMode.ts :
-  PATCH  /partners/{pid}            update champs whitelistés   -> audit partner.updated
+DB-backed counterpart of the `partners` platform-admin handlers in
+src/services/demoMode.ts (PATCH / suspend / migrate / DELETE):
+
+  PATCH  /partners/{pid}            update whitelisted fields   -> audit partner.updated
   POST   /partners/{pid}/suspend    toggle active/suspended     -> audit partner.status_changed
-  POST   /partners/{pid}/migrate    Starter|Business|Scale      -> quotas + audit partner.migrated
+  POST   /partners/{pid}/migrate    FORCE a pricing_config partner tier
+                                    (registered|silver|gold|platinum) -> audit partner.migrated
   DELETE /partners/{pid}            bloqué 409 si end-clients   -> audit partner.deleted
 
-Règle d'accès : platform_admin uniquement (require_role), exactement comme la
-démo qui renvoie 403 « Réservé aux administrateurs plateforme ».
+Access: platform_admin only (require_role), exactly like the demo's
+« Réservé aux administrateurs plateforme » 403.
 
-Persistance : les partenaires sont stockés dans la table `organizations` avec
-le préfixe d'identifiant `partner-` dans le champ `contact_email` ou via le
-tag name "PARTNER:". Pour rester au plus près de la démo sans schéma lourd, on
-utilise ici un registre en mémoire alimenté par partnerWorld seed ; la version
-PostgreSQL complète est fournie par la migration b4e77f19c0a2 (table partners
-optionnelle) — ce routeur reste interchangeable.
+Persistence: real `organizations` rows flagged is_partner (migration
+i9j1k3m5n7o9). The former in-memory _PartnerStore seeded from a non-existent
+partner_seed module and the EUR Starter/Business/Scale plans are removed —
+currency/tiers now come from core/pricing_config.json (rule 4). The portal
+read/write endpoints (GET list/stats/license/branding/clients…) live in
+routers/partners.py; this router keeps only the platform-admin verbs.
 """
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.database import get_db
-from app.models import User, AuditLog
+from app.models import User, Organization, AuditLog
 from app.schemas import PartnerUpdateIn, PartnerMigrateIn
 from app.core.security import require_role
+from app.services.pricing_engine import PRICING_CONFIG
 
 router = APIRouter(prefix="/partners", tags=["Partner Admin"])
 
-# Quotas miroirs de demoMode.ts (plans -> seats/devices/price EUR)
-PLAN_QUOTAS = {
-    "Starter":  {"seats": 5,  "devices": 300,  "price": 190},
-    "Business": {"seats": 15, "devices": 1200, "price": 520},
-    "Scale":    {"seats": 40, "devices": 4000, "price": 1180},
-}
+TIER_IDS = [t["id"] for t in PRICING_CONFIG["partner"]["tiers"]]
 
 
-def _audit(current_user: User, action: str, details: str) -> AuditLog:
+def _audit(current_user: User, action: str, details: str, org_id: int) -> AuditLog:
     return AuditLog(
         actor_id=current_user.id,
         actor_name=current_user.name or current_user.email,
-        actor_role=current_user.role, org_id=None,
+        actor_role=current_user.role, org_id=org_id,
         action=action, resource="partner", resource_id=action,
         details=details, outcome="success",
     )
 
 
-class _PartnerStore:
-    """Registre minimal aligné sur partnerWorld.ts (seed) — remplacé par la DB
-    dès que la table partners est migrée. Les routes restent identiques."""
-    def __init__(self):
-        self._items: dict[str, dict] = {}
-
-    def seed(self, partners: list[dict]):
-        for p in partners:
-            self._items[p["id"]] = p
-
-    def get(self, pid: str) -> dict:
-        if pid not in self._items:
-            raise HTTPException(404, f"Partenaire {pid} introuvable")
-        return self._items[pid]
-
-    def all(self) -> list[dict]:
-        return list(self._items.values())
-
-    def remove(self, pid: str):
-        self._items.pop(pid, None)
-
-
-store = _PartnerStore()
-
-
-def ensure_seeded():
-    """Seed paresseux depuis partnerWorld si la DB n'est pas branchée."""
-    if store._items:
-        return
-    try:  # lecture du module TS impossible en Python -> fallback statique léger
-        from app.services.partner_seed import PARTNERS_SEED
-        store.seed(PARTNERS_SEED)
-    except Exception:
-        pass
+async def _get_partner(pid: str, db: AsyncSession) -> Organization:
+    if not str(pid).isdigit():
+        raise HTTPException(404, f"Partenaire {pid} introuvable")
+    org = (await db.execute(select(Organization).where(Organization.id == int(pid)))).scalar_one_or_none()
+    if org is None or not org.is_partner:
+        raise HTTPException(404, f"Partenaire {pid} introuvable")
+    return org
 
 
 @router.patch("/{pid}")
@@ -85,16 +59,30 @@ async def update_partner(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin")),
 ):
-    ensure_seeded()
-    p = store.get(pid)
+    org = await _get_partner(pid, db)
+    patch = body.model_dump(exclude_none=True)
     changed = []
-    for k, v in body.model_dump(exclude_none=True).items():
-        p[k] = v
+    for k, v in patch.items():
+        if k == "company":
+            org.name = v
+        elif k == "contact_email":
+            org.contact_email = v
+        elif k == "tier":
+            org.partner_tier_override = v
+        elif k == "status":
+            org.status = v
+        elif k == "support_sla":
+            org.support_sla = v
+        else:
+            continue
         changed.append(k)
     db.add(_audit(current_user, "partner.updated",
-                  f"Partenaire {p.get('company')} modifié ({', '.join(changed)})"))
+                  f"Partenaire {org.name} modifié ({', '.join(changed)})", org.id))
     await db.commit()
-    return p
+    await db.refresh(org)
+    return {"id": str(org.id), "company": org.name, "contact_email": org.contact_email,
+            "tier_override": org.partner_tier_override, "status": org.status,
+            "support_sla": org.support_sla or ""}
 
 
 @router.post("/{pid}/suspend")
@@ -103,13 +91,12 @@ async def suspend_partner(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin")),
 ):
-    ensure_seeded()
-    p = store.get(pid)
-    p["status"] = "suspended" if p.get("status") != "suspended" else "active"
+    org = await _get_partner(pid, db)
+    org.status = "suspended" if org.status != "suspended" else "active"
     db.add(_audit(current_user, "partner.status_changed",
-                  f"Partenaire {p.get('company')} → {p['status']}"))
+                  f"Partenaire {org.name} → {org.status}", org.id))
     await db.commit()
-    return {"status": p["status"]}
+    return {"status": org.status}
 
 
 @router.post("/{pid}/migrate")
@@ -118,19 +105,21 @@ async def migrate_partner(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin")),
 ):
-    ensure_seeded()
-    target = str(body.plan or "")
-    if target not in PLAN_QUOTAS:
-        raise HTTPException(400, f"Plan invalide — attendu: {'|'.join(PLAN_QUOTAS)}")
-    p = store.get(pid)
-    q = PLAN_QUOTAS[target]
-    lic = p.setdefault("license", {})
-    lic.update({"plan": target, "client_seats": q["seats"],
-                "device_allowance": q["devices"], "price_month_eur": q["price"]})
+    """Repurposed (Phase 1): force a pricing_config partner tier instead of the
+    old EUR Starter/Business/Scale plans. The override pins the license tier in
+    routers/partners._license_payload; automatic progression by managed units
+    resumes when the override is cleared (tier=null via PATCH)."""
+    org = await _get_partner(pid, db)
+    target = str(body.tier or "").lower()
+    if target not in TIER_IDS:
+        raise HTTPException(400, f"Tier invalide — attendu: {'|'.join(TIER_IDS)}")
+    org.partner_tier_override = target
+    tier_def = next(t for t in PRICING_CONFIG["partner"]["tiers"] if t["id"] == target)
     db.add(_audit(current_user, "partner.migrated",
-                  f"Licence {p.get('company')} migrée vers {target} ({q['price']} €/mois)"))
+                  f"Licence {org.name} forcée vers le tier {target} "
+                  f"(remise {int(tier_def['discount'] * 100)} %, MAD — pricing_config)", org.id))
     await db.commit()
-    return lic
+    return {"tier": target, "discount": tier_def["discount"], "currency": PRICING_CONFIG["currency"]}
 
 
 @router.delete("/{pid}", status_code=204)
@@ -139,14 +128,15 @@ async def delete_partner(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin")),
 ):
-    ensure_seeded()
-    p = store.get(pid)
-    clients = p.get("end_clients") or []
-    if len(clients) > 0:
+    org = await _get_partner(pid, db)
+    children = (await db.execute(select(Organization).where(Organization.parent_org_id == org.id))).scalars().all()
+    if len(children) > 0:
         raise HTTPException(409,
-                            f"Impossible de supprimer : {len(clients)} client(s) final(aux) "
+                            f"Impossible de supprimer : {len(children)} client(s) final(aux) "
                             "encore rattaché(s). Migrez-les d'abord.")
-    store.remove(pid)
+    org.is_partner = False
+    org.partner_code = None
+    org.partner_tier_override = None
     db.add(_audit(current_user, "partner.deleted",
-                  f"Partenaire {p.get('company')} supprimé du programme"))
+                  f"Partenaire {org.name} supprimé du programme", org.id))
     await db.commit()

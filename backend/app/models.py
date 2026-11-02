@@ -36,6 +36,12 @@ class Organization(Base):
     contract_start = Column(DateTime)
     contract_end = Column(DateTime)
     monthly_revenue = Column(Integer, default=0)
+    # --- Partner Program (MSSP): org is a white-label reseller; its end-clients
+    # are the orgs with parent_org_id == this id. See routers/partners.py. ---
+    is_partner = Column(Boolean, nullable=False, default=False, index=True)
+    partner_code = Column(String(16))          # e.g. MSP-ATL
+    partner_tier_override = Column(String(16))  # force registered|silver|gold|platinum
+    support_sla = Column(String(200))           # what WE owe the partner
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

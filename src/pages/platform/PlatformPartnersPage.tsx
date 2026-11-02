@@ -12,7 +12,7 @@ import { partnersApi, type PartnerProgramStats } from '../../services/partnersAp
 import { partnersAdminApi } from '../../services/api';
 import type { Partner } from '../../data/partnerWorld';
 
-const fmtEur = (n: number) => `${n.toLocaleString('fr-FR')} €`;
+const fmtMad = (n: number) => `${Math.round(n).toLocaleString('fr-FR')} MAD`;
 
 const dnsBadge = (s: string) =>
   s === 'verified'
@@ -59,7 +59,7 @@ export default function PlatformPartnersPage() {
   const suspend = (p: Partner) => act(p.id, () => partnersAdminApi.suspend(p.id));
   const reactivate = (p: Partner) => act(p.id, () => partnersAdminApi.update(p.id, { status: 'active' }));
   const migrate = (p: Partner) => {
-    const target = window.prompt(`Migrer ${p.company} vers un nouveau plan licence (Starter / Business / Scale) — actuel : ${p.license.plan}`, p.license.plan);
+    const target = window.prompt(`Forcer un tier partenaire (registered / silver / gold / platinum — pricing_config) — actuel : ${p.license.plan}`, p.license.plan);
     if (!target || !['Starter', 'Business', 'Scale'].includes(target)) return;
     void act(p.id, () => partnersAdminApi.migrate(p.id, target as 'Starter' | 'Business' | 'Scale'));
   };
@@ -111,8 +111,8 @@ export default function PlatformPartnersPage() {
 
       {stats && (
         <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 text-sm text-[var(--ic-text)] flex flex-wrap gap-x-8 gap-y-1">
-          <span>Revenu wholesale (Infracentra) : <b className="text-[var(--ic-heading)]">{fmtEur(stats.wholesale_mrr_eur)} /mois</b></span>
-          <span>Revenu retail canal : <b className="text-[var(--ic-heading)]">{fmtEur(stats.retail_mrr_eur)} /mois</b></span>
+          <span>Revenu wholesale (Infracentra) : <b className="text-[var(--ic-heading)]">{fmtMad(stats.wholesale_mrr_mad)} /mois</b></span>
+          <span>Revenu retail canal : <b className="text-[var(--ic-heading)]">{fmtMad(stats.retail_mrr_mad)} /mois</b></span>
           <span className="text-[var(--ic-muted)]">Le partenaire facture ses clients finaux ; Infracentra ne facture que les licences partenaires.</span>
         </div>
       )}
@@ -133,7 +133,7 @@ export default function PlatformPartnersPage() {
                 <span className="ml-auto inline-flex items-center gap-1 text-xs" style={{ color: p.branding.primary_color }}>
                   <Palette className="w-3.5 h-3.5" /> {p.branding.brand_name} {dnsBadge(p.branding.dns_status)}
                 </span>
-                <span className="text-xs text-[var(--ic-muted)] w-40 text-right">{lic.plan} · {fmtEur(lic.price_month_eur)}/mois</span>
+                <span className="text-xs text-[var(--ic-muted)] w-40 text-right">{lic.plan} · {fmtMad(lic.price_month_mad)}/mois</span>
                 <span className="text-xs text-[var(--ic-muted)]">{open ? '▲' : '▼'}</span>
               </button>
 
@@ -173,7 +173,7 @@ export default function PlatformPartnersPage() {
                   <label className="space-y-1"><span className="text-xs text-[var(--ic-muted)]">Palier</span>
                     <select className="w-full border border-[var(--ic-border)] rounded-lg px-2 py-1 bg-[var(--ic-surface)] text-[var(--ic-text)]"
                       value={editForm.tier} onChange={e => setEditForm({ ...editForm, tier: e.target.value })}>
-                      {['Silver', 'Gold', 'Platinum'].map(t => <option key={t}>{t}</option>)}</select></label>
+                      {['registered', 'silver', 'gold', 'platinum'].map(t => <option key={t}>{t}</option>)}</select></label>
                   <div className="md:col-span-4 flex gap-2 justify-end">
                     <button onClick={() => setEditId(null)} className="text-xs border border-[var(--ic-border)] rounded-lg px-3 py-1.5 text-[var(--ic-muted)]">Annuler</button>
                     <button onClick={saveEdit} className="text-xs bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg px-3 py-1.5 font-medium">Enregistrer</button>
@@ -240,7 +240,7 @@ export default function PlatformPartnersPage() {
                               <td className="px-3 py-2 text-[var(--ic-text)]">{c.devices}</td>
                               <td className="px-3 py-2 text-[var(--ic-text)]">{c.users}</td>
                               <td className="px-3 py-2 text-[var(--ic-text)]">{c.plan}</td>
-                              <td className="px-3 py-2 text-emerald-400">{fmtEur(c.monthly_mrr_eur * 12)}</td>
+                              <td className="px-3 py-2 text-emerald-400">{fmtMad(c.monthly_mrr_mad * 12)}</td>
                               <td className="px-3 py-2"><span className={`px-2 py-0.5 rounded-full border text-[11px] ${statusBadge[c.status === 'active' ? 'active' : c.status === 'onboarding' ? 'trial' : 'suspended']}`}>{c.status}</span></td>
                             </tr>
                           ))}

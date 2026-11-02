@@ -18,12 +18,11 @@ import { partnerValueProfile, partnerProgramTiers, type PartnerValueProfile } fr
 import { PRICING_CONFIG_V2, PACK_SERVICES, SERVICE_LABELS_FR, fmtMad, type PackId } from '../../data/pricingConfig';
 import { quote, billableUnits, partnerTierFor, type QuoteInputs } from '../../services/pricingEngine';
 import {
-  Building2, Server, Users, Euro, Gauge, Globe, CheckCircle2, Clock, XCircle,
+  Building2, Server, Users, Coins, Gauge, Globe, CheckCircle2, Clock, XCircle,
   Loader2, Plus, Trash2, Palette, Upload, RefreshCw, GraduationCap, Award,
   TrendingUp, ShieldCheck, Percent, Headphones, Star, BarChart3, AlertTriangle, CalendarDays, KeyRound, Mail,
 } from 'lucide-react';
 
-const fmtEur = (n: number) => `${n.toLocaleString('fr-FR')} €`;
 
 function Card({ title, icon: Icon, children, className = '' }: any) {
   return (
@@ -103,8 +102,8 @@ export function PartnerDashboardPage() {
   if (error || !partner) return <ErrorBox msg={error ?? 'Partner introuvable'} onRetry={reload} />;
 
   const lic = partner.license;
-  const retailMrr = partner.end_clients.reduce((a, c) => a + c.monthly_mrr_eur, 0);
-  const margin = retailMrr ? Math.round(((retailMrr - lic.price_month_eur) / retailMrr) * 100) : 0;
+  const retailMrr = partner.end_clients.reduce((a, c) => a + c.monthly_mrr_mad, 0);
+  const margin = retailMrr ? Math.round(((retailMrr - lic.price_month_mad) / retailMrr) * 100) : 0;
   const onboarding = partner.end_clients.filter(c => c.status === 'onboarding').length;
 
   return (
@@ -120,8 +119,8 @@ export function PartnerDashboardPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Kpi label="Mes clients" value={String(partner.end_clients.length)} sub={`${lic.client_seats} sièges licence`} accent="#22d3ee" />
         <Kpi label="Périphériques gérés" value={String(lic.devices_used)} sub={`alloués : ${lic.device_allowance}`} accent="#a78bfa" />
-        <Kpi label="CA facturé à mes clients" value={fmtEur(retailMrr)} sub="/ mois" accent="#34d399" />
-        <Kpi label="Ma marge" value={`${margin} %`} sub={`wholesale ${fmtEur(lic.price_month_eur)}/mois`} accent="#fbbf24" />
+        <Kpi label="CA facturé à mes clients" value={fmtMad(retailMrr)} sub="/ mois" accent="#34d399" />
+        <Kpi label="Ma marge" value={`${margin} %`} sub={`wholesale ${fmtMad(lic.price_month_mad)}/mois`} accent="#fbbf24" />
       </div>
 
       <div className="grid md:grid-cols-2 gap-5">
@@ -135,7 +134,7 @@ export function PartnerDashboardPage() {
                 <div><div className="text-lg font-bold text-cyan-400">{value.csat}</div><div className="text-[11px] text-[var(--ic-muted)]">CSAT /5</div></div>
                 <div><div className="text-lg font-bold text-amber-400">{value.churn_rate_pct}%</div><div className="text-[11px] text-[var(--ic-muted)]">Churn clients</div></div>
               </div>
-              <div className="pt-2"><MiniLine data={value.history.map(h => h.mrr_eur)} color={partner.branding.primary_color} /><div className="text-[11px] text-[var(--ic-muted)] mt-1">Évolution du CA mensuel (8 derniers mois)</div></div>
+              <div className="pt-2"><MiniLine data={value.history.map(h => h.mrr_mad)} color={partner.branding.primary_color} /><div className="text-[11px] text-[var(--ic-muted)] mt-1">Évolution du CA mensuel (8 derniers mois)</div></div>
             </div>
           )}
         </Card>
@@ -165,7 +164,7 @@ export function PartnerDashboardPage() {
                   <td className="py-2.5 pr-4 text-[var(--ic-muted)]">{c.plan}</td>
                   <td className="py-2.5 pr-4">{c.devices}</td>
                   <td className="py-2.5 pr-4">{c.users}</td>
-                  <td className="py-2.5 pr-4 text-emerald-400">{fmtEur(c.monthly_mrr_eur)}</td>
+                  <td className="py-2.5 pr-4 text-emerald-400">{fmtMad(c.monthly_mrr_mad)}</td>
                   <td className="py-2.5"><StatusBadge s={c.status} /></td>
                 </tr>
               ))}
@@ -183,7 +182,7 @@ export function PartnerDashboardPage() {
 // ===========================================================================
 export function PartnerClientsPage() {
   const { partner, loading, error, reload } = usePartnerData();
-  const [form, setForm] = useState({ name: '', industry: '', city: 'Casablanca', plan: 'SME', devices: '', users: '', monthly_mrr_eur: '' });
+  const [form, setForm] = useState({ name: '', industry: '', city: 'Casablanca', plan: 'SME', devices: '', users: '', monthly_mrr_mad: '' });
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -195,8 +194,8 @@ export function PartnerClientsPage() {
   const addClient = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setMsg(null);
     try {
-      await partnersApi.addClient(partner.id, { ...form, devices: Number(form.devices), users: Number(form.users), monthly_mrr_eur: Number(form.monthly_mrr_eur) });
-      setForm({ name: '', industry: '', city: 'Casablanca', plan: 'SME', devices: '', users: '', monthly_mrr_eur: '' });
+      await partnersApi.addClient(partner.id, { ...form, devices: Number(form.devices), users: Number(form.users), monthly_mrr_mad: Number(form.monthly_mrr_mad) });
+      setForm({ name: '', industry: '', city: 'Casablanca', plan: 'SME', devices: '', users: '', monthly_mrr_mad: '' });
       await reload();
     } catch (err: any) { setMsg(err?.message ?? 'Erreur'); }
     finally { setBusy(false); }
@@ -225,7 +224,7 @@ export function PartnerClientsPage() {
           </select>
           <input className={inp} type="number" min="1" placeholder="Périphériques estimés *" required value={form.devices} onChange={e => setForm({ ...form, devices: e.target.value })} />
           <input className={inp} type="number" min="1" placeholder="Utilisateurs *" required value={form.users} onChange={e => setForm({ ...form, users: e.target.value })} />
-          <input className={inp} type="number" min="0" placeholder="Prix mensuel facturé (€) *" required value={form.monthly_mrr_eur} onChange={e => setForm({ ...form, monthly_mrr_eur: e.target.value })} />
+          <input className={inp} type="number" min="0" placeholder="Prix mensuel facturé (MAD HT) *" required value={form.monthly_mrr_mad} onChange={e => setForm({ ...form, monthly_mrr_mad: e.target.value })} />
           <button disabled={busy || seatsLeft <= 0} className={`${inp} !w-auto justify-self-start cursor-pointer font-semibold text-slate-900 disabled:opacity-40`} style={{ background: partner.branding.primary_color }}>
             {busy ? 'Création…' : seatsLeft <= 0 ? 'Licence pleine' : 'Créer le tenant client'}
           </button>
@@ -243,7 +242,7 @@ export function PartnerClientsPage() {
               <div className="text-xs text-[var(--ic-muted)] mt-2 flex gap-4">
                 <span className="flex items-center gap-1"><Server className="w-3.5 h-3.5" />{c.devices} dev</span>
                 <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" />{c.users} users</span>
-                <span className="flex items-center gap-1 text-emerald-400"><Euro className="w-3.5 h-3.5" />{fmtEur(c.monthly_mrr_eur)}/mois</span>
+                <span className="flex items-center gap-1 text-emerald-400"><Coins className="w-3.5 h-3.5" />{fmtMad(c.monthly_mrr_mad)}/mois</span>
               </div>
             </div>
             <button onClick={() => remove(c)} className="text-[var(--ic-muted)] hover:text-rose-400 cursor-pointer" title="Retirer"><Trash2 className="w-4 h-4" /></button>
@@ -275,7 +274,7 @@ export function PartnerLicensingPage() {
             <li>{lic.client_seats} sièges clients finaux</li>
             <li>{lic.device_allowance} périphériques supervisés</li>
             <li>{svcCount} services inclus {lic.ticketing ? '+ Advanced Ticketing' : ''}</li>
-            <li>Revente dès {fmtEur(lic.resale_price_from_eur)}/client/mois</li>
+            <li>Revente dès {fmtMad(lic.resale_price_from_mad)}/client/mois</li>
           </ul>
         </Card>
         <Card title="Consommation" icon={Gauge}>
@@ -287,9 +286,9 @@ export function PartnerLicensingPage() {
         </Card>
         <Card title="Économie" icon={Percent}>
           <div className="text-sm space-y-2">
-            <div className="flex justify-between"><span className="text-[var(--ic-muted)]">Wholesale (à Infracentra)</span><b>{fmtEur(lic.price_month_eur)}/mois</b></div>
-            <div className="flex justify-between"><span className="text-[var(--ic-muted)]">Retail facturé (mes clients)</span><b className="text-emerald-400">{fmtEur(partner.end_clients.reduce((a, c) => a + c.monthly_mrr_eur, 0))}/mois</b></div>
-            <div className="flex justify-between border-t border-[var(--ic-border)] pt-2"><span className="text-[var(--ic-muted)]">Marge brute</span><b style={{ color: partner.branding.primary_color }}>{fmtEur(Math.max(0, partner.end_clients.reduce((a, c) => a + c.monthly_mrr_eur, 0) - lic.price_month_eur))}/mois</b></div>
+            <div className="flex justify-between"><span className="text-[var(--ic-muted)]">Wholesale (à Infracentra, MAD HT)</span><b>{fmtMad(lic.price_month_mad)}/mois</b></div>
+            <div className="flex justify-between"><span className="text-[var(--ic-muted)]">Retail facturé (mes clients)</span><b className="text-emerald-400">{fmtMad(partner.end_clients.reduce((a, c) => a + c.monthly_mrr_mad, 0))}/mois</b></div>
+            <div className="flex justify-between border-t border-[var(--ic-border)] pt-2"><span className="text-[var(--ic-muted)]">Marge brute</span><b style={{ color: partner.branding.primary_color }}>{fmtMad(Math.max(0, partner.end_clients.reduce((a, c) => a + c.monthly_mrr_mad, 0) - lic.price_month_mad))}/mois</b></div>
             <p className="text-[11px] text-[var(--ic-muted)] pt-2">Maintenance plateforme, mises à jour et formation continue de vos équipes sont incluses dans le wholesale.</p>
           </div>
         </Card>
@@ -666,9 +665,9 @@ export function PartnerValuePage() {
           </div>
         </Card>
         <Card title="Historique 8 mois" icon={BarChart3}>
-          <MiniLine data={value.history.map(h => h.mrr_eur)} color={partner.branding.primary_color} />
+          <MiniLine data={value.history.map(h => h.mrr_mad)} color={partner.branding.primary_color} />
           <div className="grid grid-cols-4 gap-2 mt-4 text-center">
-            {value.history.slice(-4).map(h => (<div key={h.month} className="bg-[var(--ic-surface)] rounded-lg p-2"><div className="text-xs font-bold text-emerald-400">{fmtEur(h.mrr_eur)}</div><div className="text-[10px] text-[var(--ic-muted)]">{h.month} · {h.clients} cl.</div></div>))}
+            {value.history.slice(-4).map(h => (<div key={h.month} className="bg-[var(--ic-surface)] rounded-lg p-2"><div className="text-xs font-bold text-emerald-400">{fmtMad(h.mrr_mad)}</div><div className="text-[10px] text-[var(--ic-muted)]">{h.month} · {h.clients} cl.</div></div>))}
           </div>
         </Card>
       </div>

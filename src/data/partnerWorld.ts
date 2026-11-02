@@ -8,15 +8,19 @@
 
 export type PartnerStatus = 'prospect' | 'trial' | 'active' | 'suspended';
 
+// Tier ids & discounts come from core/pricing_config.json ("partner" block) —
+// single source of truth, currency MAD. Never hardcode tiers here.
+export type PartnerTierId = 'registered' | 'silver' | 'gold' | 'platinum';
+
 export interface PartnerLicense {
   id: string;
-  plan: 'Starter' | 'Business' | 'Scale';
+  plan: PartnerTierId;         // pricing_config partner tier (replaces Starter/Business/Scale)
   client_seats: number;        // max end-client tenants the partner may run
   client_seats_used: number;
   device_allowance: number;    // monitored devices included
   devices_used: number;
-  price_month_eur: number;     // wholesale paid to Infracentra
-  resale_price_from_eur: number; // suggested retail per client/month
+  price_month_mad: number;     // wholesale paid to Infracentra (MAD HT / month)
+  resale_price_from_mad: number; // suggested retail per client/month (MAD HT)
   margin_pct: number;          // current blended margin
   renews_on: string;           // ISO date
   services_included: string[]; // catalog service ids licensed
@@ -43,7 +47,7 @@ export interface PartnerEndClient {
   devices: number;
   users: number;
   plan: string;                   // retail plan sold by the partner
-  monthly_mrr_eur: number;        // revenue the partner bills the end-client
+  monthly_mrr_mad: number;        // revenue the partner bills the end-client (MAD HT)
   status: 'active' | 'onboarding' | 'suspended';
   since: string;
 }
@@ -58,7 +62,7 @@ export interface Partner {
   phone: string;
   status: PartnerStatus;
   signed_on: string;
-  tier: 'Silver' | 'Gold' | 'Platinum';
+  tier: PartnerTierId;
   license: PartnerLicense;
   branding: WhiteLabelConfig;
   end_clients: PartnerEndClient[];
@@ -79,12 +83,12 @@ export const partners: Partner[] = [
     phone: '+212 522 450 120',
     status: 'active',
     signed_on: MA2026('2026-01-15'),
-    tier: 'Gold',
+    tier: 'gold',
     license: {
-      id: 'lic-atlas-scale', plan: 'Scale',
+      id: 'lic-atlas-gold', plan: 'gold',
       client_seats: 15, client_seats_used: 9,
       device_allowance: 750, devices_used: 412,
-      price_month_eur: 1850, resale_price_from_eur: 390, margin_pct: 58,
+      price_month_mad: 20350, resale_price_from_mad: 4290, margin_pct: 58,
       renews_on: '2027-01-15',
       services_included: ['all'], ticketing: true,
     },
@@ -94,10 +98,10 @@ export const partners: Partner[] = [
       dns_status: 'verified', email_sender: 'alerts@atlascyber.ma', hide_infracentra: true,
     },
     end_clients: [
-      { id: 'ec-atlas-1', partner_id: 'partner-atlas', name: 'Comptoir Zerktouni', industry: 'Retail', city: 'Casablanca', devices: 64, users: 41, plan: 'Pro', monthly_mrr_eur: 520, status: 'active', since: '2026-02-01' },
-      { id: 'ec-atlas-2', partner_id: 'partner-atlas', name: 'Clinique Al Hayat', industry: 'Santé', city: 'Rabat', devices: 88, users: 60, plan: 'Enterprise', monthly_mrr_eur: 780, status: 'active', since: '2026-02-18' },
-      { id: 'ec-atlas-3', partner_id: 'partner-atlas', name: 'Transports Phénix SARL', industry: 'Logistique', city: 'Tanger', devices: 45, users: 22, plan: 'Pro', monthly_mrr_eur: 460, status: 'active', since: '2026-03-05' },
-      { id: 'ec-atlas-4', partner_id: 'partner-atlas', name: 'Ecole Mohammadia', industry: 'Éducation', city: 'Marrakech', devices: 120, users: 300, plan: 'Enterprise', monthly_mrr_eur: 890, status: 'onboarding', since: '2026-09-20' },
+      { id: 'ec-atlas-1', partner_id: 'partner-atlas', name: 'Comptoir Zerktouni', industry: 'Retail', city: 'Casablanca', devices: 64, users: 41, plan: 'Pro', monthly_mrr_mad: 5720, status: 'active', since: '2026-02-01' },
+      { id: 'ec-atlas-2', partner_id: 'partner-atlas', name: 'Clinique Al Hayat', industry: 'Santé', city: 'Rabat', devices: 88, users: 60, plan: 'Enterprise', monthly_mrr_mad: 8580, status: 'active', since: '2026-02-18' },
+      { id: 'ec-atlas-3', partner_id: 'partner-atlas', name: 'Transports Phénix SARL', industry: 'Logistique', city: 'Tanger', devices: 45, users: 22, plan: 'Pro', monthly_mrr_mad: 5060, status: 'active', since: '2026-03-05' },
+      { id: 'ec-atlas-4', partner_id: 'partner-atlas', name: 'Ecole Mohammadia', industry: 'Éducation', city: 'Marrakech', devices: 120, users: 300, plan: 'Enterprise', monthly_mrr_mad: 9790, status: 'onboarding', since: '2026-09-20' },
     ],
     training: { completed: ['SOC L1 triage', 'Ticketing avancé', 'Reporting client'], pending: ['Playbooks SOAR', 'Hunting'] },
     support_sla: 'Réponse 4h ouvrée · Maintenance & mises à jour incluses',
@@ -112,12 +116,12 @@ export const partners: Partner[] = [
     phone: '+212 528 223 410',
     status: 'active',
     signed_on: MA2026('2026-04-02'),
-    tier: 'Silver',
+    tier: 'silver',
     license: {
-      id: 'lic-oasis-business', plan: 'Business',
+      id: 'lic-oasis-silver', plan: 'silver',
       client_seats: 8, client_seats_used: 5,
       device_allowance: 300, devices_used: 187,
-      price_month_eur: 950, resale_price_from_eur: 320, margin_pct: 47,
+      price_month_mad: 10460, resale_price_from_mad: 3500, margin_pct: 47,
       renews_on: '2027-04-02',
       services_included: ['threat-intel', 'incident-response', 'network-monitoring', 'vulnerability-scanning', 'patch-management', 'backup-dr', 'endpoint-protection', 'dns-filtering', 'advanced-ticketing'],
       ticketing: true,
@@ -128,9 +132,9 @@ export const partners: Partner[] = [
       dns_status: 'pending_verification', email_sender: 'noc@oasisit.ma', hide_infracentra: true,
     },
     end_clients: [
-      { id: 'ec-oasis-1', partner_id: 'partner-oasis', name: 'Immobilière du Détroit', industry: 'Immobilier', city: 'Tanger', devices: 32, users: 18, plan: 'SME', monthly_mrr_eur: 280, status: 'active', since: '2026-05-10' },
-      { id: 'ec-oasis-2', partner_id: 'partner-oasis', name: 'AgroExport Souss', industry: 'Agro-industrie', city: 'Agadir', devices: 58, users: 35, plan: 'Pro', monthly_mrr_eur: 490, status: 'active', since: '2026-05-22' },
-      { id: 'ec-oasis-3', partner_id: 'partner-oasis', name: 'Filerie du Nord', industry: 'Industrie', city: 'Tétouan', devices: 71, users: 44, plan: 'Pro', monthly_mrr_eur: 510, status: 'active', since: '2026-06-14' },
+      { id: 'ec-oasis-1', partner_id: 'partner-oasis', name: 'Immobilière du Détroit', industry: 'Immobilier', city: 'Tanger', devices: 32, users: 18, plan: 'SME', monthly_mrr_mad: 3080, status: 'active', since: '2026-05-10' },
+      { id: 'ec-oasis-2', partner_id: 'partner-oasis', name: 'AgroExport Souss', industry: 'Agro-industrie', city: 'Agadir', devices: 58, users: 35, plan: 'Pro', monthly_mrr_mad: 5390, status: 'active', since: '2026-05-22' },
+      { id: 'ec-oasis-3', partner_id: 'partner-oasis', name: 'Filerie du Nord', industry: 'Industrie', city: 'Tétouan', devices: 71, users: 44, plan: 'Pro', monthly_mrr_mad: 5610, status: 'active', since: '2026-06-14' },
     ],
     training: { completed: ['SOC L1 triage'], pending: ['Ticketing avancé', 'Reporting client', 'Playbooks SOAR'] },
     support_sla: 'Réponse 8h ouvrée · Maintenance & mises à jour incluses',
@@ -145,12 +149,12 @@ export const partners: Partner[] = [
     phone: '+221 33 862 10 44',
     status: 'trial',
     signed_on: MA2026('2026-09-28'),
-    tier: 'Silver',
+    tier: 'silver',
     license: {
-      id: 'lic-hekal-starter', plan: 'Starter',
+      id: 'lic-hekal-registered', plan: 'registered',
       client_seats: 3, client_seats_used: 1,
       device_allowance: 100, devices_used: 34,
-      price_month_eur: 0, resale_price_from_eur: 290, margin_pct: 0,
+      price_month_mad: 0, resale_price_from_mad: 3190, margin_pct: 0,
       renews_on: '2026-10-28',
       services_included: ['threat-intel', 'network-monitoring', 'endpoint-protection', 'advanced-ticketing'],
       ticketing: true,
@@ -161,7 +165,7 @@ export const partners: Partner[] = [
       dns_status: 'not_configured', email_sender: '', hide_infracentra: false,
     },
     end_clients: [
-      { id: 'ec-hekal-1', partner_id: 'partner-hekal', name: 'Banque Sahel Microfinance', industry: 'Finance', city: 'Dakar', devices: 34, users: 25, plan: 'Pro (trial)', monthly_mrr_eur: 0, status: 'onboarding', since: '2026-10-01' },
+      { id: 'ec-hekal-1', partner_id: 'partner-hekal', name: 'Banque Sahel Microfinance', industry: 'Finance', city: 'Dakar', devices: 34, users: 25, plan: 'Pro (trial)', monthly_mrr_mad: 0, status: 'onboarding', since: '2026-10-01' },
     ],
     training: { completed: [], pending: ['Onboarding plateforme', 'SOC L1 triage', 'Ticketing avancé'] },
     support_sla: 'Trial 30 j · accompagnement onboarding dédié',
@@ -177,8 +181,8 @@ export function partnerProgramStats() {
   const active = partners.filter(p => p.status === 'active');
   const totalEndClients = partners.reduce((a, p) => a + p.end_clients.length, 0);
   const totalDevices = partners.reduce((a, p) => a + p.license.devices_used, 0);
-  const wholesaleMrr = active.reduce((a, p) => a + p.license.price_month_eur, 0);
-  const retailMrr = partners.reduce((a, p) => a + p.end_clients.reduce((x, c) => x + c.monthly_mrr_eur, 0), 0);
+  const wholesaleMrr = active.reduce((a, p) => a + p.license.price_month_mad, 0);
+  const retailMrr = partners.reduce((a, p) => a + p.end_clients.reduce((x, c) => x + c.monthly_mrr_mad, 0), 0);
   const pendingDns = partners.filter(p => p.branding.dns_status !== 'verified').length;
   return {
     partners_total: partners.length,
@@ -186,8 +190,8 @@ export function partnerProgramStats() {
     trials: partners.filter(p => p.status === 'trial').length,
     end_clients: totalEndClients,
     devices_managed: totalDevices,
-    wholesale_mrr_eur: wholesaleMrr,
-    retail_mrr_eur: retailMrr,
+    wholesale_mrr_mad: wholesaleMrr,
+    retail_mrr_mad: retailMrr,
     channel_margin_pct: retailMrr ? Math.round(((retailMrr - wholesaleMrr) / retailMrr) * 100) : 0,
     white_labels_live: partners.filter(p => p.branding.hide_infracentra && p.branding.dns_status === 'verified').length,
     dns_pending: pendingDns,

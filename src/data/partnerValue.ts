@@ -10,6 +10,8 @@
 // /partners/{id}/value and /partners/programs.
 // ---------------------------------------------------------------------------
 
+import type { PartnerTierId } from './partnerWorld';
+
 export interface PartnerScoreComponents {
   revenue_growth: number;    // 0-100
   retention: number;         // 0-100
@@ -22,7 +24,7 @@ export interface PartnerReward {
   id: string;
   name: string;
   description: string;
-  min_tier: 'Silver' | 'Gold' | 'Platinum';
+  min_tier: 'silver' | 'gold' | 'platinum';
   min_score: number;
   earned: boolean;
   progress?: number; // 0-100 when not earned
@@ -31,8 +33,8 @@ export interface PartnerReward {
 export interface PartnerValueProfile {
   partner_id: string;
   score: number;                       // blended 0-100
-  tier: 'Silver' | 'Gold' | 'Platinum';
-  next_tier: 'Gold' | 'Platinum' | null;
+  tier: PartnerTierId;
+  next_tier: 'gold' | 'platinum' | null;
   points_to_next_tier: number;
   components: PartnerScoreComponents;
   months_as_partner: number;
@@ -40,16 +42,16 @@ export interface PartnerValueProfile {
   nrr_pct: number;                     // net revenue retention (partner book)
   csat: number;                        // their end-client satisfaction
   rewards: PartnerReward[];
-  history: { month: string; mrr_eur: number; clients: number }[];
+  history: { month: string; mrr_mad: number; clients: number }[];
 }
 
 const REWARD_CATALOG: Omit<PartnerReward, 'earned' | 'progress'>[] = [
-  { id: 'r-margin', name: 'Uplift marge +5 %', description: 'Remise wholesale supplémentaire sur le renouvellement.', min_tier: 'Gold', min_score: 65 },
-  { id: 'r-mdf', name: 'Market Development Fund', description: 'Budget co-marketing dédié aux campagnes locales de votre marque.', min_tier: 'Gold', min_score: 70 },
-  { id: 'r-cert', name: 'Certifications offertes', description: '2 passages de certification équipe offerts par an.', min_tier: 'Gold', min_score: 72 },
-  { id: 'r-priority', name: 'Support prioritaire N2', description: 'File d’escalade prioritaire chez Infracentra (réponse 2h).', min_tier: 'Silver', min_score: 50 },
-  { id: 'r-renewal', name: 'Commission fidélité 3 %', description: 'Commission sur le renouvellement annuel de vos licences.', min_tier: 'Platinum', min_score: 80 },
-  { id: 'r-roadmap', name: 'Accès roadmap anticipé', description: 'Bêta privée des nouvelles fonctionnalités (IA prédiction…).', min_tier: 'Platinum', min_score: 85 },
+  { id: 'r-margin', name: 'Uplift marge +5 %', description: 'Remise wholesale supplémentaire sur le renouvellement.', min_tier: 'gold', min_score: 65 },
+  { id: 'r-mdf', name: 'Market Development Fund', description: 'Budget co-marketing dédié aux campagnes locales de votre marque.', min_tier: 'gold', min_score: 70 },
+  { id: 'r-cert', name: 'Certifications offertes', description: '2 passages de certification équipe offerts par an.', min_tier: 'gold', min_score: 72 },
+  { id: 'r-priority', name: 'Support prioritaire N2', description: 'File d’escalade prioritaire chez Infracentra (réponse 2h).', min_tier: 'silver', min_score: 50 },
+  { id: 'r-renewal', name: 'Commission fidélité 3 %', description: 'Commission sur le renouvellement annuel de vos licences.', min_tier: 'platinum', min_score: 80 },
+  { id: 'r-roadmap', name: 'Accès roadmap anticipé', description: 'Bêta privée des nouvelles fonctionnalités (IA prédiction…).', min_tier: 'platinum', min_score: 85 },
 ];
 
 // Deterministic pseudo-random from a string seed (stable across reloads).
@@ -60,11 +62,11 @@ function seededRand(seed: string) {
 }
 
 export function partnerValueProfile(p: {
-  id: string; tier: 'Silver' | 'Gold' | 'Platinum'; signed_on: string;
-  license: { price_month_eur: number; client_seats_used: number };
+  id: string; tier: PartnerTierId; signed_on: string;
+  license: { price_month_mad: number; client_seats_used: number };
   branding: { dns_status: string; hide_infracentra: boolean };
   training: { completed: string[]; pending: string[] };
-  end_clients: { status: string; monthly_mrr_eur: number }[];
+  end_clients: { status: string; monthly_mrr_mad: number }[];
 }): PartnerValueProfile {
   const rnd = seededRand(p.id);
   const total = p.training.completed.length + p.training.pending.length || 1;
@@ -85,8 +87,8 @@ export function partnerValueProfile(p: {
   const nrr = Math.min(128, Math.round(95 + rnd() * 30));
   const csat = Math.round((4.1 + rnd() * 0.8) * 10) / 10;
 
-  const nextTier = p.tier === 'Silver' ? 'Gold' : p.tier === 'Gold' ? 'Platinum' : null;
-  const nextMin = p.tier === 'Silver' ? 65 : 78;
+  const nextTier = p.tier === 'registered' || p.tier === 'silver' ? 'gold' : p.tier === 'gold' ? 'platinum' : null;
+  const nextMin = p.tier === 'registered' || p.tier === 'silver' ? 65 : 78;
   const rewards: PartnerReward[] = REWARD_CATALOG.map(r => {
     const tierOk = ['Silver', 'Gold', 'Platinum'].indexOf(p.tier) >= ['Silver', 'Gold', 'Platinum'].indexOf(r.min_tier);
     const earned = tierOk && score >= r.min_score;
@@ -95,7 +97,7 @@ export function partnerValueProfile(p: {
 
   const history = Array.from({ length: Math.min(months, 8) }, (_, i) => ({
     month: `M-${Math.min(months, 8) - i}`,
-    mrr_eur: Math.round(p.license.price_month_eur * (0.55 + 0.45 * ((i + 1) / Math.min(months, 8))) * (0.9 + rnd() * 0.2)),
+    mrr_mad: Math.round(p.license.price_month_mad * (0.55 + 0.45 * ((i + 1) / Math.min(months, 8))) * (0.9 + rnd() * 0.2)),
     clients: Math.max(1, Math.round(p.license.client_seats_used * ((i + 1) / Math.min(months, 8)))),
   }));
 
@@ -109,7 +111,8 @@ export function partnerValueProfile(p: {
 
 // Program-wide reward catalog shown to partners (transparency page).
 export const partnerProgramTiers = [
-  { tier: 'Silver', min_score: 0, perks: ['Marge standard', 'Support 8h ouvrée', 'Portail white-label'] },
-  { tier: 'Gold', min_score: 65, perks: ['Uplift marge +5 %', 'Support prioritaire N2', 'MDF co-marketing', 'Certifications offertes'] },
-  { tier: 'Platinum', min_score: 78, perks: ['Commission fidélité 3 %', 'Accès bêta roadmap', 'Account manager dédié', 'Événements clients conjoints'] },
+  { tier: 'registered', min_score: 0, perks: ['Remise tier 20 % (pricing_config)', 'Support 8h ouvrée', 'Portail white-label'] },
+  { tier: 'silver', min_score: 40, perks: ['Remise tier 25 %', 'Support 8h ouvrée', 'Portail white-label'] },
+  { tier: 'gold', min_score: 65, perks: ['Remise tier 30 %', 'Support prioritaire N2', 'MDF co-marketing', 'Certifications offertes'] },
+  { tier: 'platinum', min_score: 78, perks: ['Remise tier 35 % (cap 40 % total)', 'Commission fidélité 3 %', 'Accès bêta roadmap', 'Account manager dédié'] },
 ] as const;

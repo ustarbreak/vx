@@ -2143,17 +2143,21 @@ export const demoStore = {
       }
       if (method === 'POST' && parts[2] === 'migrate') {
         if (demoSession().role !== 'platform_admin') throw httpErr(403, 'Réservé aux administrateurs plateforme');
-        const plans = ['Starter', 'Business', 'Scale'] as const;
-        const target = String(b.plan ?? '');
-        if (!(plans as readonly string[]).includes(target)) throw httpErr(400, `Plan invalide — attendu: ${plans.join('|')}`);
-        const quotas: Record<string, { seats: number; devices: number; price: number }> = {
-          Starter: { seats: 5, devices: 300, price: 190 }, Business: { seats: 15, devices: 1200, price: 520 }, Scale: { seats: 40, devices: 4000, price: 1180 },
+        // pricing_config.json "partner" tiers (MAD) — single source of truth.
+        const tierQuotas: Record<string, { seats: number; devices: number; wholesale_from_mad: number }> = {
+          registered: { seats: 5, devices: 300, wholesale_from_mad: 2150 },
+          silver: { seats: 15, devices: 1200, wholesale_from_mad: 6450 },
+          gold: { seats: 40, devices: 4000, wholesale_from_mad: 21500 },
+          platinum: { seats: 100, devices: 20000, wholesale_from_mad: 64500 },
         };
+        const target = String(b.tier ?? b.plan ?? '').toLowerCase();
+        if (!(target in tierQuotas)) throw httpErr(400, `Tier invalide — attendu: ${Object.keys(tierQuotas).join('|')}`);
+        partner.tier = target as any;
         partner.license.plan = target as any;
-        partner.license.client_seats = quotas[target].seats;
-        partner.license.device_allowance = quotas[target].devices;
-        partner.license.price_month_eur = quotas[target].price;
-        pushPlatformAudit('partner.migrated', `Licence ${partner.company} migrée vers ${target} (${quotas[target].price} €/mois)`);
+        partner.license.client_seats = tierQuotas[target].seats;
+        partner.license.device_allowance = tierQuotas[target].devices;
+        partner.license.price_month_mad = tierQuotas[target].wholesale_from_mad;
+        pushPlatformAudit('partner.migrated', `Licence ${partner.company} migrée vers le tier ${target} (wholesale dès ${tierQuotas[target].wholesale_from_mad} MAD/mois)`);
         return delay(partner.license as any) as unknown as T;
       }
       if (method === 'DELETE' && parts.length === 2) {
@@ -2183,7 +2187,7 @@ export const demoStore = {
             id: `ec-${partner.code.toLowerCase()}-${partner.end_clients.length + 1}`, partner_id: partner.id,
             name: b.name ?? 'Nouveau client', industry: b.industry ?? 'Non spécifié', city: b.city ?? 'Casablanca',
             devices: Number(b.devices ?? 0), users: Number(b.users ?? 0), plan: b.plan ?? 'SME',
-            monthly_mrr_eur: Number(b.monthly_mrr_eur ?? 0), status: 'onboarding' as const, since: new Date().toISOString().slice(0, 10),
+            monthly_mrr_mad: Number(b.monthly_mrr_mad ?? 0), status: 'onboarding' as const, since: new Date().toISOString().slice(0, 10),
           };
           partner.end_clients.push(c);
           partner.license.client_seats_used += 1;
