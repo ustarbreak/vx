@@ -233,7 +233,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
       return toFrontUser(bu);
     } catch (e: any) {
-      if (e instanceof ApiError && e.status === 401) {
+      if (e instanceof ApiError && e.message === 'MFA_REQUIRED') {
+        // Second factor enrolled -> user must enter the TOTP code.
+        setAuthError('Enter your authenticator code to finish signing in (Settings → Security → MFA verify).');
+      } else if (e instanceof ApiError && e.message === 'MFA_SETUP_REQUIRED') {
+        // Partner policy requires MFA but this member has not enrolled yet.
+        setAuthError('Your partner organization enforces MFA. Sign-in is blocked until you enroll an authenticator app — ask a partner admin or use the MFA setup link sent to your email.');
+      } else if (e instanceof ApiError && e.status === 401) {
         setAuthError('Incorrect email or password');
       } else {
         setAuthError(e?.message ?? 'Backend unreachable — turn Demo Mode ON to explore with sample data.');
