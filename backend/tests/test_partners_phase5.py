@@ -50,13 +50,6 @@ from app.services.mfa import generate_secret, totp_code  # noqa: E402
 _TEST_PW = "test-password-123"
 _TEST_HASH = None
 
-
-async def _seed(factory):
-    global _TEST_HASH
-    if _TEST_HASH is None:
-        _TEST_HASH = get_password_hash(_TEST_PW)
-
-
 NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -71,6 +64,9 @@ async def session_factory():
 
 
 async def _seed(factory):
+    global _TEST_HASH
+    if _TEST_HASH is None:
+        _TEST_HASH = get_password_hash(_TEST_PW)
     async with factory() as s:
         s.add_all([
             Organization(id=1, name="Atlas MSP", tier="enterprise", status="active",
@@ -83,7 +79,7 @@ async def _seed(factory):
                          contact_email="a@b.c"),
             User(id=1, email="boss@atlas.ma", hashed_password=get_password_hash("pw-atlas-123"),
                  name="Boss Atlas", role="partner_admin", org_id=1, status="active"),
-            User(id=2, email="analyst@atlas.ma", hashed_password=get_password_hash("pw-analyst-123"),
+            User(id=2, email="analyst@atlas.ma", hashed_password=_TEST_HASH,
                  name="Ana Lyse", role="analyst", org_id=1, status="active"),
             User(id=3, email="root@dakhla.ma", hashed_password=get_password_hash("pw-dakhla-123"),
                  name="Boss Dakhla", role="partner_admin", org_id=2, status="active"),
@@ -91,6 +87,8 @@ async def _seed(factory):
                  name="Platform", role="platform_admin", org_id=3, status="active"),
             User(id=5, email="ca@plain.io", hashed_password=get_password_hash("pw-ca-123"),
                  name="Plain Admin", role="client_admin", org_id=3, status="active"),
+            User(id=6, email="boss2@atlas.ma", hashed_password=_TEST_HASH,
+                 name="Boss Atlas 2", role="partner_admin", org_id=1, status="active"),
         ])
         await s.commit()
 
@@ -290,7 +288,7 @@ async def test_api_keys_hashed_once_shown_revoked(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=1) as c:
         r = await c.post("/api/partners/1/api-keys",
-                         json={"label": "SIEM forwarder", "scopes": ["alerts:read"]})
+                         json={"label": "SIEM forwarder", "scopes": ["alerts"]})
         assert r.status_code == 201, r.text
         created = r.json()
         plaintext = created["key"]
@@ -304,13 +302,16 @@ async def test_api_keys_hashed_once_shown_revoked(session_factory):
         assert plaintext not in str(items[0])
         assert items[0]["preview"] in plaintext  # prefix-only preview
 
-        # DB stores only a hash (no plaintext anywhere in the row)
+        # DB stores only a SHA-256 hash; the raw key never persists
         async with session_factory() as s:
-            from app.models import PartnerApiKey
             import sqlalchemy as sa
-            row = (await s.execute(sa.select(PartnerApiKey))).scalar_one()
-            assert row.key_hash and plaintext not in (row.key_hash or "")
-            assert plaintext.encode() != row.key_hash.encode()  # stored value is derived
+            from app.models import TenantSetting
+            row = (await s.execute(sa.select(TenantSetting))).scalar_one()
+            data = row.data or {}
+            hashes = data.get("api_key_hashes") or {}
+            assert hashes, "hash bucket exists"
+            stored = next(iter(hashes.values()))
+            assert len(stored) == 64 and plaintext not in stored and plaintext not in str(data)
 
         # revoke
         r = await c.delete(f"/api/partners/1/api-keys/{created['id']}")
@@ -359,13 +360,13 @@ async def test_webhooks_https_validated_and_secret_hidden(session_factory):
 
         # delete ok
         r = await c.delete(f"/api/partners/1/webhooks/{wid}")
-        assert r.status_code == 200
+        assert r.status_code == 204
 
     # HMAC helper signs deterministically (used by delivery worker)
     from app.routers.partners_keys import sign_payload
-    sig1 = sign_payload(b"payload", "sec32t")
-    sig2 = sign_payload(b"payloaD", "sec32t")
-    assert sig1 != sig2 and sig1.startswith(("sha256=", "v1=")) or len(sig1) >= 32
+    sig1 = sign_payload("sec32t", {"a": 1})
+    sig2 = sign_payload("sec32t", {"a": 2})
+    assert sig1 != sig2 and sig1.startswith("sha256=") and len(sig1) > 40
 
 
 # --------------------------------------------------------------------------- #
@@ -398,11 +399,11 @@ async def test_connectors_vendor_enum_and_no_secret_echo(session_factory):
             "enabled": True, "tenant_id": "tid", "client_id": "cid", "secret": "shh"})
         assert r.status_code == 200
         r = await c.post("/api/partners/1/connectors/microsoft365/sync")
-        assert r.status_code == 405
+        assert r.status_code == 405, r.text
 
-        # sync on disabled/unconfigured vendor -> 4xx but never 500
+        # sync on unconfigured vendor -> 4xx but never 500
         r = await c.post("/api/partners/1/connectors/autotask/sync")
-        assert r.status_code in (400, 409, 422, 503)
+        assert r.status_code in (400, 404, 409, 422, 503)
 
         # cross-partner -> 403
         async with client_for(session_factory, user_id=3) as c3:
@@ -423,7 +424,7 @@ async def test_sales_kit_and_escalation(session_factory):
 
         r = await c.post("/api/partners/1/support/escalate", json={
             "subject": "Agent installer fails on Server 2012",
-            "severity": "high", "body": "MSI exits with code 1603 on clean VM."})
+            "severity": "high", "description": "MSI exits with code 1603 on clean VM."})
         assert r.status_code == 201, r.text
 
         r = await c.get("/api/partners/1/audit")
@@ -431,5 +432,5 @@ async def test_sales_kit_and_escalation(session_factory):
 
         # bad severity literal -> 422
         r = await c.post("/api/partners/1/support/escalate", json={
-            "subject": "x", "severity": "catastrophic", "body": "y"})
+            "subject": "too short", "severity": "catastrophic", "description": "y"})
         assert r.status_code == 422

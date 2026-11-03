@@ -65,7 +65,8 @@ class ApiKeyOut(BaseModel):
 class WebhookIn(BaseModel):
     url: HttpUrl
     events: list[Literal["alert.created", "ticket.updated", "incident.breached", "report.generated"]] = Field(min_length=1)
-    secret: str = Field(min_length=16, max_length=128)
+    # Optional: when omitted the server generates one and returns it exactly once.
+    secret: Optional[str] = Field(default=None, min_length=16, max_length=128)
     enabled: bool = True
 
 
@@ -97,7 +98,10 @@ async def list_keys(pid: str, user: User = Depends(get_current_user),
                     db: AsyncSession = Depends(get_db)):
     partner = await _resolve_partner(pid, user, db)
     bucket = await _bucket(db, partner.id, "api_keys")
-    return {"items": [ApiKeyOut(**v).model_dump() for v in bucket.values()]}
+    return {"items": [{**ApiKeyOut(**v).model_dump(),
+                       "preview": v["prefix"],
+                       "status": "revoked" if v.get("revoked") else "active"}
+                      for v in bucket.values()]}
 
 
 @router.post("/{pid}/api-keys", status_code=201)
@@ -160,15 +164,17 @@ async def create_webhook(pid: str, body: WebhookIn, request: Request,
     _rate_limit(f"hooks:{user.id}", max_calls=5)
     partner = await _resolve_partner(pid, user, db)
     wid = secrets.token_hex(8)
+    secret = body.secret or ("whsec_" + secrets.token_urlsafe(24))
     row = {"id": wid, "url": str(body.url), "events": sorted(set(body.events)),
-           "secret": body.secret, "enabled": body.enabled,
+           "secret": secret, "enabled": body.enabled,
            "created_at": datetime.now(timezone.utc).isoformat()}
     bucket = await _bucket(db, partner.id, "webhooks")
     bucket[wid] = row
     await _store(db, partner.id, "webhooks", bucket)
     db.add(_audit(user, "partner.webhooks.create", wid, f"{body.url} events={row['events']}", partner.id))
     await db.commit()
-    return {k: v for k, v in row.items() if k != "secret"}
+    # secret returned exactly once at creation; listings strip it (rule 5)
+    return {**{k: v for k, v in row.items() if k != "secret"}, "secret": secret}
 
 
 @router.patch("/{pid}/webhooks/{wid}")

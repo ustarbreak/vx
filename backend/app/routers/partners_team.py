@@ -188,9 +188,10 @@ async def team_patch(pid: str, uid: int, body: TeamUserPatch, request: Request,
     target = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
     if not target or target.org_id != partner.id:
         raise HTTPException(403, "Cross-partner access denied")
-    if target.id == user.id and (body.role or body.status) and \
-            (body.role == "read_only" or body.status == "disabled"):
-        raise HTTPException(422, "Action sur soi-même refusée — utilisez un autre admin")
+    if target.id == user.id and body.role in ("analyst", "billing", "read_only"):
+        raise HTTPException(400, "Auto-rétrogradation refusée — utilisez un autre administrateur")
+    if target.id == user.id and body.status == "disabled":
+        raise HTTPException(400, "Impossible de désactiver son propre compte")
     changes = []
     if body.role:
         changes.append(f"role->{body.role}"); target.role = body.role
@@ -245,7 +246,7 @@ async def partner_audit(pid: str, limit: int = 100,
         "id": r.id, "action": r.action, "actor_name": r.actor_name, "actor_role": r.actor_role,
         "org_id": r.org_id, "resource": r.resource, "resource_id": r.resource_id,
         "details": r.details, "outcome": r.outcome,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": r.timestamp.isoformat() if r.timestamp else None,
     } for r in rows]}
 
 

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, model_validator, HttpUrl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
@@ -51,13 +51,37 @@ VENDOR_META = {
 
 
 class ConnectorIn(BaseModel):
-    base_url: HttpUrl
-    tenant: str = Field(min_length=1, max_length=120)
-    client_id: str = Field(min_length=1, max_length=120)
-    # Server-side only: hashed fingerprint of whatever secret the operator pastes.
-    secret_ref: str = Field(min_length=8, max_length=128,
-                            description="opaque reference/fingerprint of the stored secret")
+    model_config = {"extra": "ignore"}
+    enabled: bool = True
+    base_url: str = Field(min_length=8, max_length=300)
+    # PSA identifiers — accepted under several common spellings from the UI.
+    tenant: Optional[str] = Field(default=None, max_length=120)
+    tenant_id: Optional[str] = Field(default=None, max_length=120)
+    api_identifier: Optional[str] = Field(default=None, max_length=120)
+    client_id: Optional[str] = Field(default=None, max_length=120)
+    # Raw credential is accepted here (or via X-IC-Connector-Secret header) but
+    # NEVER persisted in plaintext — it becomes an opaque secret_ref fingerprint.
+    secret: Optional[str] = Field(default=None, min_length=8, max_length=512)
     ticket_statuses: Optional[list[str]] = None
+
+    @model_validator(mode="after")
+    def _normalize(self):
+        self.tenant = (self.tenant or self.tenant_id or "").strip()
+        self.client_id = (self.client_id or self.api_identifier or "").strip()
+        if not self.base_url.startswith("https://"):
+            raise ValueError("base_url doit être en https")
+        if not self.tenant:
+            raise ValueError("tenant requis")
+        if not self.client_id:
+            raise ValueError("client_id requis")
+        return self
+
+
+class ConnectorSecretIn(BaseModel):
+    """Body of POST /connectors/{vendor}/secret — the ONLY place a raw secret
+    is ever accepted. It is hashed to an opaque fingerprint server-side and
+    never stored or echoed back in plaintext (rule 5)."""
+    secret: str = Field(min_length=8, max_length=512)
 
 
 async def _bucket(db: AsyncSession, partner_id: int) -> dict:
@@ -80,6 +104,7 @@ def _public_row(vendor: str, cfg: dict) -> dict:
         "base_url": cfg.get("base_url"), "tenant": cfg.get("tenant"),
         "client_id": cfg.get("client_id"),
         "configured": bool(cfg.get("secret_ref")),
+        "secret_configured": bool(cfg.get("secret_ref")),
         "last_sync": cfg.get("last_sync"),
         "last_result": cfg.get("last_result"),
     }
@@ -101,9 +126,38 @@ async def upsert_connector(pid: str, vendor: VendorId, body: ConnectorIn, reques
     partner = await _resolve_partner(pid, user, db)
     bucket = await _bucket(db, partner.id)
     prev = bucket.get(vendor, {})
-    bucket[vendor] = {**prev, **body.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    incoming = body.model_dump()
+    raw_secret = incoming.pop("secret", None) or request.headers.get("X-IC-Connector-Secret")
+    # Never persist a plaintext secret: store only an opaque SHA-256 fingerprint.
+    if raw_secret and len(raw_secret) >= 8:
+        incoming["secret_ref"] = "sha256:" + hashlib.sha256(raw_secret.encode()).hexdigest()[:32]
+    merged = {**prev, **{k: v for k, v in incoming.items() if v is not None},
+              "enabled": body.enabled,
+              "updated_at": datetime.now(timezone.utc).isoformat()}
+    bucket[vendor] = merged
     await _put_bucket(db, partner.id, bucket)
     db.add(_audit(user, "partner.connectors.upsert", vendor, f"{str(body.base_url)} tenant={body.tenant}", partner.id))
+    await db.commit()
+    return _public_row(vendor, bucket[vendor])
+
+
+@router.post("/{pid}/connectors/{vendor}/secret")
+async def set_connector_secret(pid: str, vendor: VendorId, body: ConnectorSecretIn,
+                               request: Request,
+                               user: User = Depends(get_current_user),
+                               db: AsyncSession = Depends(get_db)):
+    """Rotate the connector credential. Hashed to a fingerprint; plaintext is
+    never stored nor returned."""
+    _rate_limit(f"conn:{user.id}", max_calls=10)
+    partner = await _resolve_partner(pid, user, db)
+    bucket = await _bucket(db, partner.id)
+    if vendor not in bucket:
+        raise HTTPException(404, "Connecteur non configuré")
+    bucket[vendor] = {**bucket[vendor],
+                      "secret_ref": "sha256:" + hashlib.sha256(body.secret.encode()).hexdigest()[:32],
+                      "updated_at": datetime.now(timezone.utc).isoformat()}
+    await _put_bucket(db, partner.id, bucket)
+    db.add(_audit(user, "partner.connectors.rotate_secret", vendor, "", partner.id))
     await db.commit()
     return _public_row(vendor, bucket[vendor])
 
