@@ -37,7 +37,8 @@ def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test s
 
 from app.database import Base, get_db  # noqa: E402
 from app.core.security import create_access_token, get_password_hash  # noqa: E402
-from app.models import Organization, User  # noqa: E402
+from app.models import Organization, User
+from types import SimpleNamespace  # noqa: E402
 from app.platform.catalog.schema import load_catalog  # noqa: E402
 
 
@@ -315,10 +316,10 @@ async def test_job_lifecycle_poll(session_factory):
             g = await c.get(f"/api/platform/jobs/{jid}")
             assert g.status_code == 200
             state = g.json()["state"]
-            if state in ("succeeded", "failed", "unsupported", "blocked"):
+            if state in ("succeeded", "failed", "unsupported", "blocked", "dry_run"):
                 break
             await asyncio.sleep(0.05)
-        assert state in ("succeeded", "failed", "unsupported", "blocked"), state
+        assert state in ("succeeded", "failed", "unsupported", "blocked", "dry_run"), state
         g404 = await c.get("/api/platform/jobs/does-not-exist")
         assert g404.status_code == 404
 
@@ -348,15 +349,15 @@ async def test_job_poll_is_tenant_scoped(session_factory):
 
 async def test_guardrails_use_application_roles_and_four_eyes(session_factory):
     from app.platform.connectors.guardrails import check
-    client_admin = User(id=10, role="client_admin", org_id=1)
-    platform_admin = User(id=11, role="platform_admin", org_id=None)
-    other_platform_admin = User(id=12, role="platform_admin", org_id=None)
+    client_admin = SimpleNamespace(id=10, role="client_admin", org_id=1)
+    platform_admin = SimpleNamespace(id=11, role="platform_admin", org_id=None)
+    other_platform_admin = SimpleNamespace(id=12, role="platform_admin", org_id=None)
     assert check(client_admin, False, False, {}).allowed
     assert not check(client_admin, True, False, {}, confirmer=platform_admin).allowed
     assert not check(platform_admin, True, False, {}).allowed
     assert not check(platform_admin, True, False, {}, confirmer=platform_admin).allowed
     assert check(platform_admin, True, False, {}, confirmer=other_platform_admin).allowed
-    assert not check(User(id=13, role="client_user", org_id=1), False, False, {}).allowed
+    assert not check(SimpleNamespace(id=13, role="client_user", org_id=1), False, False, {}).allowed
 
 
 async def test_job_destructive_action_does_not_silently_dry_run(session_factory):
