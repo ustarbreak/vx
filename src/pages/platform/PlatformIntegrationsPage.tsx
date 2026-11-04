@@ -59,7 +59,7 @@ export default function PlatformIntegrationsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
             <Key className="w-7 h-7 text-cyan-400" />
-            Integration Management
+            Integration Catalog
           </h1>
           <p className="text-[var(--ic-muted)] text-sm mt-1">Manage API keys and service integrations</p>
         </div>
@@ -68,6 +68,8 @@ export default function PlatformIntegrationsPage() {
           Add Integration
         </button>
       </div>
+
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-200">CATALOG ONLY · Connection status, credentials, health checks and synchronization timestamps are not sourced from persisted integration instances on this page.</div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
@@ -214,6 +216,7 @@ export default function PlatformIntegrationsPage() {
                         </a>
                       )}
                       <button
+                        disabled title="Integration instance editing is not connected to the backend"
                         onClick={() => setSelectedIntegration(integration.id)}
                         className="p-1.5 rounded text-[var(--ic-muted)] hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
                         title="Edit"
@@ -275,7 +278,7 @@ export default function PlatformIntegrationsPage() {
                 >
                   Close
                 </button>
-                <button className="flex-1 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-[var(--ic-heading)] text-sm font-medium hover:from-cyan-400 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/20">
+                <button disabled title="No persisted integration update endpoint is connected" className="flex-1 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-[var(--ic-heading)] text-sm font-medium opacity-40 cursor-not-allowed">
                   Save Changes
                 </button>
               </div>

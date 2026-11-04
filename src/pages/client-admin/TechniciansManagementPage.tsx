@@ -4,7 +4,7 @@ import {
   Eye, Mail, Phone, Shield, CheckCircle, XCircle,
   AlertTriangle, Clock
 } from 'lucide-react';
-import { ticketsApi } from '../../services/api';
+import { usersDirectoryApi, type BackendUserRow } from '../../services/api';
 import { isDemoMode } from '../../services/demoMode';
 
 interface Technician {
@@ -36,69 +36,54 @@ export default function TechniciansManagementPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedTechnician, setSelectedTechnician] = useState<Technician | null>(null);
+  const demo = isDemoMode();
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
-    // Simulate API call
+    let cancelled = false;
     const fetchTechnicians = async () => {
+      setLoading(true);
+      setLoadError('');
       try {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Same people as the ticketing engine assignees (demoWorld) => tickets
-        // assigned to "Y. El Amrani" here match Technicians list and vice versa.
-        const { demoTechnicians, demoTicketSeeds } = await import('../../data/demoWorld');
-        const gradeFor = (role: string) => role === 'client_admin' ? 'Admin' : role === 'analyst' ? 'L3' : role === 'technician' ? 'L2' : 'L1';
-        const roleLabel = (g: string) => g === 'Admin' ? 'Security Administrator' : g === 'L3' ? 'Expert Technician' : g === 'L2' ? 'Senior Technician' : 'Junior Technician';
-        const mockTechnicians: Technician[] = demoTechnicians.filter(t => t.role !== 'client_admin').map((t, i) => {
-          const g = gradeFor(t.role);
-          const [firstName, ...rest] = t.name.replace(/^([A-Z]\w*)\.\s/, '$1 ').split(' ');
-          const myTickets = demoTicketSeeds.filter(tk => tk.assignee === t.name);
-          return {
-            id: String(i + 1),
-            firstName: firstName.trim(), lastName: rest.join(' ') || '—',
-            email: t.email, phone: `+212 5 ${String(40 + i)} ${String(20 + i * 3)} ${String(11 + i * 7)} ${String(30 + i * 9)}`,
-            grade: g, role: roleLabel(g), status: 'active',
-            permissions: g === 'Admin' ? ['all'] : ['view-alerts', 'edit-alerts', 'view-tickets', 'edit-tickets', 'create-tickets'],
-            mfaEnabled: true,
-            lastLogin: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
-            createdAt: '2026-06-15T00:00:00Z',
-            assignedServices: myTickets.length ? ['threat-intel', 'endpoint-protection', 'ticketing'] : ['threat-intel'],
-            openTickets: null, p1Tickets: null,
-          };
-        });
-        
-        setTechnicians(mockTechnicians);
-        setLoading(false);
-
-        // Workload columns via users+tickets join through the API layer:
-        // GET /tickets hits the real backend query in production and the
-        // demoStore tickets array in Demo Mode — never a second mock here.
-        try {
-          const rows: any[] = await ticketsApi.list();
-          const byAssignee: Record<string, { open: number; p1: number }> = {};
-          for (const t of rows) {
-            if (['resolved', 'closed'].includes(t.status)) continue;
-            const key = String(t.assignee ?? '').trim();
-            if (!key) continue;
-            const agg = (byAssignee[key] ??= { open: 0, p1: 0 });
-            agg.open += 1;
-            if (t.priority === 'p1') agg.p1 += 1;
-          }
-          setTechnicians(prev => prev.map(tc => {
-            const full = `${tc.firstName} ${tc.lastName}`.replace(/\s+/g, ' ').trim();
-            const hit = byAssignee[full];
-            return { ...tc, openTickets: hit ? hit.open : 0, p1Tickets: hit ? hit.p1 : 0 };
+        if (demo) {
+          const { demoTechnicians, demoTicketSeeds } = await import('../../data/demoWorld');
+          const gradeFor = (role: string): Technician['grade'] => role === 'client_admin' ? 'Admin' : role === 'analyst' ? 'L3' : role === 'technician' ? 'L2' : 'L1';
+          const rows: Technician[] = demoTechnicians.filter(t => t.role !== 'client_admin').map((t, i) => {
+            const grade = gradeFor(t.role);
+            const [firstName, ...rest] = t.name.replace(/^([A-Z]\w*)\.\s/, '$1 ').split(' ');
+            const assigned = demoTicketSeeds.filter(tk => tk.assignee === t.name);
+            return {
+              id: String(i + 1), firstName: firstName.trim(), lastName: rest.join(' ') || '—',
+              email: t.email, phone: undefined, grade,
+              role: grade === 'Admin' ? 'Security Administrator' : grade === 'L3' ? 'Expert Technician' : grade === 'L2' ? 'Senior Technician' : 'Junior Technician',
+              status: 'active', permissions: grade === 'Admin' ? ['all'] : ['view-alerts', 'edit-alerts', 'view-tickets', 'edit-tickets'],
+              mfaEnabled: true, lastLogin: undefined, createdAt: '2026-06-15T00:00:00Z',
+              assignedServices: assigned.length ? ['ticketing'] : [], openTickets: null, p1Tickets: null,
+            };
+          });
+          if (!cancelled) setTechnicians(rows);
+        } else {
+          const users: BackendUserRow[] = await usersDirectoryApi.list({ limit: 500 });
+          const rows: Technician[] = users.map(u => ({
+            id: String(u.id), firstName: u.name || u.email.split('@')[0], lastName: '',
+            email: u.email, grade: u.role === 'client_admin' ? 'Admin' : u.role === 'analyst' ? 'L3' : 'L2',
+            role: u.role.replaceAll('_', ' '), status: u.status === 'active' ? 'active' : 'inactive',
+            permissions: [], mfaEnabled: u.mfa_enabled, lastLogin: u.last_login ?? undefined,
+            createdAt: u.created_at, assignedServices: [], openTickets: null, p1Tickets: null,
           }));
-        } catch {
-          // Leave workload null → table shows "unavailable", never fake zeros.
+          if (!cancelled) setTechnicians(rows);
         }
+        // Ticket assignment names are not guaranteed to match user identities;
+        // keep live workload unknown rather than manufacture zero counts.
       } catch (error) {
-        console.error('Failed to fetch technicians:', error);
-        setLoading(false);
+        if (!cancelled) setLoadError(error instanceof Error ? error.message : 'Unable to load team directory.');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
-
-    fetchTechnicians();
-  }, []);
+    void fetchTechnicians();
+    return () => { cancelled = true; };
+  }, [demo]);
 
   const filteredTechnicians = technicians.filter(tech => {
     const matchesSearch = 
@@ -165,6 +150,8 @@ export default function TechniciansManagementPage() {
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
+      {!demo && <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-[var(--ic-muted)]">LIVE DIRECTORY · Backend user records only. Workload, service assignments and client-admin role mutations are not provided by the current API.</div>}
+      {loadError && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-300">{loadError}</div>}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Technicians Management</h1>
@@ -173,7 +160,7 @@ export default function TechniciansManagementPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowAddModal(true)}
+          onClick={() => setShowAddModal(true)} disabled={!demo} title={demo ? 'Add simulated technician' : 'Live technician invitations are not supported by the current backend'}
           className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-[var(--ic-heading)] flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
@@ -351,13 +338,13 @@ export default function TechniciansManagementPage() {
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
                       <button 
-                        onClick={() => handleEdit(tech)}
+                        onClick={() => handleEdit(tech)} disabled={!demo} title={demo ? 'Edit simulated technician' : 'Live role editing is not supported by the current backend'}
                         className="p-1 hover:bg-[var(--ic-surface-2)] rounded text-gray-400 hover:text-[var(--ic-heading)]"
                       >
                         <Edit className="w-4 h-4" />
                       </button>
                       <button 
-                        onClick={() => handleDelete(tech.id)}
+                        onClick={() => handleDelete(tech.id)} disabled={!demo} title={demo ? 'Delete simulated technician' : 'Live user deletion is restricted to Platform Admin'}
                         className="p-1 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400"
                       >
                         <Trash2 className="w-4 h-4" />
