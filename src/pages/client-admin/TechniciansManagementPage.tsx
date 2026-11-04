@@ -4,7 +4,7 @@ import {
   Eye, Mail, Phone, Shield, CheckCircle, XCircle,
   AlertTriangle, Clock
 } from 'lucide-react';
-import { ticketsApi, usersDirectoryApi, type BackendUserRow } from '../../services/api';
+import { usersDirectoryApi, type BackendUserRow } from '../../services/api';
 import { isDemoMode } from '../../services/demoMode';
 
 interface Technician {
