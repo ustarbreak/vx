@@ -1081,7 +1081,8 @@ class IncidentEvidence(Base):
     ticket_evidence_id = Column(Integer, nullable=True)
     kind = Column(String, default="log")
     name = Column(String, nullable=False)
-    sha256 = Column(String, nullable=True)          # integrity fingerprint when known
+    detail = Column(Text, nullable=True)            # human-readable reference/context; never a binary blob
+    sha256 = Column(String, nullable=True)          # artifact hash only when supplied by a trusted collector
     collected_by = Column(String, default="system")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
