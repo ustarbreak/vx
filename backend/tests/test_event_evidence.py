@@ -201,6 +201,47 @@ async def test_cross_tenant_evidence_lookup_404s(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_evidence_detail_reports_hash_verification_and_detects_payload_tampering(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, user_id=1) as c:
+        created = await c.post("/api/alerts", json=alert_body(
+            source_event_id="evt-integrity",
+            raw_payload={"indicator": "198.51.100.23", "source": "sensor-A"},
+        ))
+        assert created.status_code == 201, created.text
+        async with session_factory() as s:
+            rec = (await s.execute(
+                __import__("sqlalchemy").select(EventEvidence)
+                .where(EventEvidence.source_event_id == "evt-integrity")
+            )).scalars().one()
+            event_uid = rec.event_uid
+
+        verified = await c.get(f"/api/evidence/{event_uid}")
+        assert verified.status_code == 200, verified.text
+        assert verified.json()["integrity_status"] == "verified"
+
+        # Simulate storage corruption after ingest. The API must not silently
+        # present the altered payload as intact.
+        async with session_factory() as s:
+            rec = (await s.execute(
+                __import__("sqlalchemy").select(EventEvidence)
+                .where(EventEvidence.event_uid == event_uid)
+            )).scalars().one()
+            rec.raw_payload = {"indicator": "203.0.113.99", "source": "sensor-A"}
+            await s.commit()
+
+        tampered = await c.get(f"/api/evidence/{event_uid}")
+        assert tampered.status_code == 200, tampered.text
+        assert tampered.json()["integrity_status"] == "mismatch"
+        assert tampered.json()["payload_sha256"] != __import__("hashlib").sha256(
+            __import__("json").dumps(
+                tampered.json()["raw_payload"], sort_keys=True, default=str,
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+
+@pytest.mark.asyncio
 async def test_viewer_cannot_read_raw_payload(session_factory):
     await _seed(session_factory)
     async with client_for(session_factory, user_id=1) as c:
