@@ -50,7 +50,7 @@ export default function TechniciansManagementPage() {
           const gradeFor = (role: string): Technician['grade'] => role === 'client_admin' ? 'Admin' : role === 'analyst' ? 'L3' : role === 'technician' ? 'L2' : 'L1';
           const rows: Technician[] = demoTechnicians.filter(t => t.role !== 'client_admin').map((t, i) => {
             const grade = gradeFor(t.role);
-            const [firstName, ...rest] = t.name.replace(/^([A-Z]\\w*)\\.\\s/, '$1 ').split(' ');
+            const [firstName, ...rest] = t.name.replace(/^([A-Z]\w*)\.\s/, '$1 ').split(' ');
             const assigned = demoTicketSeeds.filter(tk => tk.assignee === t.name);
             return {
               id: String(i + 1), firstName: firstName.trim(), lastName: rest.join(' ') || '—',
