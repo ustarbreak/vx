@@ -194,8 +194,8 @@ class NoteIn(BaseModel):
 
 class EvidenceIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    kind: str = "log"
-    detail: str = ""
+    kind: str = Field("log", min_length=1, max_length=64)
+    detail: str = Field("", max_length=4000)
 
 
 class ActionIn(BaseModel):
@@ -410,8 +410,9 @@ async def get_incident(uid: str, user: User = Depends(get_current_user),
 
     evs = (await db.execute(select(IncidentEvidence).where(
         IncidentEvidence.incident_uid == uid).order_by(IncidentEvidence.id))).scalars().all()
-    out["evidence"] = [{"id": e.id, "name": e.name, "kind": e.kind, "sha256": e.sha256,
-                        "ticket_uid": e.ticket_uid, "collected_by": e.collected_by,
+    out["evidence"] = [{"id": e.id, "name": e.name, "kind": e.kind, "detail": e.detail,
+                        "sha256": e.sha256, "ticket_uid": e.ticket_uid,
+                        "collected_by": e.collected_by,
                         "created_at": _iso(e.created_at)} for e in evs]
 
     acts2 = (await db.execute(select(IncidentAction).where(
@@ -565,14 +566,18 @@ async def add_evidence_entry(uid: str, body: EvidenceIn,
                              db: AsyncSession = Depends(get_db)):
     inc = await _get_incident(db, uid, user)
     e = IncidentEvidence(incident_uid=uid, ticket_uid=inc.ticket_uid,
-                         kind=body.kind, name=body.name,
+                         kind=body.kind, name=body.name, detail=body.detail.strip() or None,
                          sha256=None, collected_by=user.email, created_at=now_utc())
     db.add(e)
-    await append_activity(db, uid, user.email, "evidence_added", f"Collected '{body.name}'")
+    await append_activity(
+        db, uid, user.email, "evidence_added",
+        f"Reference recorded: {body.name}" + (f" — {body.detail.strip()[:240]}" if body.detail.strip() else ""),
+    )
     await _audit(db, user, "incident_evidence_added", uid, body.name)
     await db.commit()
-    return {"id": e.id, "name": e.name, "kind": e.kind,
-            "created_at": _iso(e.created_at)}
+    return {"id": e.id, "name": e.name, "kind": e.kind, "detail": e.detail,
+            "sha256": e.sha256, "ticket_uid": e.ticket_uid,
+            "collected_by": e.collected_by, "created_at": _iso(e.created_at)}
 
 
 @router.post("/{uid}/actions", status_code=201)
