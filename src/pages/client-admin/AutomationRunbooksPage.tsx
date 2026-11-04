@@ -8,7 +8,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { isDemoMode } from '../../services/demoMode';
-import { api } from '../../services/api';
 import { demoProjects } from '../../data/demoProjects';
 import { BookOpen, CheckCircle2, Circle, PlayCircle, ExternalLink, Loader2, Plus, Wand2, X } from 'lucide-react';
 
@@ -67,37 +66,34 @@ export default function AutomationRunbooksPage() {
   const [fPhase, setFPhase] = useState('Operations');
   const [fDoc, setFDoc] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function createRunbook(auto: boolean) {
-    if (!fTitle.trim()) return;
+    if (!fTitle.trim() || saving) return;
+    if (!demo) {
+      setError('Runbook persistence is not available in Live Mode yet. No runbook was created.');
+      return;
+    }
     const steps = auto ? docToSteps(fDoc) : (fDoc.trim() ? docToSteps(fDoc) : [{ text: 'Preparation', owner: 'Unassigned', done: false }, { text: 'Execution', owner: 'Unassigned', done: false }, { text: 'Validation & closure', owner: 'Unassigned', done: false }]);
     const rb: Runbook = { id: `RB-${Date.now().toString(36).toUpperCase().slice(-4)}`, projectId: fProject, title: fTitle.trim(), phase: fPhase, steps, estMinutes: steps.length * 20 };
     setSaving(true);
+    setError(null);
     try {
-      if (demo || true) { /* persisted locally + pushed to engine endpoint in real mode */ }
-      if (!demo) {
-        try { await api.post('/projects/runbooks-from-doc', { name: rb.title, description: fDoc, doc: fDoc, project_id: fProject }); } catch { /* non-blocking */ }
-      }
-    } finally {
       setExtra(prev => [rb, ...prev]);
-      setSaving(false); setShowCreate(false); setFTitle(''); setFDoc('');
+      setShowCreate(false);
+      setFTitle('');
+      setFDoc('');
+    } finally {
+      setSaving(false);
     }
   }
 
-  // Real backend fetch when not in demo mode.
+  // No runbook API is currently implemented. Live mode must not call
+  // guessed endpoints or render local state as persisted server data.
   useEffect(() => {
     if (demo) return;
-    let cancel = false;
-    (async () => {
-      try {
-        const token = localStorage.getItem('ic_token');
-        const res = await fetch('/api/projects/runbooks', { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-        const data = res.ok ? await res.json() : [];
-        if (!cancel) setLive(Array.isArray(data) ? data : []);
-      } catch { if (!cancel) setLive([]); }
-      finally { if (!cancel) setLoading(false); }
-    })();
-    return () => { cancel = true; };
+    setLive([]);
+    setLoading(false);
   }, [demo]);
 
   const runbooks = useMemo(() => {
@@ -105,8 +101,10 @@ export default function AutomationRunbooksPage() {
     return base.map(rb => ({ ...rb, steps: rb.steps.map(s => checked[rb.id + s.text] !== undefined ? { ...s, done: checked[rb.id + s.text] } : s) }));
   }, [demo, live, extra, checked]);
 
-  const toggle = (rbId: string, step: RunbookStep) =>
+  const toggle = (rbId: string, step: RunbookStep) => {
+    if (!demo) return;
     setChecked(c => ({ ...c, [rbId + step.text]: !step.done }));
+  };
 
   const progress = (rb: Runbook) => Math.round((rb.steps.filter(s => s.done).length / Math.max(1, rb.steps.length)) * 100);
 
@@ -117,13 +115,16 @@ export default function AutomationRunbooksPage() {
       <header className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-[var(--ic-heading)] flex items-center gap-2"><BookOpen className="w-5 h-5 text-violet-400" /> Automation · Runbooks <span className="text-xs font-normal text-[var(--ic-muted)]">(project procedures)</span></h1>
-          <p className="text-sm text-[var(--ic-muted)] mt-1">Operational checklists linked to your projects. Execute steps in order — completion feeds the project timeline in the Project Portfolio.</p>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">Operational checklists linked to your projects. Demo Mode supports local rehearsal; Live Mode remains read-only until runbook persistence and execution APIs are implemented.</p>
         </div>
-        <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-[var(--ic-heading)] text-sm font-semibold shrink-0">
+        <button onClick={() => { setError(null); setShowCreate(true); }} disabled={!demo}
+          title={demo ? 'Create a simulated demo runbook' : 'Runbook persistence is not yet available in Live Mode'}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-[var(--ic-heading)] text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
           <Plus className="w-4 h-4" /> New Runbook
         </button>
       </header>
+
+      {error && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{error}</div>}
 
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowCreate(false)}>
@@ -196,7 +197,7 @@ export default function AutomationRunbooksPage() {
               <ul className="space-y-1.5">
                 {rb.steps.map((s, i) => (
                   <li key={i}>
-                    <button onClick={() => toggle(rb.id, s)} className="w-full text-left flex items-start gap-2 group">
+                    <button onClick={() => toggle(rb.id, s)} disabled={!demo} title={demo ? 'Toggle simulated checklist step' : 'Step persistence is not available in Live Mode'} className="w-full text-left flex items-start gap-2 group disabled:cursor-not-allowed">
                       {s.done
                         ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-400 shrink-0" />
                         : <Circle className="w-4 h-4 mt-0.5 text-[var(--ic-muted)] group-hover:text-cyan-400 shrink-0" />}
@@ -214,7 +215,7 @@ export default function AutomationRunbooksPage() {
                     <ExternalLink className="w-3.5 h-3.5" /> Linked project: {proj.name}
                   </Link>
                 ) : <span className="text-xs text-[var(--ic-muted)]">Linked project: {rb.projectId}</span>}
-                <button className="text-xs px-2.5 py-1 rounded-lg bg-violet-600/80 hover:bg-violet-500 text-[var(--ic-heading)] flex items-center gap-1">
+                <button disabled title="Runbook execution is not implemented yet" className="text-xs px-2.5 py-1 rounded-lg bg-violet-600/80 text-[var(--ic-heading)] flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed">
                   <PlayCircle className="w-3.5 h-3.5" /> Auto-execute remaining
                 </button>
               </div>
@@ -224,7 +225,7 @@ export default function AutomationRunbooksPage() {
       </div>
 
       <footer className="text-xs text-[var(--ic-muted)]">
-        {demo ? 'DEMO MODE: runbooks are simulated but fully interactive (state kept in session).' : 'LIVE MODE: backed by /api/projects/runbooks.'}
+        {demo ? 'DEMO MODE: runbooks and checklist progress are simulated locally; no device actions are executed.' : 'LIVE MODE: read-only. Runbook storage, checklist persistence, and execution endpoints are not implemented.'}
       </footer>
     </div>
   );
