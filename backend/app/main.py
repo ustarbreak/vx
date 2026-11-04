@@ -29,6 +29,7 @@ from app.services.invitations import router as invitations_router
 from app.services.seed import ensure_platform_admin, ensure_demo_accounts
 from app.services.ticketing import run_escalations
 from app.services.evidence import run_retention_expiry
+from app.services.soar import recover_stale_runs
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("infracentra")
@@ -44,6 +45,22 @@ async def _escalation_loop():
                     logger.info("SLA escalations: %s", ", ".join(done))
         except Exception as e:  # noqa: BLE001
             logger.warning("escalation pass failed: %s", e)
+        await asyncio.sleep(60)
+
+
+
+
+
+async def _soar_recovery_loop():
+    """Mark crashed SOAR executions failed after a bounded stale threshold."""
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                count = await recover_stale_runs(db, stale_after_minutes=30)
+                if count:
+                    logger.warning("SOAR recovery: marked %s stale run(s) failed for operator review", count)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("SOAR recovery pass failed: %s", e)
         await asyncio.sleep(60)
 
 
@@ -84,10 +101,12 @@ async def lifespan(app: FastAPI):
             logger.warning("demo account seeding skipped: %s", e)
     task = asyncio.get_event_loop().create_task(_escalation_loop())
     ev_task = asyncio.get_event_loop().create_task(_evidence_retention_loop())
+    soar_task = asyncio.get_event_loop().create_task(_soar_recovery_loop())
     yield
     # Shutdown
     task.cancel()
     ev_task.cancel()
+    soar_task.cancel()
 
 app = FastAPI(
     title=settings.APP_NAME,
