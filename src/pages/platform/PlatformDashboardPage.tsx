@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Building2, Users, Shield, AlertTriangle, RefreshCw, Activity } from 'lucide-react';
-import { organizationsApi, usersDirectoryApi, tenantManagerApi, auditApi, type BackendOrganization, type BackendUserRow, type BackendAuditLog, ApiError } from '../../services/api';
+import { organizationsApi, usersDirectoryApi, auditApi, type BackendOrganization, type BackendUserRow, type BackendAuditLog, ApiError } from '../../services/api';
 import { serviceCatalog } from '../../data/mockData';
 
 export default function PlatformDashboardPage() {
