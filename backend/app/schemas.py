@@ -166,7 +166,7 @@ class IntegrationUpdate(BaseModel):
 class IntegrationResponse(IntegrationBase):
     id: int
     status: str
-    api_key: Optional[str]
+    # Credential material is write-only and must never be returned by the API.
     api_endpoint: Optional[str]
     documentation_url: Optional[str]
     last_sync: Optional[datetime]

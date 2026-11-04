@@ -173,7 +173,10 @@ async def test_integration(
             result_msg = f"Successfully connected. Found {len(logs)} recent logs."
             
         else:
-            result_msg = "Integration test not implemented for this service."
+            return IntegrationTestResult(
+                success=False,
+                message=f"Connection test is not implemented for integration {integration.name!r}.",
+            )
         
         # Update last sync
         integration.last_sync = datetime.utcnow()

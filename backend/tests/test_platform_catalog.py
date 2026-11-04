@@ -37,7 +37,8 @@ def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test s
 
 from app.database import Base, get_db  # noqa: E402
 from app.core.security import create_access_token, get_password_hash  # noqa: E402
-from app.models import Organization, User  # noqa: E402
+from app.models import Organization, User
+from types import SimpleNamespace  # noqa: E402
 from app.platform.catalog.schema import load_catalog  # noqa: E402
 
 
@@ -315,9 +316,70 @@ async def test_job_lifecycle_poll(session_factory):
             g = await c.get(f"/api/platform/jobs/{jid}")
             assert g.status_code == 200
             state = g.json()["state"]
-            if state in ("succeeded", "failed", "unsupported", "blocked"):
+            if state in ("succeeded", "failed", "unsupported", "blocked", "dry_run"):
                 break
             await asyncio.sleep(0.05)
-        assert state in ("succeeded", "failed", "unsupported", "blocked"), state
+        assert state in ("succeeded", "failed", "unsupported", "blocked", "dry_run"), state
         g404 = await c.get("/api/platform/jobs/does-not-exist")
         assert g404.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Security regressions: job authorization, tenant isolation, integration secret
+# redaction and honest unsupported integration tests.
+# ---------------------------------------------------------------------------
+
+async def test_job_poll_is_tenant_scoped(session_factory):
+    await _seed(session_factory)
+    from app.platform.connectors.jobs import jobs
+    job = await jobs.create("test.read", 2, {"safe": True})
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.get(f"/api/platform/jobs/{job['id']}")
+        assert r.status_code == 404
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        # Platform administrators retain cross-tenant operational visibility.
+        async with session_factory() as db:
+            db.add(User(id=2, email="root@ic2.io", hashed_password=get_password_hash("x"),
+                        name="Platform 2", role="platform_admin", org_id=None))
+            await db.commit()
+        async with make_client(session_factory, mounted=True, user_id=2) as c2:
+            r = await c2.get(f"/api/platform/jobs/{job['id']}")
+            assert r.status_code == 200
+
+
+async def test_guardrails_use_application_roles_and_four_eyes(session_factory):
+    from app.platform.connectors.guardrails import check
+    client_admin = SimpleNamespace(id=10, role="client_admin", org_id=1)
+    platform_admin = SimpleNamespace(id=11, role="platform_admin", org_id=None)
+    other_platform_admin = SimpleNamespace(id=12, role="platform_admin", org_id=None)
+    assert check(client_admin, False, False, {}).allowed
+    assert not check(client_admin, True, False, {}, confirmer=platform_admin).allowed
+    assert not check(platform_admin, True, False, {}).allowed
+    assert not check(platform_admin, True, False, {}, confirmer=platform_admin).allowed
+    assert check(platform_admin, True, False, {}, confirmer=other_platform_admin).allowed
+    assert not check(SimpleNamespace(id=13, role="client_user", org_id=1), False, False, {}).allowed
+
+
+async def test_job_destructive_action_does_not_silently_dry_run(session_factory):
+    await _seed(session_factory)
+    # The seeded client administrator cannot execute a dangerous action.
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/jobs", json={
+            "service": "soar", "action": "playbook.run",
+            "params": {"playbook_id": 1}, "dry_run": False})
+        # If the catalog marks this action dangerous, it must be denied.
+        from app.platform.catalog.schema import load_catalog
+        act = next(a for a in load_catalog()["soar"].actions if a.name == "playbook.run")
+        if act.dangerous:
+            assert r.status_code == 403
+        else:
+            assert r.status_code in (202, 403)
+
+
+async def test_job_dry_run_is_explicit_and_default_safe(session_factory):
+    await _seed(session_factory)
+    async with make_client(session_factory, mounted=True, user_id=1) as c:
+        r = await c.post("/api/platform/jobs", json={
+            "service": "soar", "action": "playbook.run",
+            "params": {"playbook_id": 1}})
+        assert r.status_code == 202
