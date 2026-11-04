@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import asyncio
 from datetime import datetime, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -481,3 +482,59 @@ async def test_incident_playbook_run_relationship(session_factory):
         # unknown incident -> 404; foreign incident -> 403
         assert (await c.post(f"/api/soar/playbooks/{pb['id']}/run",
                              json={"mode": "simulate", "incident_uid": "INC-999999"})).status_code == 404
+
+
+
+async def test_running_playbook_can_be_cancelled_between_steps(session_factory, monkeypatch):
+    """A concurrent cancel sees the committed running row and stops later steps."""
+    await _seed(session_factory)
+    from app.routers import soar as soar_module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def controlled_step(db, run, step, current_user, executing):
+        if step["name"] == "Pause":
+            entered.set()
+            await release.wait()
+        return "completed", "controlled test step"
+
+    monkeypatch.setattr(soar_module, "_run_step", controlled_step)
+
+    async with client_for(session_factory, 1) as c:
+        playbook = await c.post("/api/soar/playbooks", json={
+            "name": "Cancelable test",
+            "steps": [
+                {"name": "Pause", "action": "wait", "params": {"seconds": 0}},
+                {"name": "Must be skipped", "action": "wait", "params": {"seconds": 0}},
+            ],
+        })
+        assert playbook.status_code == 201, playbook.text
+        pb_id = playbook.json()["id"]
+
+        running_request = asyncio.create_task(c.post(
+            f"/api/soar/playbooks/{pb_id}/run",
+            json={"mode": "execute"},
+        ))
+        await asyncio.wait_for(entered.wait(), timeout=3)
+
+        async with session_factory() as db:
+            running = (await db.execute(
+                select(PlaybookRun).where(PlaybookRun.playbook_id == pb_id)
+                .order_by(PlaybookRun.id.desc())
+            )).scalars().first()
+            assert running is not None and running.status == "running"
+            run_uid = running.uid
+
+        cancelled = await c.post(f"/api/soar/runs/{run_uid}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "cancelled"
+
+        release.set()
+        completed = await asyncio.wait_for(running_request, timeout=3)
+        assert completed.status_code == 200, completed.text
+        result = completed.json()["run"]
+        assert result["status"] == "cancelled"
+        assert result["result_log"][0]["status"] == "completed"
+        assert result["result_log"][1]["status"] == "skipped"
+        assert result["result_log"][1]["detail"] == "Cancelled by operator"
