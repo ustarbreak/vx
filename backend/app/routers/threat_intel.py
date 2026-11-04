@@ -124,6 +124,11 @@ async def indicator_matches(db=Depends(get_db),
     incs = (await db.execute(select(Incident).where(
         Incident.org_id == org_id, Incident.ioc_related.isnot(None)))).scalars().all()
     out = []
+    # Fetch the tenant's bounded candidate set once, not once per incident IOC.
+    candidates = (await db.execute(
+        select(Alert).where(Alert.org_id == org_id)
+        .order_by(Alert.created_at.desc()).limit(5000)
+    )).scalars().all()
     for inc in incs:
         for raw_ioc in (inc.ioc_related or []):
             if not raw_ioc:
@@ -131,10 +136,6 @@ async def indicator_matches(db=Depends(get_db),
             ioc = str(raw_ioc).strip()
             if not ioc:
                 continue
-            candidates = (await db.execute(
-                select(Alert).where(Alert.org_id == org_id)
-                .order_by(Alert.created_at.desc()).limit(5000)
-            )).scalars().all()
             provenance = []
             for alert in candidates:
                 matched_fields = _alert_ioc_provenance(alert, ioc)
