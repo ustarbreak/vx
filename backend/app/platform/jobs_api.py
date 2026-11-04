@@ -16,7 +16,6 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
@@ -43,6 +42,11 @@ class JobIn(BaseModel):
 async def _run(job_id: str, service: str, action: str, params: Dict[str, Any],
                user_dict: Dict[str, Any]) -> None:
     await jobs.update(job_id, JobState.running)
+    if params.get("dry_run", True):
+        await jobs.update(job_id, JobState.dry_run,
+                          message="Dry-run completed; provider execution was not invoked.",
+                          data={"dry_run": True})
+        return
     try:
         provider = get_provider(service, {})
         if provider is None:
@@ -92,7 +96,7 @@ async def create_job(body: JobIn, request: Request,
                             getattr(user, "org_id", 0) or 0,
                             job_params, idempotency_key=body.idempotency_key)
     task = asyncio.create_task(
-        _run(job["id"], body.service, body.action, body.params,
+        _run(job["id"], body.service, body.action, job_params,
              {"id": getattr(user, "id", None)}))
     _BG_TASKS.add(task)
     task.add_done_callback(_BG_TASKS.discard)
