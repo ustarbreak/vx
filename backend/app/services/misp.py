@@ -8,7 +8,7 @@ class MISPService:
 
     `verify_ssl` may be a CA bundle path for private PKI deployments.
     """
-    def __init__(self, url: str, api_key: str, verify_ssl: bool | str = True):
+    def __init__(self, url: str, api_key: str, verify_ssl: bool = True):
         self.misp = PyMISP(url, api_key, ssl=verify_ssl)
 
     async def search_iocs(self, event_id: str = None, value: str = None,
