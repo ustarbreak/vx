@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
+from app.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import User
 from app.platform.connectors.base import get_provider
 from app.platform.connectors.guardrails import check as guard_check
@@ -72,6 +74,7 @@ async def _run(job_id: str, service: str, action: str, params: Dict[str, Any],
 
 @router.post("/jobs", status_code=202)
 async def create_job(body: JobIn, request: Request,
+                     db: AsyncSession = Depends(get_db),
                      user: User = Depends(get_current_user)):
     from app.platform.catalog.schema import load_catalog
     spec = load_catalog().get(body.service)
@@ -81,11 +84,7 @@ async def create_job(body: JobIn, request: Request,
     if act is None or act.status in ("roadmap", "unsupported"):
         return {"status": "unsupported", "service": body.service, "action": body.action,
                 "reason": "action not ga/beta in catalog"}
-    confirmer = None
-    if body.confirmer_id is not None:
-        from app.database import AsyncSessionLocal
-        async with AsyncSessionLocal() as db:
-            confirmer = await db.get(User, body.confirmer_id)
+    confirmer = await db.get(User, body.confirmer_id) if body.confirmer_id is not None else None
     decision = guard_check(user, getattr(act, "dangerous", False),
                            body.dry_run, body.params, confirmer=confirmer)
     if not decision.allowed:
