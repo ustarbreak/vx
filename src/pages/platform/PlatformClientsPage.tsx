@@ -528,7 +528,7 @@ export default function PlatformClientsPage() {
               {activeTab === 'devices' && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({deviceCountFor(selectedOrg)})</h3>
+                    <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({(demo ? deviceCountFor(selectedOrg) : selectedOrg.assetCount)})</h3>
                     <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
                       Deploy Agent
                     </button>
@@ -547,7 +547,7 @@ export default function PlatformClientsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {devicesFor(selectedOrg).map(device => (
+                        {(demo ? devicesFor(selectedOrg) : []).map(device => (
                           <tr key={device.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
                             <td className="px-4 py-3 text-sm text-[var(--ic-heading)] font-mono">
                               {device.hostname}
@@ -600,7 +600,7 @@ export default function PlatformClientsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {membersFor(selectedOrg.id).map(member => (
+                        {(demo ? membersFor(selectedOrg.id) : []).map(member => (
                           <tr key={member.email} className="border-b border-[var(--ic-border)]">
                             <td className="px-4 py-3 text-sm text-[var(--ic-heading)]">{member.name}</td>
                             <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{member.email}</td>
@@ -615,7 +615,7 @@ export default function PlatformClientsPage() {
                             <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{member.lastLogin}</td>
                           </tr>
                         ))}
-                        {membersFor(selectedOrg.id).length === 0 && (
+                        {(demo ? membersFor(selectedOrg.id).length : 0) === 0 && (
                           <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">Aucun membre dans le demo world pour ce tenant — créez des utilisateurs depuis le backend.</td></tr>
                         )}
                       </tbody>
@@ -634,7 +634,7 @@ export default function PlatformClientsPage() {
                     </button>
                   </div>
                   <div className="space-y-3">
-                    {apiKeysFor(selectedOrg.id).map((apiKey, idx) => (
+                    {(demo ? apiKeysFor(selectedOrg.id) : []).map((apiKey, idx) => (
                       <div key={idx} className="p-4 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)]">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
@@ -664,7 +664,7 @@ export default function PlatformClientsPage() {
                         </div>
                       </div>
                     ))}
-                    {apiKeysFor(selectedOrg.id).length === 0 && (
+                    {(demo ? apiKeysFor(selectedOrg.id).length : 0) === 0 && (
                       <p className="text-xs text-[var(--ic-muted)] py-6 text-center">Aucune clé API pour ce tenant dans le demo world.</p>
                     )}
                   </div>
@@ -672,7 +672,7 @@ export default function PlatformClientsPage() {
               )}
 
               {activeTab === 'license' && (() => {
-                const license = licenseFor(selectedOrg);
+                const license = demo ? licenseFor(selectedOrg) : null;
                 return (
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">License Information</h3>
