@@ -212,7 +212,7 @@ async def test_integration(
             action="integration.test_failed",
             resource="Integration",
             resource_id=str(integration.id),
-            details=f"Failed to test integration: {integration.name} - {str(e)}",
+            details=f"Connection test failed for integration: {integration.name} ({type(e).__name__})",
             ip_address=request.client.host if request.client else None,
             outcome="failure"
         )
@@ -221,7 +221,7 @@ async def test_integration(
         
         return IntegrationTestResult(
             success=False,
-            message=f"Connection failed: {str(e)}"
+            message="Connection test failed. Verify the endpoint, credentials, TLS certificate, and service availability."
         )
 
 

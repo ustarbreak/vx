@@ -14,7 +14,7 @@ class MISPService:
     - Attribute management
     """
     
-    def __init__(self, url: str, api_key: str, verify_ssl: bool = False):
+    def __init__(self, url: str, api_key: str, verify_ssl: bool = True):
         self.misp = PyMISP(url, api_key, ssl=verify_ssl)
     
     async def search_iocs(

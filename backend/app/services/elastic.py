@@ -14,11 +14,13 @@ class ElasticService:
     - Dashboard integration
     """
     
-    def __init__(self, url: str, api_key: str):
+    def __init__(self, url: str, api_key: str, ca_certs: str | None = None):
         self.es = AsyncElasticsearch(
             hosts=[url],
             api_key=api_key,
-            request_timeout=30
+            request_timeout=30,
+            verify_certs=True,
+            ca_certs=ca_certs
         )
     
     async def search_logs(
