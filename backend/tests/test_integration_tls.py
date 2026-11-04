@@ -1,8 +1,6 @@
 """Regression tests for secure defaults on outbound integration clients."""
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def test_wazuh_tls_verification_enabled_by_default(monkeypatch):
     import app.services.wazuh as module
@@ -57,3 +55,17 @@ def test_elastic_accepts_private_ca_bundle(monkeypatch):
                           ca_certs="/etc/ssl/customer-ca.pem")
     assert captured["verify_certs"] is True
     assert captured["ca_certs"] == "/etc/ssl/customer-ca.pem"
+
+
+def test_wazuh_accepts_private_ca_bundle(monkeypatch):
+    import app.services.wazuh as module
+
+    captured = {}
+    class Client:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+    monkeypatch.setattr(module.httpx, "AsyncClient", Client)
+
+    module.WazuhService("https://wazuh.example", "user", "secret",
+                        verify_ssl="/etc/ssl/customer-ca.pem")
+    assert captured["verify"] == "/etc/ssl/customer-ca.pem"
