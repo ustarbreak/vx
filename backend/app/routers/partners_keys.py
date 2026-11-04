@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +68,12 @@ class WebhookIn(BaseModel):
     # Optional: when omitted the server generates one and returns it exactly once.
     secret: Optional[str] = Field(default=None, min_length=16, max_length=128)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def _https_only(self):
+        if self.url.scheme != "https":
+            raise ValueError("URL de webhook en https obligatoire")
+        return self
 
 
 class WebhookPatch(BaseModel):

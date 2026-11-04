@@ -53,7 +53,9 @@ VENDOR_META = {
 class ConnectorIn(BaseModel):
     model_config = {"extra": "ignore"}
     enabled: bool = True
-    base_url: str = Field(min_length=8, max_length=300)
+    # PSA/RMM endpoints are https URLs; Microsoft 365 is identified by tenant_id
+    # (+client_id) and may omit base_url (graph endpoint is implicit).
+    base_url: Optional[str] = Field(default=None, max_length=300)
     # PSA identifiers — accepted under several common spellings from the UI.
     tenant: Optional[str] = Field(default=None, max_length=120)
     tenant_id: Optional[str] = Field(default=None, max_length=120)
@@ -66,14 +68,14 @@ class ConnectorIn(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self):
-        self.tenant = (self.tenant or self.tenant_id or "").strip()
+        self.tenant = (self.tenant or self.tenant_id or self.api_identifier or "").strip()
         self.client_id = (self.client_id or self.api_identifier or "").strip()
-        if not self.base_url.startswith("https://"):
+        if self.base_url and not self.base_url.startswith("https://"):
             raise ValueError("base_url doit être en https")
-        if not self.tenant:
-            raise ValueError("tenant requis")
-        if not self.client_id:
-            raise ValueError("client_id requis")
+        # PSA/RMM connectors identify themselves with tenant OR api_identifier;
+        # Microsoft 365 uses tenant_id + client_id. Either identifier pair is fine.
+        if not self.tenant and not self.client_id:
+            raise ValueError("identifiant de compte requis (tenant / api_identifier / client_id)")
         return self
 
 
