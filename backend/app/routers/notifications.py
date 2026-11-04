@@ -478,7 +478,9 @@ async def get_event_evidence(event_uid: str,
         db, org_id=org, event_uid=event_uid)
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "evidence not found")
-    return EventEvidenceDetail.model_validate(rec)
+    detail = EventEvidenceDetail.model_validate(rec)
+    detail.integrity_status = ev.verify_payload_integrity(rec)
+    return detail
 
 
 # ---------------------------------------------------------------------------
