@@ -64,10 +64,11 @@ class JobStore:
 
     async def create(self, action: str, org_id: int, params: Dict[str, Any],
                      idempotency_key: Optional[str] = None) -> Dict[str, Any]:
-        if idempotency_key:
-            existing = await self._get_by_key(idempotency_key)
+        scoped_key = f"{org_id}:{action}:{idempotency_key}" if idempotency_key else None
+        if scoped_key:
+            existing = await self._get_by_key(scoped_key)
             if existing:
-                return existing
+                return {**existing, "_created": False}
         job = {
             "id": uuid.uuid4().hex,
             "action": action,
@@ -78,18 +79,18 @@ class JobStore:
             "idempotency_key": idempotency_key,
         }
         await self._save(job)
-        if idempotency_key:
+        if scoped_key:
             if await self._redis_available():
                 r = _redis()
                 try:
-                    await r.setex(f"{_PREFIX}key:{idempotency_key}", _TTL, job["id"])
+                    await r.setex(f"{_PREFIX}key:{scoped_key}", _TTL, job["id"])
                 except Exception as e:
                     logger.warning("redis setex failed: %s", e)
                 finally:
                     await r.aclose()
             else:
-                self._mem[f"key:{idempotency_key}"] = job["id"]
-        return job
+                self._mem[f"key:{scoped_key}"] = job["id"]
+        return {**job, "_created": True}
 
     async def update(self, job_id: str, state: JobState, message: str = "",
                      data: Optional[Dict[str, Any]] = None):
@@ -113,18 +114,18 @@ class JobStore:
                 await r.aclose()
         return self._mem.get(job_id)
 
-    async def _get_by_key(self, key: str) -> Optional[Dict[str, Any]]:
+    async def _get_by_key(self, scoped_key: str) -> Optional[Dict[str, Any]]:
         if await self._redis_available():
             r = _redis()
             try:
-                jid = await r.get(f"{_PREFIX}key:{key}")
+                jid = await r.get(f"{_PREFIX}key:{scoped_key}")
                 if jid:
                     return await self.get(jid)
             except Exception as e:
                 logger.warning("redis lookup failed: %s", e)
             finally:
                 await r.aclose()
-        jid = self._mem.get(f"key:{key}")
+        jid = self._mem.get(f"key:{scoped_key}")
         return self._mem.get(jid) if jid else None
 
     async def _save(self, job: Dict[str, Any]):
