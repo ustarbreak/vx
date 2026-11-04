@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from typing import Optional, List
 import asyncio
+import re
 
 from sqlalchemy import select
 
@@ -84,12 +85,39 @@ async def feeds_status(db=Depends(get_db),
             "no_feed_data": not any(f["configured"] for f in feeds)}
 
 
+def _contains_exact_ioc(value, ioc: str) -> bool:
+    """Find an exact IOC value in structured alert evidence without matching
+    substrings (e.g. 185.220.101.7 must not match 185.220.101.70)."""
+    if isinstance(value, dict):
+        return any(_contains_exact_ioc(v, ioc) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_exact_ioc(v, ioc) for v in value)
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    if candidate.casefold() == ioc.casefold():
+        return True
+    boundary = r"(?<![A-Za-z0-9_.:-])" + re.escape(ioc) + r"(?![A-Za-z0-9_.:-])"
+    return re.search(boundary, candidate, flags=re.IGNORECASE) is not None
+
+
+def _alert_ioc_provenance(alert: Alert, ioc: str) -> list[str]:
+    """Return only fields that actually contain the exact IOC value."""
+    fields = []
+    if _contains_exact_ioc(alert.raw_payload or {}, ioc):
+        fields.append("raw_payload")
+    if _contains_exact_ioc(alert.title or "", ioc):
+        fields.append("title")
+    if _contains_exact_ioc(alert.description or "", ioc):
+        fields.append("description")
+    return fields
+
+
 @router.get("/matches")
 async def indicator_matches(db=Depends(get_db),
                             current_user: User = Depends(get_current_user)):
-    """IoCs actually attached to THIS tenant's incidents (real evidence of
-    indicator-to-event linkage; empty list means no matches — never invented).
-    `resource` links back into device details / alert drill-down."""
+    """Return tenant incident IoCs and only alerts whose stored evidence
+    contains that exact indicator. Asset co-location alone is not provenance."""
     org_id = current_user.org_id
     if org_id is None:
         return {"matches": []}
@@ -97,20 +125,30 @@ async def indicator_matches(db=Depends(get_db),
         Incident.org_id == org_id, Incident.ioc_related.isnot(None)))).scalars().all()
     out = []
     for inc in incs:
-        for ioc in (inc.ioc_related or []):
+        for raw_ioc in (inc.ioc_related or []):
+            if not raw_ioc:
+                continue
+            ioc = str(raw_ioc).strip()
             if not ioc:
                 continue
-            alerts = (await db.execute(select(Alert.uid).where(
-                Alert.org_id == org_id, Alert.resource == (inc.affected_assets or [None])[0]
-            ).limit(5))).scalars().all()
+            candidates = (await db.execute(
+                select(Alert).where(Alert.org_id == org_id)
+                .order_by(Alert.created_at.desc()).limit(5000)
+            )).scalars().all()
+            provenance = []
+            for alert in candidates:
+                matched_fields = _alert_ioc_provenance(alert, ioc)
+                if matched_fields:
+                    provenance.append({"uid": alert.uid, "matched_fields": matched_fields})
             out.append({
-                "indicator": str(ioc),
+                "indicator": ioc,
                 "incident_uid": inc.uid,
                 "severity": inc.severity,
                 "category": inc.category,
                 "status": inc.status,
                 "assets": (inc.affected_assets or [])[:10],
-                "related_alert_uids": list(alerts),
+                "related_alert_uids": [p["uid"] for p in provenance[:5]],
+                "related_alert_provenance": provenance[:5],
                 "observed_at": inc.created_at.isoformat() if inc.created_at else None,
             })
     out.sort(key=lambda m: m.get("observed_at") or "", reverse=True)
