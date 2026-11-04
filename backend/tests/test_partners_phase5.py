@@ -407,6 +407,14 @@ async def test_connectors_vendor_enum_and_no_secret_echo(session_factory):
         r = await c.put("/api/partners/1/connectors/microsoft365", json={
             "enabled": True, "tenant_id": "tid", "secret": "m365-client-secret"})
         assert r.status_code == 422  # client_id required for Entra app
+        r = await c.put("/api/partners/1/connectors/microsoft365", json={
+            "enabled": True, "tenant_id": "   ", "client_id": "cid",
+            "secret": "m365-client-secret"})
+        assert r.status_code == 422  # whitespace tenant is not an identifier
+        r = await c.put("/api/partners/1/connectors/connectwise", json={
+            "enabled": True, "client_id": "client-only", "base_url": "https://my.connectwise.com",
+            "secret": "super-secret-token"})
+        assert r.status_code == 422  # PSA/RMM requires tenant or api_identifier
         r = await c.put("/api/partners/1/connectors/connectwise", json={
             "enabled": True, "api_identifier": "atlas", "secret": "super-secret-token"})
         assert r.status_code == 422  # PSA/RMM requires HTTPS base_url
