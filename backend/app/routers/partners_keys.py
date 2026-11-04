@@ -82,6 +82,12 @@ class WebhookPatch(BaseModel):
     secret: Optional[str] = Field(default=None, min_length=16, max_length=128)
     enabled: Optional[bool] = None
 
+    @model_validator(mode="after")
+    def _https_only(self):
+        if self.url is not None and self.url.scheme != "https":
+            raise ValueError("URL de webhook en https obligatoire")
+        return self
+
 
 async def _store(db: AsyncSession, partner_id: int, key: str, value) -> None:
     data = await _settings(db, partner_id)
