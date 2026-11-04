@@ -128,8 +128,13 @@ async def upsert_connector(pid: str, vendor: VendorId, body: ConnectorIn, reques
     _rate_limit(f"conn:{user.id}", max_calls=10)
     # Microsoft 365 requires both Entra identifiers. PSA/RMM vendors
     # accept the normalized tenant/api_identifier spelling.
-    if vendor == "microsoft365" and (not body.tenant_id or not body.client_id):
+    if vendor == "microsoft365" and (
+        not body.tenant_id or not body.tenant_id.strip()
+        or not body.client_id or not body.client_id.strip()
+    ):
         raise HTTPException(422, "Microsoft 365 requires tenant_id and client_id")
+    if vendor != "microsoft365" and (not body.tenant or not body.tenant.strip()):
+        raise HTTPException(422, "tenant or api_identifier requis pour les connecteurs PSA/RMM")
     if vendor != "microsoft365" and not body.base_url:
         raise HTTPException(422, "base_url HTTPS requis pour les connecteurs PSA/RMM")
     partner = await _resolve_partner(pid, user, db)
