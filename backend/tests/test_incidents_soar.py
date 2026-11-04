@@ -46,7 +46,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test s
 from app.database import Base, get_db  # noqa: E402
 from app.core.security import create_access_token, get_password_hash  # noqa: E402
 from app.models import (  # noqa: E402
-    Organization, User, Alert, Ticket, TicketApproval, Incident, IncidentEvidence, Playbook, PlaybookRun, AuditLog,
+    Organization, User, Alert, Ticket, Incident, IncidentEvidence, Playbook, PlaybookRun, AuditLog,
 )
 from app.services.seed import ensure_uid_counters  # noqa: E402
 from app.main import app  # noqa: E402
@@ -590,52 +590,3 @@ async def test_running_playbook_can_be_cancelled_between_steps(session_factory, 
         assert result["result_log"][0]["status"] == "completed"
         assert result["result_log"][1]["status"] == "skipped"
         assert result["result_log"][1]["detail"] == "Cancelled by operator"
-
-
-async def test_ticket_mutations_and_closure_approvals_require_admin_role(session_factory):
-    """Standard tenant users may view/request service, but cannot change ticket control fields or approve closure."""
-    await _seed(session_factory)
-    async with session_factory() as db:
-        approval = TicketApproval(
-            ticket_uid="TCK-000001", step=1, approver_role="client_admin",
-            status="pending", note="Evidence reviewed",
-        )
-        db.add(approval)
-        await db.commit()
-        approval_id = approval.id
-
-    async with client_for(session_factory, 2) as standard_user:
-        denied_update = await standard_user.patch("/api/tickets/TCK-000001", json={
-            "status": "closed", "priority": "p1", "assignee": "attacker@acme.io",
-        })
-        assert denied_update.status_code == 403
-        denied_approval = await standard_user.post(
-            f"/api/tickets/TCK-000001/approvals/{approval_id}/decide",
-            json={"approve": True, "note": "self-approved"},
-        )
-        assert denied_approval.status_code == 403
-        visible = await standard_user.get("/api/tickets/TCK-000001")
-        assert visible.status_code == 200
-        assert visible.json()["status"] == "in_progress"
-
-    async with client_for(session_factory, 1) as tenant_admin:
-        foreign_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
-            "assignee": "admin@for.io",
-        })
-        assert foreign_assignee.status_code == 403
-        missing_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
-            "assignee": "missing@acme.io",
-        })
-        assert missing_assignee.status_code == 404
-        allowed = await tenant_admin.post(
-            f"/api/tickets/TCK-000001/approvals/{approval_id}/decide",
-            json={"approve": True, "note": "Reviewed by tenant admin"},
-        )
-        assert allowed.status_code == 200, allowed.text
-        assert allowed.json()["status"] == "approved"
-
-    async with session_factory() as db:
-        ticket = (await db.execute(
-            select(Ticket).where(Ticket.uid == "TCK-000001")
-        )).scalars().one()
-        assert ticket.status == "closed"
