@@ -560,6 +560,7 @@ AlertDetailResponse.model_rebuild()
 
 class EventEvidenceDetail(EventEvidenceSummary):
     """Full evidence record — raw payload included. Access-controlled."""
+    integrity_status: str = "not_verifiable"  # verified|mismatch|not_verifiable
     raw_payload: Optional[dict] = None      # null after retention expiry
     payload_excerpt: Optional[str] = None   # first bytes when truncation happened
     provenance: dict = {}
