@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import sys
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -639,3 +639,46 @@ async def test_ticket_mutations_and_closure_approvals_require_admin_role(session
             select(Ticket).where(Ticket.uid == "TCK-000001")
         )).scalars().one()
         assert ticket.status == "closed"
+
+
+async def test_stale_soar_run_recovery_marks_interrupted_run_failed(session_factory):
+    """Recovery never fabricates success and leaves recent runs untouched."""
+    await _seed(session_factory)
+    from app.services.soar import recover_stale_runs
+
+    async with session_factory() as db:
+        pb = Playbook(
+            uid="PBK-RECOVERY-1", org_id=1, name="Recovery fixture",
+            description="", category="Incident Response", steps=[],
+            triggers=[], enabled=True, created_by="admin@acme.io",
+        )
+        db.add(pb)
+        await db.flush()
+        stale = PlaybookRun(
+            uid="RUN-STALE-1", playbook_id=pb.id, org_id=1, mode="execute",
+            status="running", triggered_by="admin@acme.io", total_steps=2,
+            completed_steps=1, result_log=[{"step": 1, "status": "completed"}],
+            started_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        )
+        recent = PlaybookRun(
+            uid="RUN-RECENT-1", playbook_id=pb.id, org_id=1, mode="execute",
+            status="running", triggered_by="admin@acme.io", total_steps=1,
+            completed_steps=0, result_log=[],
+            started_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        )
+        db.add_all([stale, recent])
+        await db.commit()
+
+        count = await recover_stale_runs(db, stale_after_minutes=30)
+        assert count == 1
+        await db.refresh(stale)
+        await db.refresh(recent)
+        assert stale.status == "failed"
+        assert stale.finished_at is not None
+        assert "operator review" in stale.error
+        assert stale.completed_steps == 1
+        assert stale.result_log == [{"step": 1, "status": "completed"}]
+        assert recent.status == "running"
+        assert recent.finished_at is None
+        assert await recover_stale_runs(db, stale_after_minutes=30) == 0
+
