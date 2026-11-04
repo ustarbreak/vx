@@ -349,6 +349,15 @@ async def test_webhooks_https_validated_and_secret_hidden(session_factory):
         wid = created["id"]
         assert created.get("secret"), "secret shown on creation"
 
+        # PATCH must enforce the same HTTPS-only transport rule as POST.
+        r = await c.patch(f"/api/partners/1/webhooks/{wid}",
+                          json={"url": "http://downgrade.example/hook"})
+        assert r.status_code == 422
+        # A valid HTTPS update remains supported.
+        r = await c.patch(f"/api/partners/1/webhooks/{wid}",
+                          json={"url": "https://updated.example/hook"})
+        assert r.status_code == 200, r.text
+
         r = await c.get("/api/partners/1/webhooks")
         items = r.json()["items"]
         assert all("secret" not in i for i in items)
@@ -393,6 +402,21 @@ async def test_connectors_vendor_enum_and_no_secret_echo(session_factory):
         body = r.json()
         assert "super-secret-token" not in str(body)
         assert body.get("secret_configured") is True or body.get("secret_ref")
+
+        # Vendor-specific identifier requirements are enforced.
+        r = await c.put("/api/partners/1/connectors/microsoft365", json={
+            "enabled": True, "tenant_id": "tid", "secret": "m365-client-secret"})
+        assert r.status_code == 422  # client_id required for Entra app
+        r = await c.put("/api/partners/1/connectors/connectwise", json={
+            "enabled": True, "api_identifier": "atlas", "secret": "super-secret-token"})
+        assert r.status_code == 422  # PSA/RMM requires HTTPS base_url
+
+        # Header secrets bypass Pydantic body parsing unless checked explicitly.
+        r = await c.put("/api/partners/1/connectors/connectwise",
+                        headers={"X-IC-Connector-Secret": "tiny"},
+                        json={"enabled": True, "base_url": "https://my.connectwise.com",
+                              "api_identifier": "atlas"})
+        assert r.status_code == 422
 
         # M365 requires both Entra identifiers and a realistic secret.
         r = await c.put("/api/partners/1/connectors/microsoft365", json={
