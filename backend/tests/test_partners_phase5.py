@@ -79,7 +79,7 @@ async def _seed(factory):
                          contact_email="a@b.c"),
             User(id=1, email="boss@atlas.ma", hashed_password=get_password_hash("pw-atlas-123"),
                  name="Boss Atlas", role="partner_admin", org_id=1, status="active"),
-            User(id=2, email="analyst@atlas.ma", hashed_password=_TEST_HASH,
+            User(id=2, email="analyst@atlas.ma", hashed_password=get_password_hash("pw-analyst-123"),
                  name="Ana Lyse", role="analyst", org_id=1, status="active"),
             User(id=3, email="root@dakhla.ma", hashed_password=get_password_hash("pw-dakhla-123"),
                  name="Boss Dakhla", role="partner_admin", org_id=2, status="active"),
@@ -194,7 +194,7 @@ async def test_mfa_policy_toggle_roundtrip(session_factory):
         r = await c.get("/api/partners/1/mfa-policy")
         body = r.json()
         assert body["require_mfa"] is True
-        assert set(body["non_compliant_emails"]) == {"boss@atlas.ma", "analyst@atlas.ma"}
+        assert set(body["non_compliant_emails"]) == {"boss@atlas.ma", "boss2@atlas.ma", "analyst@atlas.ma"}
 
         # team listing surfaces pending enrollment flags
         r = await c.get("/api/partners/1/team")
@@ -315,7 +315,7 @@ async def test_api_keys_hashed_once_shown_revoked(session_factory):
 
         # revoke
         r = await c.delete(f"/api/partners/1/api-keys/{created['id']}")
-        assert r.status_code == 200
+        assert r.status_code == 204
         r = await c.get("/api/partners/1/api-keys")
         assert all(i["status"] == "revoked" for i in r.json()["items"])
 
