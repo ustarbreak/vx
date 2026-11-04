@@ -72,11 +72,15 @@ async def _seed(factory):
                  name="CA3", role="client_admin", org_id=3),
             # --- events (alerts) in window ---
             Alert(id=1, uid="ALR-1", org_id=1, title="Brute force", severity="high",
-                  source="siem", resource="srv-01", correlated_count=5, created_at=NOW - timedelta(hours=2)),
+                  source="siem", resource="srv-01", raw_payload={"src_ip": "185.220.101.7"}, correlated_count=5, created_at=NOW - timedelta(hours=2)),
             Alert(id=2, uid="ALR-2", org_id=1, title="Malware exec", severity="critical",
-                  source="wazuh", resource="srv-01", correlated_count=1, created_at=NOW - timedelta(hours=3)),
+                  source="wazuh", resource="srv-01", raw_payload={"message": "malware alert without the incident IOC"}, correlated_count=1, created_at=NOW - timedelta(hours=3)),
             Alert(id=3, uid="ALR-3", org_id=1, title="Policy warn", severity="low",
                   source="syslog", resource="sw-02", correlated_count=2, created_at=NOW - timedelta(days=10)),
+            # Similar-looking but distinct IOC must not match by substring.
+            Alert(id=4, uid="ALR-4", org_id=1, title="Adjacent IP", severity="medium",
+                  source="siem", resource="srv-01", raw_payload={"src_ip": "185.220.101.70"},
+                  correlated_count=1, created_at=NOW - timedelta(hours=1)),
             # foreign tenant alert must never leak into org 1 metrics
             Alert(id=9, uid="ALR-9", org_id=3, title="Foreign", severity="critical",
                   source="siem", resource="other-host", correlated_count=1, created_at=NOW),
@@ -218,7 +222,12 @@ async def test_indicator_matches_only_real_links(session_factory):
         assert "evil.example" not in inds         # foreign tenant never leaks
         m = body["matches"][0]
         assert m["incident_uid"] == "INC-1" and m["assets"] == ["srv-01"]
-        assert m["related_alert_uids"] == ["ALR-1", "ALR-2"]  # drill-down evidence
+        assert m["related_alert_uids"] == ["ALR-1"]  # exact IOC evidence only
+        assert m["related_alert_provenance"] == [
+            {"uid": "ALR-1", "matched_fields": ["raw_payload"]}
+        ]
+        assert "ALR-2" not in m["related_alert_uids"]  # same asset is not IOC provenance
+        assert "ALR-4" not in m["related_alert_uids"]  # substring/similar-IP false match refused
     async with client_for(session_factory, user_id=3) as c:
         r = await c.get("/api/threat-intel/matches")
         assert [m["indicator"] for m in r.json()["matches"]] == ["evil.example"]
