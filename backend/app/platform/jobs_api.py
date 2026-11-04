@@ -16,6 +16,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 from pydantic import BaseModel
 
 from app.core.security import get_current_user
@@ -35,6 +36,8 @@ class JobIn(BaseModel):
     action: str
     params: Dict[str, Any] = {}
     idempotency_key: str | None = None
+    dry_run: bool = True
+    confirmer_id: int | None = None
 
 
 async def _run(job_id: str, service: str, action: str, params: Dict[str, Any],
@@ -74,12 +77,20 @@ async def create_job(body: JobIn, request: Request,
     if act is None or act.status in ("roadmap", "unsupported"):
         return {"status": "unsupported", "service": body.service, "action": body.action,
                 "reason": "action not ga/beta in catalog"}
-    decision = guard_check(user, getattr(act, "dangerous", False), True, body.params)
+    confirmer = None
+    if body.confirmer_id is not None:
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            confirmer = await db.get(User, body.confirmer_id)
+    decision = guard_check(user, getattr(act, "dangerous", False),
+                           body.dry_run, body.params, confirmer=confirmer)
     if not decision.allowed:
         raise HTTPException(status_code=403, detail=decision.reason)
+    job_params = dict(body.params)
+    job_params["dry_run"] = body.dry_run
     job = await jobs.create(f"{body.service}.{body.action}",
                             getattr(user, "org_id", 0) or 0,
-                            body.params, idempotency_key=body.idempotency_key)
+                            job_params, idempotency_key=body.idempotency_key)
     task = asyncio.create_task(
         _run(job["id"], body.service, body.action, body.params,
              {"id": getattr(user, "id", None)}))
@@ -94,6 +105,7 @@ _BG_TASKS: set = set()
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: str, user: User = Depends(get_current_user)):
     job = await jobs.get(job_id)
-    if not job:
+    if not job or (user.role != "platform_admin" and job.get("org_id") != user.org_id):
+        # Conceal cross-tenant job existence.
         raise HTTPException(status_code=404, detail="job not found")
     return job
