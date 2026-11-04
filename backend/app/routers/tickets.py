@@ -124,7 +124,18 @@ async def get_ticket(uid: str, current_user: User = Depends(get_current_user),
 async def update_ticket(uid: str, body: TicketUpdate,
                         current_user: User = Depends(get_current_user),
                         db: AsyncSession = Depends(get_db)):
+    if current_user.role not in ("client_admin", "platform_admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Only tenant administrators or platform administrators may modify ticket ownership, status, or priority")
     t = await _get_ticket(db, uid, current_user)
+    if body.assignee:
+        target = (await db.execute(
+            select(User).where(User.email == body.assignee)
+        )).scalars().first()
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assignee user not found")
+        if current_user.role != "platform_admin" and target.org_id != current_user.org_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign tickets across tenants")
     changes = []
     if body.status is not None:
         if body.status in ("open", "in_progress") and not t.first_response_at:
@@ -245,6 +256,9 @@ async def list_approvals(uid: str, current_user: User = Depends(get_current_user
 async def decide(uid: str, approval_id: int, body: ApprovalDecision,
                  current_user: User = Depends(get_current_user),
                  db: AsyncSession = Depends(get_db)):
+    if current_user.role not in ("client_admin", "platform_admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Only tenant administrators or platform administrators may decide ticket closure approvals")
     t = await _get_ticket(db, uid, current_user)
     ap = (await db.execute(
         select(TicketApproval).where(TicketApproval.id == approval_id,
