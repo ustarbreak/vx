@@ -80,7 +80,7 @@ async def _seed(factory):
             # Similar-looking but distinct IOC must not match by substring.
             Alert(id=4, uid="ALR-4", org_id=1, title="Adjacent IP", severity="medium",
                   source="siem", resource="srv-01", raw_payload={"src_ip": "185.220.101.70"},
-                  correlated_count=1, created_at=NOW - timedelta(hours=1)),
+                  correlated_count=1, created_at=NOW - timedelta(days=10)),
             # foreign tenant alert must never leak into org 1 metrics
             Alert(id=9, uid="ALR-9", org_id=3, title="Foreign", severity="critical",
                   source="siem", resource="other-host", correlated_count=1, created_at=NOW),
