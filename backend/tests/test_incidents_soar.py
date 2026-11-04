@@ -511,6 +511,14 @@ async def test_ticket_mutations_and_closure_approvals_require_admin_role(session
         assert visible.json()["status"] == "in_progress"
 
     async with client_for(session_factory, 1) as tenant_admin:
+        foreign_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
+            "assignee": "admin@for.io",
+        })
+        assert foreign_assignee.status_code == 403
+        missing_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
+            "assignee": "missing@acme.io",
+        })
+        assert missing_assignee.status_code == 404
         allowed = await tenant_admin.post(
             f"/api/tickets/TCK-000001/approvals/{approval_id}/decide",
             json={"approve": True, "note": "Reviewed by tenant admin"},
