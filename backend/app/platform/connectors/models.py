@@ -37,6 +37,7 @@ class JobState(str, Enum):
     failed = "failed"
     unsupported = "unsupported"  # honesty rule: capability not implemented
     blocked = "blocked"          # requires confirmation (four-eyes gating)
+    dry_run = "dry_run"          # simulated; provider was not invoked
 
 
 @dataclass
