@@ -95,11 +95,13 @@ async def create_job(body: JobIn, request: Request,
     job = await jobs.create(f"{body.service}.{body.action}",
                             getattr(user, "org_id", 0) or 0,
                             job_params, idempotency_key=body.idempotency_key)
-    task = asyncio.create_task(
-        _run(job["id"], body.service, body.action, job_params,
-             {"id": getattr(user, "id", None)}))
-    _BG_TASKS.add(task)
-    task.add_done_callback(_BG_TASKS.discard)
+    # Idempotent replays return the original job without scheduling it twice.
+    if job.get("_created", True):
+        task = asyncio.create_task(
+            _run(job["id"], body.service, body.action, job_params,
+                 {"id": getattr(user, "id", None)}))
+        _BG_TASKS.add(task)
+        task.add_done_callback(_BG_TASKS.discard)
     return {"job_id": job["id"], "state": job["state"]}
 
 
