@@ -15,10 +15,10 @@ class WazuhService:
     - Vulnerability detection
     """
     
-    def __init__(self, base_url: str, api_user: str, api_password: str):
+    def __init__(self, base_url: str, api_user: str, api_password: str, verify_ssl: bool | str = True):
         self.base_url = base_url.rstrip('/')
         self.auth = (api_user, api_password)
-        self.client = httpx.AsyncClient(timeout=30.0, verify=True)
+        self.client = httpx.AsyncClient(timeout=30.0, verify=verify_ssl)
     
     async def get_agents(self, org_id: str = None) -> List[Dict]:
         """
