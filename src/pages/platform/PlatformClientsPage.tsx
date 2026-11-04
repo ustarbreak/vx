@@ -4,6 +4,7 @@ import { Building2, Search, Eye, Edit, CheckCircle2, XCircle, Shield, Ban, Users
 import { demoOrganizations, serviceCatalog } from '../../data/mockData';
 import { Organization, ServiceId, ServiceEntitlement } from '../../types';
 import { organizationsApi, ApiError } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
 import {
   demoApiKeys, demoLicenses, demoDevices, demoTechnicians, demoPlatformAudit,
 } from '../../data/demoWorld';
@@ -217,6 +218,7 @@ const tierColors: Record<string, string> = {
 
 export default function PlatformClientsPage() {
   const nav = useNavigate();
+  const demo = isDemoMode();
   const [search, setSearch] = useState('');
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [activeTab, setActiveTab] = useState<'services' | 'devices' | 'members' | 'api-keys' | 'license' | 'activity'>('services');
@@ -254,7 +256,9 @@ export default function PlatformClientsPage() {
   // entitlements state for backend orgs defaults to empty list
   const getEntitlements = (orgId: string): ServiceEntitlement[] => entitlements[orgId] ?? [];
 
-  const allOrgs = [...demoOrganizations, ...backendOrgs.filter(b => !demoOrganizations.some(d => d.name.toLowerCase() === b.name.toLowerCase()))];
+  const allOrgs = demo
+    ? [...demoOrganizations, ...backendOrgs.filter(b => !demoOrganizations.some(d => d.name.toLowerCase() === b.name.toLowerCase()))]
+    : backendOrgs;
 
   const filtered = allOrgs.filter(o =>
     o.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -262,6 +266,7 @@ export default function PlatformClientsPage() {
   );
 
   const toggleEntitlement = (orgId: string, serviceId: ServiceId) => {
+    if (!demo) return;
     setEntitlements(prev => ({
       ...prev,
       [orgId]: (prev[orgId] ?? []).map(e =>
@@ -279,6 +284,7 @@ export default function PlatformClientsPage() {
 
   return (
     <div className="p-4 lg:p-6 space-y-6">
+      {!demo && <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-[var(--ic-muted)]">LIVE MODE · Organization records are loaded from the backend. Device, member, API-key, license and activity detail tabs are demo-only until tenant-scoped APIs are connected; no demo records are shown in this mode.</div>}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
@@ -499,7 +505,7 @@ export default function PlatformClientsPage() {
                             <span className="text-xs text-[var(--ic-muted)]">${service.basePrice}/mo</span>
                             {isAvailable ? (
                               <button
-                                onClick={() => toggleEntitlement(selectedOrg.id, service.id)}
+                                onClick={() => toggleEntitlement(selectedOrg.id, service.id)} disabled={!demo} title={demo ? 'Toggle demo entitlement' : 'Live entitlement mutation is not connected'}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                                   isEnabled
                                     ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20'
@@ -709,7 +715,7 @@ export default function PlatformClientsPage() {
                         </div>
                       </div>
                       <div className="mt-6 pt-6 border-t border-[var(--ic-border)]">
-                        <button className="px-4 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium border border-[var(--ic-border)] hover:bg-cyan-500/20">
+                        <button disabled title="License renewal is not connected to a backend billing operation" className="px-4 py-2 rounded-lg bg-cyan-500/10 text-cyan-400 text-sm font-medium border border-[var(--ic-border)] disabled:opacity-40">
                           Renew License
                         </button>
                       </div>
@@ -726,7 +732,8 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">Recent Activity</h3>
                   <div className="space-y-2">
-                    {activityFor(selectedOrg.id).map((log, i) => (
+                    {!demo && <p className="text-xs text-[var(--ic-muted)]">Tenant-scoped activity API is not wired into this detail view.</p>}
+                    {(demo ? activityFor(selectedOrg.id) : []).map((log, i) => (
                       <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
                           log.type === 'alert' ? 'bg-red-500' :
