@@ -402,6 +402,7 @@ async def test_cross_tenant_supersedes_rejected_even_platform_admin(factory):
 def test_scoring_path_untouched():
     import inspect
     import subprocess
+    from pathlib import Path
     src = inspect.getsource(__import__("app.services.triage", fromlist=["x"]))
     for banned in ("OutcomeLabel", "outcome_label", "openai", "torch",
                    "sklearn", "predict("):
@@ -410,7 +411,14 @@ def test_scoring_path_untouched():
     for banned in ("requests", "httpx", "openai", "anthropic", "torch",
                    "sklearn", "transformers", "model.fit", "predict("):
         assert banned not in osrc, f"banned ML/LLM/network token in outcomes: {banned}"
-    # git-level proof: services/triage.py identical to HEAD (Stage 5 baseline)
-    diff = subprocess.run(["git", "-C", "/workspace", "diff", "--quiet", "HEAD",
-                           "--", "backend/app/services/triage.py"])
-    assert diff.returncode == 0, "production scoring module was modified"
+    # Git-level proof using this checkout's actual root (works in GitHub Actions
+    # and local clones; never assume a fixed runner path such as /workspace).
+    repo_root = Path(__file__).resolve().parents[2]
+    diff = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", "backend/app/services/triage.py"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    assert diff.returncode == 0, (
+        "production scoring module differs from HEAD; "
+        f"git stderr: {diff.stderr.strip()}"
+    )

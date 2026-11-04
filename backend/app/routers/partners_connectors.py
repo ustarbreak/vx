@@ -68,13 +68,14 @@ class ConnectorIn(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self):
-        self.tenant = (self.tenant or self.tenant_id or self.api_identifier or "").strip()
-        self.client_id = (self.client_id or self.api_identifier or "").strip()
-        if self.base_url and not self.base_url.startswith("https://"):
-            raise ValueError("base_url doit être en https")
-        # PSA/RMM connectors identify themselves with tenant OR api_identifier;
-        # Microsoft 365 uses tenant_id + client_id. Either identifier pair is fine.
-        if not self.tenant and not self.client_id:
+        # Preserve the accepted aliases in normalized fields for PSA/RMM vendors.
+        self.tenant = (self.tenant or self.tenant_id or self.api_identifier or "").strip() or None
+        self.client_id = (self.client_id or self.api_identifier or "").strip() or None
+        if self.base_url:
+            self.base_url = self.base_url.strip()
+            if not self.base_url.lower().startswith("https://"):
+                raise ValueError("base_url doit être en https")
+        if not any((self.tenant, self.client_id)):
             raise ValueError("identifiant de compte requis (tenant / api_identifier / client_id)")
         return self
 
@@ -125,13 +126,28 @@ async def upsert_connector(pid: str, vendor: VendorId, body: ConnectorIn, reques
                            user: User = Depends(get_current_user),
                            db: AsyncSession = Depends(get_db)):
     _rate_limit(f"conn:{user.id}", max_calls=10)
+    # Microsoft 365 requires both Entra identifiers. PSA/RMM vendors
+    # accept the normalized tenant/api_identifier spelling.
+    if vendor == "microsoft365" and (
+        not body.tenant_id or not body.tenant_id.strip()
+        or not body.client_id or not body.client_id.strip()
+    ):
+        raise HTTPException(422, "Microsoft 365 requires tenant_id and client_id")
+    if vendor != "microsoft365" and (not body.tenant or not body.tenant.strip()):
+        raise HTTPException(422, "tenant or api_identifier requis pour les connecteurs PSA/RMM")
+    if vendor != "microsoft365" and not body.base_url:
+        raise HTTPException(422, "base_url HTTPS requis pour les connecteurs PSA/RMM")
     partner = await _resolve_partner(pid, user, db)
     bucket = await _bucket(db, partner.id)
     prev = bucket.get(vendor, {})
     incoming = body.model_dump()
     raw_secret = incoming.pop("secret", None) or request.headers.get("X-IC-Connector-Secret")
+    # Header credentials bypass Pydantic body validation; enforce the same
+    # minimum length before accepting or fingerprinting them.
+    if raw_secret is not None and len(raw_secret) < 8:
+        raise HTTPException(422, "secret must contain at least 8 characters")
     # Never persist a plaintext secret: store only an opaque SHA-256 fingerprint.
-    if raw_secret and len(raw_secret) >= 8:
+    if raw_secret:
         incoming["secret_ref"] = "sha256:" + hashlib.sha256(raw_secret.encode()).hexdigest()[:32]
     merged = {**prev, **{k: v for k, v in incoming.items() if v is not None},
               "enabled": body.enabled,
