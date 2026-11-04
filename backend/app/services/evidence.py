@@ -27,6 +27,7 @@ Retention policy (configurable via settings.EVIDENCE_RETENTION_DAYS):
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import uuid
@@ -58,6 +59,7 @@ def serialize_payload(payload: dict | None) -> tuple[bytes, str]:
     return raw, hashlib.sha256(raw).hexdigest()
 
 
+
 def compute_ingest_key(org_id: int, source_system: str,
                        source_event_id: str | None) -> str | None:
     """Ingestion-IDEMPOTENCY identity — distinct from payload hash (integrity)
@@ -68,6 +70,22 @@ def compute_ingest_key(org_id: int, source_system: str,
         return None
     base = f"{org_id}|{source_system}|{source_event_id}"
     return hashlib.sha256(base.encode()).hexdigest()[:64]
+
+
+
+def verify_payload_integrity(evidence: EventEvidence) -> str:
+    """Verify the stored payload against its ingestion-time SHA-256.
+
+    Returns:
+      verified       — complete inline payload matches its stored digest.
+      mismatch       — complete inline payload no longer matches its digest.
+      not_verifiable — payload is expired, truncated, or unavailable; the
+                       retained digest alone is not proof of current bytes.
+    """
+    if evidence.payload_expired or evidence.truncated or evidence.raw_payload is None:
+        return "not_verifiable"
+    _, digest = serialize_payload(evidence.raw_payload)
+    return "verified" if hmac.compare_digest(digest, evidence.payload_sha256 or "") else "mismatch"
 
 
 async def find_by_ingest_key(db: AsyncSession, ingest_key: str | None) -> EventEvidence | None:
