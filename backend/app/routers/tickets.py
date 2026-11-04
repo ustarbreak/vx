@@ -128,6 +128,14 @@ async def update_ticket(uid: str, body: TicketUpdate,
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Only tenant administrators or platform administrators may modify ticket ownership, status, or priority")
     t = await _get_ticket(db, uid, current_user)
+    if body.assignee:
+        target = (await db.execute(
+            select(User).where(User.email == body.assignee)
+        )).scalars().first()
+        if target is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Assignee user not found")
+        if current_user.role != "platform_admin" and target.org_id != current_user.org_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Cannot assign tickets across tenants")
     changes = []
     if body.status is not None:
         if body.status in ("open", "in_progress") and not t.first_response_at:
