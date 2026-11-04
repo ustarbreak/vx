@@ -380,15 +380,21 @@ async def run_playbook(pb_id: int, body: RunRequest,
     )
     db.add(run)
     await db.flush()
+    # Publish the running row before executing any steps. Without this commit,
+    # a concurrent cancel request cannot see the run and returns 404.
+    await db.commit()
 
     log: list[dict] = []
     completed = failed = skipped = 0
     cancelled = False
     for i, s in enumerate(steps, start=1):
-        db_row = (await db.execute(
-            select(PlaybookRun).where(PlaybookRun.id == run.id)
-        )).scalars().first()
-        if db_row and db_row.cancel_requested:
+        # Select the scalar column, not the ORM entity: the latter may
+        # be identity-mapped with stale cancel_requested=False after another
+        # request commits the cancellation.
+        cancel_requested = (await db.execute(
+            select(PlaybookRun.cancel_requested).where(PlaybookRun.id == run.id)
+        )).scalar_one_or_none()
+        if cancel_requested:
             cancelled = True
             log.append({"step": i, "name": s["name"], "action": s["action"],
                         "status": "skipped", "detail": "Cancelled by operator"})
