@@ -1,78 +1,71 @@
-import React from 'react';
-import { useAuth } from '../../../src/context/AuthContext';
-import { demoUsers } from '../../../src/data/mockData';
-import { Users, Plus, CheckCircle2, XCircle } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { usersDirectoryApi, type BackendUserRow, ApiError } from '../../services/api';
+import { Users, CheckCircle2, XCircle, RefreshCw, ShieldAlert } from 'lucide-react';
 
 export default function ClientUsersPage() {
   const { organization } = useAuth();
-  if (!organization) return <div className="p-6 text-[var(--ic-heading)]">No organization found.</div>;
+  const [users, setUsers] = useState<BackendUserRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
-  const orgUsers = demoUsers.filter(u => u.orgId === organization.id);
+  const load = useCallback(async (silent = false) => {
+    if (silent) setRefreshing(true); else setLoading(true);
+    setError('');
+    try {
+      // Backend scopes non-platform roles to current_user.org_id; do not pass
+      // a tenant ID supplied by the browser for client-admin requests.
+      const rows = await usersDirectoryApi.list({ limit: 100 });
+      setUsers(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : 'Unable to load tenant users.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (!organization) return <div className="p-6 text-[var(--ic-heading)]">No organization found.</div>;
 
   return (
     <div className="p-4 lg:p-6 space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-[var(--ic-heading)]">User Management</h1>
-          <p className="text-[var(--ic-muted)] text-sm mt-1">Manage users and roles for {organization.name}</p>
+          <p className="text-[var(--ic-muted)] text-sm mt-1">Users returned by the backend for {organization.name}. Access is limited to your organization.</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-[var(--ic-heading)] text-sm font-medium">
-          <Plus className="w-4 h-4" />
-          Invite User
+        <button onClick={() => void load(true)} disabled={loading || refreshing}
+          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--ic-border)] text-sm text-[var(--ic-text)] disabled:opacity-50">
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
         </button>
       </div>
 
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-[var(--ic-border)]">
-              <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">User</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Role</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Status</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">MFA</th>
-              <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Last Login</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orgUsers.map(u => (
-              <tr key={u.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center text-xs font-bold">
-                      {u.name.split(' ').map(n => n[0]).join('')}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-[var(--ic-heading)]">{u.name}</p>
-                      <p className="text-xs text-[var(--ic-muted)]">{u.email}</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                    u.role === 'client_admin' ? 'bg-purple-500/10 text-purple-400' : 'bg-blue-500/10 text-blue-400'
-                  }`}>
-                    {u.role.replace('_', ' ')}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`flex items-center gap-1.5 text-xs font-medium ${u.status === 'active' ? 'text-green-400' : 'text-red-400'}`}>
-                    {u.status === 'active' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                    {u.status}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs ${u.mfaEnabled ? 'text-cyber-green' : 'text-cyber-red'}`}>
-                    {u.mfaEnabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className="text-xs text-[var(--ic-muted)]">{new Date(u.lastLogin).toLocaleString()}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-4 flex gap-3">
+        <ShieldAlert className="w-5 h-5 text-cyan-400 shrink-0" />
+        <p className="text-sm text-[var(--ic-muted)]">This screen is read-only. The current backend permits user creation and deletion to Platform Admin only; client-side invitation and role changes are not exposed as successful actions.</p>
       </div>
+
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-300">{error}</div>}
+      {loading ? <div className="p-10 text-center text-sm text-[var(--ic-muted)]">Loading organization users…</div>
+        : users.length === 0 ? <div className="rounded-xl border border-[var(--ic-border)] p-10 text-center text-sm text-[var(--ic-muted)]"><Users className="w-8 h-8 mx-auto mb-2 opacity-50" />No users were returned for this organization.</div>
+        : <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-x-auto">
+          <table className="w-full">
+            <thead><tr className="border-b border-[var(--ic-border)]">
+              {['User','Role','Status','MFA','Last login','Created'].map(h => <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">{h}</th>)}
+            </tr></thead>
+            <tbody>{users.map(u => <tr key={u.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
+              <td className="px-4 py-3"><p className="text-sm font-medium text-[var(--ic-heading)]">{u.name}</p><p className="text-xs text-[var(--ic-muted)]">{u.email}</p></td>
+              <td className="px-4 py-3 text-xs text-[var(--ic-text)]">{u.role.replaceAll('_',' ')}</td>
+              <td className="px-4 py-3"><span className={`inline-flex items-center gap-1 text-xs ${u.status === 'active' ? 'text-emerald-400' : 'text-rose-400'}`}>{u.status === 'active' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}{u.status}</span></td>
+              <td className="px-4 py-3 text-xs text-[var(--ic-text)]">{u.mfa_enabled ? 'Enabled' : 'Disabled'}</td>
+              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{u.last_login ? new Date(u.last_login).toLocaleString() : 'Never'}</td>
+              <td className="px-4 py-3 text-xs text-[var(--ic-muted)]">{new Date(u.created_at).toLocaleDateString()}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
     </div>
   );
 }
