@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
+import asyncio
 from datetime import datetime, timezone
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -45,7 +46,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test s
 from app.database import Base, get_db  # noqa: E402
 from app.core.security import create_access_token, get_password_hash  # noqa: E402
 from app.models import (  # noqa: E402
-    Organization, User, Alert, Ticket, Incident, IncidentEvidence, Playbook, PlaybookRun, AuditLog,
+    Organization, User, Alert, Ticket, TicketApproval, Incident, IncidentEvidence, Playbook, PlaybookRun, AuditLog,
 )
 from app.services.seed import ensure_uid_counters  # noqa: E402
 from app.main import app  # noqa: E402
@@ -534,3 +535,107 @@ async def test_incident_evidence_detail_length_is_bounded(session_factory):
             "name": "oversized-reference", "detail": "x" * 4001
         })
         assert rejected.status_code == 422
+
+
+async def test_running_playbook_can_be_cancelled_between_steps(session_factory, monkeypatch):
+    """A concurrent cancel sees the committed running row and stops later steps."""
+    await _seed(session_factory)
+    from app.routers import soar as soar_module
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def controlled_step(db, run, step, current_user, executing):
+        if step["name"] == "Pause":
+            entered.set()
+            await release.wait()
+        return "completed", "controlled test step"
+
+    monkeypatch.setattr(soar_module, "_run_step", controlled_step)
+
+    async with client_for(session_factory, 1) as c:
+        playbook = await c.post("/api/soar/playbooks", json={
+            "name": "Cancelable test",
+            "steps": [
+                {"name": "Pause", "action": "wait", "params": {"seconds": 0}},
+                {"name": "Must be skipped", "action": "wait", "params": {"seconds": 0}},
+            ],
+        })
+        assert playbook.status_code == 201, playbook.text
+        pb_id = playbook.json()["id"]
+
+        running_request = asyncio.create_task(c.post(
+            f"/api/soar/playbooks/{pb_id}/run",
+            json={"mode": "execute"},
+        ))
+        await asyncio.wait_for(entered.wait(), timeout=3)
+
+        async with session_factory() as db:
+            running = (await db.execute(
+                select(PlaybookRun).where(PlaybookRun.playbook_id == pb_id)
+                .order_by(PlaybookRun.id.desc())
+            )).scalars().first()
+            assert running is not None and running.status == "running"
+            run_uid = running.uid
+
+        cancelled = await c.post(f"/api/soar/runs/{run_uid}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "cancelled"
+
+        release.set()
+        completed = await asyncio.wait_for(running_request, timeout=3)
+        assert completed.status_code == 200, completed.text
+        result = completed.json()["run"]
+        assert result["status"] == "cancelled"
+        assert result["result_log"][0]["status"] == "completed"
+        assert result["result_log"][1]["status"] == "skipped"
+        assert result["result_log"][1]["detail"] == "Cancelled by operator"
+
+
+async def test_ticket_mutations_and_closure_approvals_require_admin_role(session_factory):
+    """Standard tenant users may view/request service, but cannot change ticket control fields or approve closure."""
+    await _seed(session_factory)
+    async with session_factory() as db:
+        approval = TicketApproval(
+            ticket_uid="TCK-000001", step=1, approver_role="client_admin",
+            status="pending", note="Evidence reviewed",
+        )
+        db.add(approval)
+        await db.commit()
+        approval_id = approval.id
+
+    async with client_for(session_factory, 2) as standard_user:
+        denied_update = await standard_user.patch("/api/tickets/TCK-000001", json={
+            "status": "closed", "priority": "p1", "assignee": "attacker@acme.io",
+        })
+        assert denied_update.status_code == 403
+        denied_approval = await standard_user.post(
+            f"/api/tickets/TCK-000001/approvals/{approval_id}/decide",
+            json={"approve": True, "note": "self-approved"},
+        )
+        assert denied_approval.status_code == 403
+        visible = await standard_user.get("/api/tickets/TCK-000001")
+        assert visible.status_code == 200
+        assert visible.json()["status"] == "in_progress"
+
+    async with client_for(session_factory, 1) as tenant_admin:
+        foreign_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
+            "assignee": "admin@for.io",
+        })
+        assert foreign_assignee.status_code == 403
+        missing_assignee = await tenant_admin.patch("/api/tickets/TCK-000001", json={
+            "assignee": "missing@acme.io",
+        })
+        assert missing_assignee.status_code == 404
+        allowed = await tenant_admin.post(
+            f"/api/tickets/TCK-000001/approvals/{approval_id}/decide",
+            json={"approve": True, "note": "Reviewed by tenant admin"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["status"] == "approved"
+
+    async with session_factory() as db:
+        ticket = (await db.execute(
+            select(Ticket).where(Ticket.uid == "TCK-000001")
+        )).scalars().one()
+        assert ticket.status == "closed"
