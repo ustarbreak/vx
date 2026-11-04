@@ -394,10 +394,14 @@ async def test_connectors_vendor_enum_and_no_secret_echo(session_factory):
         assert "super-secret-token" not in str(body)
         assert body.get("secret_configured") is True or body.get("secret_ref")
 
-        # m365 has no two-way sync
+        # M365 requires both Entra identifiers and a realistic secret.
         r = await c.put("/api/partners/1/connectors/microsoft365", json={
             "enabled": True, "tenant_id": "tid", "client_id": "cid", "secret": "shh"})
-        assert r.status_code == 200
+        assert r.status_code == 422
+        r = await c.put("/api/partners/1/connectors/microsoft365", json={
+            "enabled": True, "tenant_id": "tid", "client_id": "cid",
+            "secret": "m365-client-secret"})
+        assert r.status_code == 200, r.text
         r = await c.post("/api/partners/1/connectors/microsoft365/sync")
         assert r.status_code == 405, r.text
 
