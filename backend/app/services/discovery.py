@@ -8,7 +8,6 @@ The scan coroutine runs in the FastAPI event loop via asyncio subprocesses.
 """
 import asyncio
 import ipaddress
-import random
 import re
 import shutil
 import json
