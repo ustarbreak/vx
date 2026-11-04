@@ -1,4 +1,3 @@
-import os
 from elasticsearch import AsyncElasticsearch
 from typing import List, Dict
 from datetime import datetime, timedelta
