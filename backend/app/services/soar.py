@@ -21,6 +21,9 @@ Design rules (see the incident-response/SOAR brief):
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import update
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,3 +131,33 @@ async def next_playbook_uid(db: AsyncSession) -> str:
     from sqlalchemy import select
     count = len((await db.execute(select(Playbook.id))).scalars().all())
     return f"PBK-{count + 1:06d}"
+
+
+async def recover_stale_runs(db: AsyncSession, *, stale_after_minutes: int = 30) -> int:
+    """Fail runs left 'running' after a worker/process crash.
+
+    A stale run is marked failed, never completed: the platform cannot know
+    whether the last external action finished before the process died.
+    The operation is an atomic UPDATE so multiple app workers may safely run
+    the recovery sweep concurrently.
+    """
+    if stale_after_minutes < 1:
+        raise ValueError("stale_after_minutes must be at least 1")
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_after_minutes)
+    finished = datetime.now(timezone.utc)
+    result = await db.execute(
+        update(PlaybookRun)
+        .where(
+            PlaybookRun.status == "running",
+            PlaybookRun.started_at.is_not(None),
+            PlaybookRun.started_at < cutoff,
+        )
+        .values(
+            status="failed",
+            finished_at=finished,
+            error="Execution interrupted: run exceeded stale threshold; outcome of in-flight action requires operator review.",
+        )
+    )
+    await db.commit()
+    return result.rowcount or 0
+
