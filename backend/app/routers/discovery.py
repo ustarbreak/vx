@@ -25,7 +25,7 @@ from app.schemas import (
     SnmpCredentialCreate, SnmpCredentialResponse, ScanCreate, ScanResponse,
     DiscoveredDeviceResponse,
 )
-from app.services.discovery import schedule_scan, nmap_available, cidr_hosts
+from app.services.discovery import schedule_scan, cancel_scheduled_scan, nmap_available, cidr_hosts
 
 router = APIRouter(prefix="/discovery", tags=["Auto-Discovery & SNMP"])
 
@@ -172,6 +172,8 @@ async def cancel_scan(scan_id: int, current_user: User = Depends(get_current_use
     scan.status = "cancelled"
     scan.finished_at = datetime.now(timezone.utc)
     await db.commit()
+    # Stop the in-process worker as well as persisting the cancellation state.
+    cancel_scheduled_scan(scan_id)
     await db.refresh(scan)
     return scan
 

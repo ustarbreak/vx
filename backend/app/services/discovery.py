@@ -1,17 +1,13 @@
 """Network Auto-Discovery.
 
-Background scanner that runs real `nmap` when available on the host/container,
-falls back to a pure-python async TCP probe + ICMP-less simulation otherwise,
-then cross-references each live host against the tenant's SNMP credentials
-(pysnmp if installed; graceful simulated match otherwise).
+Scans use the real nmap executable and optional real SNMP probes only. Missing
+runtime capabilities or failed scans are reported as failures; no synthetic
+hosts, ports, MAC addresses, or SNMP matches are inserted into live inventory.
 
-The scan coroutine runs inside the FastAPI event loop via asyncio subprocesses,
-so it is genuinely "in background": the API returns immediately and the UI polls
-the scan status.
+The scan coroutine runs in the FastAPI event loop via asyncio subprocesses.
 """
 import asyncio
 import ipaddress
-import random
 import re
 import shutil
 import json
@@ -47,9 +43,18 @@ async def run_nmap(cidr: str, timeout_s: int = 300) -> list[dict]:
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return []
+    except asyncio.TimeoutError as exc:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        raise TimeoutError(f"nmap scan exceeded {timeout_s}s") from exc
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        raise
+    if proc.returncode != 0:
+        raise RuntimeError(f"nmap exited with status {proc.returncode}")
     hosts = []
     for line in out.decode(errors="ignore").splitlines():
         m = re.match(r"Host:\s+(\S+)\s+\((\S*)\)", line)
@@ -79,8 +84,9 @@ def guess_os_and_type(open_ports: list[int]) -> tuple[str, str]:
 async def snmp_probe(ip: str, cred: SnmpCredential) -> Optional[dict]:
     """Try an SNMP sysDescr GET with the given credential.
 
-    Uses pysnmp when present; otherwise simulates a deterministic result so the
-    pipeline (match -> device record -> alert) is exercised end-to-end.
+    A match is returned only after a successful response from the target.
+    Missing pysnmp, timeouts and unreachable devices never produce synthetic
+    verification results.
     """
     try:
         from pysnmp.hlapi.v3arch.asyncio import (  # type: ignore
@@ -99,46 +105,13 @@ async def snmp_probe(ip: str, cred: SnmpCredential) -> Optional[dict]:
             return None
         descr = str(var_binds[0][1])
         return {"sys_desc": descr, "matched_credential": cred.name}
-    except Exception:
-        # --- simulated path (no pysnmp or unreachable network) ---
-        rng = random.Random(f"{ip}|{cred.id}")
-        if rng.random() < 0.35:  # ~1/3 of hosts respond to this community string
-            vendor = rng.choice([
-                "Linux version 6.6 (kernel 6.6.12)",
-                "HP J8708A, Rev K.10.32 (ProCurve switch)",
-                "Cisco IOS Software, Catalyst L3 Switch Software",
-                "Windows Server 2022 SNMP Service v4.0",
-                "FortiOS 7.4.2 (FortiGate)",
-            ])
-            return {"sys_desc": vendor, "matched_credential": cred.name}
+    except Exception as exc:
+        import logging
+        logging.getLogger("infracentra.discovery").warning(
+            "SNMP probe failed for %s using credential %s: %s",
+            ip, cred.name, type(exc).__name__,
+        )
         return None
-
-
-async def simulate_scan(scan_id: int) -> list[dict]:
-    """Deterministic pseudo-scan used when nmap is unavailable (dev containers)."""
-    hosts = cidr_hosts((await _scan_cidr(scan_id)))
-    rng = random.Random(scan_id)
-    found = []
-    for ip in hosts:
-        if rng.random() < 0.12:  # ~12% of the subnet is alive
-            last = int(ip.split(".")[-1])
-            ports = rng.choice([[22], [443, 80], [161, 22], [3389, 135], [53], [9100], [22, 80, 443]])
-            os_, dtype = guess_os_and_type(ports)
-            found.append({
-                "ip": ip,
-                "mac": ":".join(f"{rng.randint(0,255):02x}" for _ in range(6)),
-                "hostname": f"host-{last}.lan.local",
-                "open_ports": ports,
-                "os_guess": os_,
-                "device_type": dtype,
-            })
-    return found
-
-
-async def _scan_cidr(scan_id: int) -> str:
-    async with AsyncSessionLocal() as db:
-        s = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
-        return s.network_cidr if s else ""
 
 
 async def execute_scan(scan_id: int) -> None:
@@ -162,16 +135,17 @@ async def execute_scan(scan_id: int) -> None:
         cred_map = {c.id: c for c in creds if not scan.credential_ids or c.id in (scan.credential_ids or [])}
 
         try:
-            if await nmap_available():
-                raw = await run_nmap(scan.network_cidr)
-            else:
-                raw = await simulate_scan(scan_id)
-        except Exception as exc:  # worker crash / unreachable network — report, never fake success
+            if not await nmap_available():
+                raise RuntimeError("nmap is not installed; live discovery is unavailable")
+            raw = await run_nmap(scan.network_cidr)
+        except Exception as exc:
             scan.status = "failed"
             scan.finished_at = now_utc()
             await db.commit()
             import logging
-            logging.getLogger("infracentra.discovery").error("discovery scan %s failed: %s", scan_id, exc)
+            logging.getLogger("infracentra.discovery").error(
+                "discovery scan %s failed: %s", scan_id, type(exc).__name__
+            )
             return
 
         async def _next_alert_uid() -> str:
@@ -260,7 +234,24 @@ async def execute_scan(scan_id: int) -> None:
         await db.commit()
 
 
+_SCAN_TASKS: dict[int, asyncio.Task] = {}
+
+
+async def _run_scan_task(scan_id: int) -> None:
+    try:
+        await execute_scan(scan_id)
+    finally:
+        _SCAN_TASKS.pop(scan_id, None)
+
+
+def cancel_scheduled_scan(scan_id: int) -> None:
+    """Cancel the in-process worker, if it is still running."""
+    task = _SCAN_TASKS.get(scan_id)
+    if task is not None and not task.done():
+        task.cancel()
+
+
 def schedule_scan(scan_id: int) -> None:
-    """Fire-and-forget the scan on the running event loop."""
+    """Schedule a cancellable background scan on the running event loop."""
     loop = asyncio.get_event_loop()
-    loop.create_task(execute_scan(scan_id))
+    _SCAN_TASKS[scan_id] = loop.create_task(_run_scan_task(scan_id))
