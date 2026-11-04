@@ -157,6 +157,12 @@ async def recover_stale_runs(db: AsyncSession, *, stale_after_minutes: int = 30)
             finished_at=finished,
             error="Execution interrupted: run exceeded stale threshold; outcome of in-flight action requires operator review.",
         )
+        # SQLAlchemy's default "evaluate" synchronization compares loaded ORM
+        # datetimes in Python. SQLite returns naive values for timezone=True
+        # columns, while the UTC cutoff is aware; avoid that Python comparison.
+        # This is a set-based recovery update, and callers can refresh objects
+        # if they need the updated state in the current identity map.
+        .execution_options(synchronize_session=False)
     )
     await db.commit()
     return result.rowcount or 0
