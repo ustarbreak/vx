@@ -64,7 +64,7 @@ export interface IncidentActivityEntry {
   from_value: string | null; to_value: string | null; created_at: string | null;
 }
 export interface IncidentEvidenceEntry {
-  id: number; name: string; kind: string; sha256: string | null;
+  id: number; name: string; kind: string; detail: string | null; sha256: string | null;
   ticket_uid: string | null; collected_by: string | null; created_at: string | null;
 }
 export interface IncidentActionEntry {
@@ -164,7 +164,7 @@ export const incidentsApi = {
     api.post<IncidentNote>(`/incidents/${uid}/notes`, { content, internal }),
 
   addEvidence: (uid: string, name: string, kind = 'log', detail = '') =>
-    api.post<{ id: number }>(`/incidents/${uid}/evidence`, { name, kind, detail }),
+    api.post<IncidentEvidenceEntry>(`/incidents/${uid}/evidence`, { name, kind, detail }),
 
   /** Ledger-only: records that a response action happened. It NEVER executes
    *  anything itself (execution belongs to the SOAR / ticketing engines). */
