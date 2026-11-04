@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlalchemy.dialects import postgresql  # noqa: E402
@@ -44,7 +45,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):  # pragma: no cover - test s
 from app.database import Base, get_db  # noqa: E402
 from app.core.security import create_access_token, get_password_hash  # noqa: E402
 from app.models import (  # noqa: E402
-    Organization, User, Alert, Ticket, Incident, Playbook, PlaybookRun, AuditLog,
+    Organization, User, Alert, Ticket, Incident, IncidentEvidence, Playbook, PlaybookRun, AuditLog,
 )
 from app.services.seed import ensure_uid_counters  # noqa: E402
 from app.main import app  # noqa: E402
@@ -481,3 +482,55 @@ async def test_incident_playbook_run_relationship(session_factory):
         # unknown incident -> 404; foreign incident -> 403
         assert (await c.post(f"/api/soar/playbooks/{pb['id']}/run",
                              json={"mode": "simulate", "incident_uid": "INC-999999"})).status_code == 404
+
+
+
+async def test_incident_evidence_reference_detail_persists_and_is_tenant_scoped(session_factory):
+    """Evidence detail is durable metadata, not silently discarded or presented as a verified artifact hash."""
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        created = await c.post("/api/incidents", json={
+            "title": "Evidence metadata case", "severity": "high"
+        })
+        assert created.status_code == 201, created.text
+        uid = created.json()["incident"]["uid"]
+
+        added = await c.post(f"/api/incidents/{uid}/evidence", json={
+            "name": "proxy-access.log",
+            "kind": "log",
+            "detail": "s3://acme-ir/INC-000001/proxy-access.log?versionId=abc123",
+        })
+        assert added.status_code == 201, added.text
+        payload = added.json()
+        assert payload["detail"].startswith("s3://acme-ir/")
+        assert payload["sha256"] is None
+        assert payload["collected_by"] == "admin@acme.io"
+
+        detail = await c.get(f"/api/incidents/{uid}")
+        assert detail.status_code == 200
+        evidence = detail.json()["evidence"]
+        assert len(evidence) == 1
+        assert evidence[0]["detail"] == payload["detail"]
+        assert evidence[0]["sha256"] is None
+        assert any(a["action"] == "evidence_added" for a in detail.json()["activity"])
+
+    async with client_for(session_factory, 4) as foreign:
+        assert (await foreign.get(f"/api/incidents/{uid}")).status_code == 403
+
+    async with session_factory() as s:
+        row = (await s.execute(
+            select(IncidentEvidence).where(IncidentEvidence.incident_uid == uid)
+        )).scalars().one()
+        assert row.detail == "s3://acme-ir/INC-000001/proxy-access.log?versionId=abc123"
+        assert row.sha256 is None
+
+
+async def test_incident_evidence_detail_length_is_bounded(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 1) as c:
+        created = await c.post("/api/incidents", json={"title": "Bounded evidence case"})
+        uid = created.json()["incident"]["uid"]
+        rejected = await c.post(f"/api/incidents/{uid}/evidence", json={
+            "name": "oversized-reference", "detail": "x" * 4001
+        })
+        assert rejected.status_code == 422

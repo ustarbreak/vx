@@ -344,8 +344,10 @@ const DetailDrawer: React.FC<{
                         {detail.evidence.map(e => (
                           <li key={e.id} className="flex items-center gap-2 text-[var(--ic-text)]">
                             <FileText size={12} className="text-[var(--ic-muted)] shrink-0" />
-                            <span className="truncate">{e.name}</span>
+                            <span className="truncate" title={e.detail || e.name}>{e.name}</span>
                             <Badge className="bg-slate-600/40 text-[var(--ic-muted)]">{e.kind}</Badge>
+                            {e.detail && <span className="text-[var(--ic-muted)] truncate max-w-40" title={e.detail}>{e.detail}</span>}
+                            {e.sha256 && <Badge className="bg-emerald-500/10 text-emerald-300">SHA-256 recorded</Badge>}
                           </li>
                         ))}
                       </ul>
@@ -353,8 +355,10 @@ const DetailDrawer: React.FC<{
                     {canManage && (
                       <button disabled={busy !== null}
                         onClick={() => {
-                          const name = window.prompt('Evidence artifact name (record only — collection happens via connectors):');
-                          if (name) run('ev', () => incidentsApi.addEvidence(detail.uid, name), 'Evidence entry recorded');
+                          const name = window.prompt('Evidence artifact name (reference only — no file is uploaded):');
+                          if (!name) return;
+                          const reference = window.prompt('Evidence location / context (optional; URL, object key, case reference):') ?? '';
+                          run('ev', () => incidentsApi.addEvidence(detail.uid, name, 'log', reference), 'Evidence reference recorded');
                         }}
                         className="mt-2 text-xs text-cyan-400 hover:underline flex items-center gap-1"><Plus size={12} /> Attach evidence reference</button>
                     )}
