@@ -234,11 +234,19 @@ export default function PlatformClientsPage() {
   // Real tenants from the backend (POST/GET /api/organizations/) — merged with demo rows
   const [backendOrgs, setBackendOrgs] = useState<import('../../types').Organization[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
 
-  const loadOrgs = () => {
-    organizationsApi.list()
-      .then(list => setBackendOrgs(list.map(o => ({
-        id: `org-db-${o.id}`,
+  const loadOrgs = async () => {
+    if (isDemoMode()) {
+      setBackendOrgs([]);
+      setLoadError('');
+      return;
+    }
+    try {
+      const list = await organizationsApi.list();
+      const mapped = list.map(o => ({
+        id: 'org-db-' + o.id,
         dbId: o.id,
         name: o.name,
         tier: (o.tier as any) || 'sme',
@@ -254,10 +262,29 @@ export default function PlatformClientsPage() {
         planTier: o.plan_tier, endpointCount: o.endpoint_count, seatLimit: o.seat_limit,
         siemLimitGbDay: o.siem_limit_gb, billingCycle: o.billing_cycle, invoiceDisplay: o.monthly_invoice_display,
         entitlements: [],
-      } as unknown as import('../../types').Organization))))
-      .catch(() => setBackendOrgs([]));
+      } as unknown as import('../../types').Organization));
+      setBackendOrgs(mapped);
+      const settled = await Promise.allSettled(mapped.map(async org => {
+        const rows = await entitlementsApi.list(Number((org as any).dbId));
+        return [org.id, rows.map(row => ({
+          backendId: row.id,
+          serviceId: row.service_id as ServiceId,
+          enabled: row.enabled,
+          activatedAt: row.activated_at,
+          deactivatedAt: row.deactivated_at,
+          seatCount: row.seat_count,
+          notes: row.notes ?? undefined,
+        }))] as const;
+      }));
+      const values = settled.filter((item): item is PromiseFulfilledResult<readonly [string, ManagedEntitlement[]]> => item.status === 'fulfilled');
+      setEntitlements(previous => ({ ...previous, ...Object.fromEntries(values.map(item => item.value)) }));
+      setLoadError(settled.some(item => item.status === 'rejected') ? 'La liste des tenants est chargée, mais certains entitlements sont indisponibles.' : '');
+    } catch (error) {
+      setBackendOrgs([]);
+      setLoadError(error instanceof ApiError ? error.message : 'Impossible de charger les tenants depuis le backend.');
+    }
   };
-  useEffect(() => { loadOrgs(); }, []);
+  useEffect(() => { void loadOrgs(); }, []);
 
   // entitlements state for backend orgs defaults to empty list
   const getEntitlements = (orgId: string): ManagedEntitlement[] => entitlements[orgId] ?? [];
