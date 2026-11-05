@@ -8,6 +8,10 @@ import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area
 } from 'recharts';
+import { isDemoMode } from '../../services/demoMode';
+import { alertsApi, discoveryApi } from '../../services/api';
+import { fetchLiveThreats } from '../../services/threatIntel';
+import { soarApi } from '../../services/soarApi';
 
 export default function StatisticsPage() {
   const navigate = useNavigate();
