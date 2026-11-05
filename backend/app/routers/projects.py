@@ -19,7 +19,7 @@ from sqlalchemy import select, func
 
 from app.database import get_db
 from app.core.security import get_current_user
-from app.models import User, Project, ProjectMilestone, ProjectAttachment, Ticket
+from app.models import User, Project, ProjectMilestone, ProjectAttachment, ProjectRunbook, Ticket
 
 
 class AttachmentCreate(BaseModel):
@@ -363,3 +363,124 @@ async def delete_project(pid: int, current_user: User = Depends(get_current_user
         await db.delete(m)
     await db.delete(p)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Project runbooks — persisted operational checklists (not executable SOAR)
+# ---------------------------------------------------------------------------
+class RunbookStepIn(BaseModel):
+    text: str
+    owner: str = "Unassigned"
+    scriptRef: str | None = None
+    done: bool = False
+
+
+class ProjectRunbookCreate(BaseModel):
+    title: str
+    phase: str = "Operations"
+    est_minutes: int = 0
+    steps: list[RunbookStepIn] = []
+
+
+class ProjectRunbookUpdate(BaseModel):
+    title: str | None = None
+    phase: str | None = None
+    est_minutes: int | None = None
+    steps: list[RunbookStepIn] | None = None
+
+
+def _runbook_out(row: ProjectRunbook) -> dict:
+    return {
+        "id": row.id,
+        "projectId": str(row.project_id),
+        "title": row.title,
+        "phase": row.phase,
+        "estMinutes": row.est_minutes,
+        "steps": row.steps or [],
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("/{pid}/runbooks")
+async def list_project_runbooks(pid: int, current_user: User = Depends(get_current_user),
+                                db: AsyncSession = Depends(get_db)):
+    project = await _get_project(pid, current_user, db)
+    rows = (await db.execute(
+        select(ProjectRunbook).where(
+            ProjectRunbook.project_id == project.id,
+            ProjectRunbook.org_id == project.org_id,
+        ).order_by(ProjectRunbook.created_at.desc())
+    )).scalars().all()
+    return [_runbook_out(row) for row in rows]
+
+
+@router.post("/{pid}/runbooks", status_code=201)
+async def create_project_runbook(pid: int, body: ProjectRunbookCreate,
+                                 current_user: User = Depends(get_current_user),
+                                 db: AsyncSession = Depends(get_db)):
+    project = await _get_project(pid, current_user, db)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(422, "Runbook title is required")
+    if len(body.steps) > 50:
+        raise HTTPException(422, "A project runbook may contain at most 50 steps")
+    row = ProjectRunbook(
+        org_id=project.org_id, project_id=project.id, title=title,
+        phase=body.phase.strip()[:80] or "Operations",
+        est_minutes=max(0, min(body.est_minutes, 10080)),
+        steps=[step.model_dump() for step in body.steps],
+        created_by=current_user.email,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return _runbook_out(row)
+
+
+@router.patch("/{pid}/runbooks/{runbook_id}")
+async def update_project_runbook(pid: int, runbook_id: int, body: ProjectRunbookUpdate,
+                                 current_user: User = Depends(get_current_user),
+                                 db: AsyncSession = Depends(get_db)):
+    project = await _get_project(pid, current_user, db)
+    row = (await db.execute(select(ProjectRunbook).where(
+        ProjectRunbook.id == runbook_id,
+        ProjectRunbook.project_id == project.id,
+        ProjectRunbook.org_id == project.org_id,
+    ))).scalars().first()
+    if not row:
+        raise HTTPException(404, "Runbook not found")
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        raise HTTPException(422, "No runbook changes supplied")
+    if "title" in changes:
+        title = (changes["title"] or "").strip()
+        if not title:
+            raise HTTPException(422, "Runbook title is required")
+        row.title = title
+    if "phase" in changes:
+        row.phase = (changes["phase"] or "Operations").strip()[:80]
+    if "est_minutes" in changes:
+        row.est_minutes = max(0, min(changes["est_minutes"] or 0, 10080))
+    if "steps" in changes:
+        if len(changes["steps"] or []) > 50:
+            raise HTTPException(422, "A project runbook may contain at most 50 steps")
+        row.steps = [step.model_dump() for step in body.steps or []]
+    await db.commit()
+    await db.refresh(row)
+    return _runbook_out(row)
+
+
+@router.delete("/{pid}/runbooks/{runbook_id}", status_code=204)
+async def delete_project_runbook(pid: int, runbook_id: int,
+                                 current_user: User = Depends(get_current_user),
+                                 db: AsyncSession = Depends(get_db)):
+    project = await _get_project(pid, current_user, db)
+    row = (await db.execute(select(ProjectRunbook).where(
+        ProjectRunbook.id == runbook_id,
+        ProjectRunbook.project_id == project.id,
+        ProjectRunbook.org_id == project.org_id,
+    ))).scalars().first()
+    if row:
+        await db.delete(row)
+        await db.commit()
