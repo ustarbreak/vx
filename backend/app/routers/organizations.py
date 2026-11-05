@@ -96,7 +96,7 @@ async def update_organization(
     org_data: OrganizationUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.tenants.manage"))
+    current_user: User = Depends(get_current_user)
 ):
     """Update organization (platform admin only)"""
     result = await db.execute(select(Organization).where(Organization.id == org_id))
@@ -107,6 +107,11 @@ async def update_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    if current_user.role != "platform_admin":
+        if not is_platform_role(current_user.role) or not await has_permission(
+            current_user, "platform.tenants.manage", db, org_id=org.id
+        ):
+            raise HTTPException(status_code=403, detail="Tenant management permission required for this scope")
     
     # Update fields
     update_data = org_data.model_dump(exclude_unset=True)
@@ -139,7 +144,7 @@ async def delete_organization(
     org_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.tenants.manage"))
+    current_user: User = Depends(get_current_user)
 ):
     """Delete organization (platform admin only)"""
     result = await db.execute(select(Organization).where(Organization.id == org_id))
@@ -150,6 +155,11 @@ async def delete_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    if current_user.role != "platform_admin":
+        if not is_platform_role(current_user.role) or not await has_permission(
+            current_user, "platform.tenants.manage", db, org_id=org.id
+        ):
+            raise HTTPException(status_code=403, detail="Tenant management permission required for this scope")
     
     # Log audit before deletion
     audit_log = AuditLog(
