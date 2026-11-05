@@ -112,6 +112,7 @@ async def update_client_user(
     before = {"role": target.role, "status": target.status}
     for key, value in changes.items():
         setattr(target, key, value)
+    target.auth_version = int(target.auth_version or 0) + 1
     db.add(AuditLog(
         actor_id=current_user.id,
         actor_name=current_user.email,
