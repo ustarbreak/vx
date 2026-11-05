@@ -33,15 +33,13 @@ import {
 // ---------------------------------------------------------------------------
 function IntelRelationshipGraph({ threats, matches }: { threats: any[]; matches: IndicatorMatch[] }) {
   const navigate = useNavigate();
-  const [selKind, setSelKind] = useState<'all' | 'matched'>('all');
 
   const { nodes, edges } = useMemo(() => {
     const n = new Map<string, RGNode>();
     const e: RGEdge[] = [];
     const addNode = (node: RGNode) => { if (!n.has(node.id)) n.set(node.id, node); };
     // Indicators matched to this tenant's environment — verified evidence edges.
-    const scoped = selKind === 'matched' ? matches : matches;
-    scoped.forEach(m => {
+    matches.forEach(m => {
       const indId = `ind:${m.indicator}`;
       addNode({ id: indId, label: m.indicator, kind: 'indicator', severity: m.severity, meta: { match: m } });
       addNode({ id: `inc:${m.incident_uid}`, label: m.incident_uid, kind: 'incident', severity: m.severity, meta: { uid: m.incident_uid } });
@@ -66,7 +64,7 @@ function IntelRelationshipGraph({ threats, matches }: { threats: any[]; matches:
       });
     });
     return { nodes: [...n.values()], edges: e };
-  }, [threats, matches, selKind]);
+  }, [threats, matches]);
 
   const openNode = (node: RGNode) => {
     if (node.kind === 'incident') navigate(`/incidents?q=${encodeURIComponent(String(node.meta?.uid ?? node.label))}`);
@@ -105,7 +103,6 @@ function IntelRelationshipGraph({ threats, matches }: { threats: any[]; matches:
           </p>
         </div>
       )}
-      {void selKind}
     </div>
   );
 }
@@ -274,7 +271,7 @@ function ThreatsContent() {
     return () => { cancelled = true; };
   }, []);
 
-  const baseList: any[] = !isDemoMode() && liveThreats && liveThreats.length > 0 ? liveThreats : mockThreats;
+  const baseList: any[] = isDemoMode() ? mockThreats : (liveThreats ?? []);
 
   useEffect(() => {
     if (isDemoMode()) return; // simulated dataset already rendered
@@ -329,7 +326,7 @@ function ThreatsContent() {
               {feedStatus === 'loading' && <span className="text-cyan-400">● Fetching live feed from backend…</span>}
               {feedStatus === 'ok' && (liveThreats?.length ?? 0) > 0 &&
                 <span className="text-emerald-400">● LIVE FEED — {liveThreats?.length ?? 0} events from the configured MISP instance</span>}
-              {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — showing reference dataset</span>}
+              {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — no live feed rows are shown</span>}
               {feedStatus === 'ok' && (liveThreats?.length ?? 0) === 0 &&
                 <span className="text-amber-400">● Backend reachable but no MISP instance configured — recent-feed results are empty by design (Settings → Integrations → MISP). Per-indicator lookups below still use OTX.</span>}
             </div>
