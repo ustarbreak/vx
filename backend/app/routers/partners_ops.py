@@ -379,6 +379,7 @@ def create_impersonation_token(user: User, target: Organization, grant: TenantSe
     return create_access_token({
         "sub": str(user.id), "act_as_org": target.id, "grant_id": grant.id,
         "scope": "partner_console", "email": user.email, "role": user.role,
+        "ver": int(user.auth_version or 0),
     }, expires_delta=timedelta(minutes=min(240, int((grant.expires_at - _now()).total_seconds() // 60) or 5)))
 
 
