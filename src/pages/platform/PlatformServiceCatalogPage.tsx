@@ -15,6 +15,8 @@ export default function PlatformServiceCatalogPage() {
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [search, setSearch] = useState('');
+  const [availability, setAvailability] = useState<'all' | 'active' | 'inactive'>('all');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -33,6 +35,10 @@ export default function PlatformServiceCatalogPage() {
 
   const services = data?.services ?? [];
   const activeCount = services.filter(s => s.active).length;
+  const filteredServices = useMemo(() => services.filter(service =>
+    (availability === 'all' || (availability === 'active' ? service.active : !service.active)) &&
+    (service.label + ' ' + service.service_id + ' ' + service.engine).toLowerCase().includes(search.toLowerCase())
+  ), [services, availability, search]);
   const configuredCount = services.filter(s => Object.values(s.integrations).some(v => v > 0)).length;
   const connectedCount = services.filter(s => Object.entries(s.lifecycle).some(([state, count]) => ['connected', 'first_success'].includes(state) && count > 0)).length;
   const selectedService = services.find(s => s.service_id === selected) ?? null;
@@ -89,8 +95,8 @@ export default function PlatformServiceCatalogPage() {
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,.85fr)]">
         <div className="overflow-hidden rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)]">
-          <div className="border-b border-[var(--ic-border)] p-4"><h2 className="font-semibold text-[var(--ic-heading)]">Services disponibles</h2><p className="text-xs text-[var(--ic-muted)]">L’activation/désactivation est enregistrée dans platform_settings.</p></div>
-          {loading ? <div className="flex justify-center p-10"><Loader2 className="h-5 w-5 animate-spin" /></div> : services.length === 0 ? <p className="p-8 text-sm text-[var(--ic-muted)]">Aucun service retourné par le backend.</p> : <div className="divide-y divide-[var(--ic-border)]">{services.map(service => <button key={service.service_id} onClick={() => setSelected(service.service_id)} className={`flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-[var(--ic-surface-2)] ${selected === service.service_id ? 'bg-cyan-500/5' : ''}`}><div className="min-w-0"><div className="font-medium text-[var(--ic-heading)]">{service.label}</div><div className="text-xs text-[var(--ic-muted)]">{service.service_id} · {service.engine}</div></div><div className="flex shrink-0 items-center gap-3"><span className={`text-xs ${service.active ? 'text-emerald-300' : 'text-rose-300'}`}>{service.active ? 'Disponible' : 'Désactivé'}</span><span className="text-[var(--ic-muted)]">{service.active ? <ToggleRight className="h-5 w-5 text-emerald-400" /> : <ToggleLeft className="h-5 w-5" />}</span></div></button>)}</div>}
+          <div className="space-y-3 border-b border-[var(--ic-border)] p-4"><div><h2 className="font-semibold text-[var(--ic-heading)]">Services disponibles</h2><p className="text-xs text-[var(--ic-muted)]">L’activation/désactivation est enregistrée dans platform_settings.</p></div><div className="flex flex-wrap gap-2"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher un service ou moteur…" className="min-w-0 flex-1 rounded-lg border border-[var(--ic-border)] bg-transparent px-3 py-2 text-xs text-[var(--ic-heading)]" /><select value={availability} onChange={e => setAvailability(e.target.value as typeof availability)} className="rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface)] px-3 py-2 text-xs text-[var(--ic-heading)]"><option value="all">Tous les statuts</option><option value="active">Disponibles</option><option value="inactive">Désactivés</option></select></div></div>
+          {loading ? <div className="flex justify-center p-10"><Loader2 className="h-5 w-5 animate-spin" /></div> : services.length === 0 ? <p className="p-8 text-sm text-[var(--ic-muted)]">Aucun service ne correspond à ces filtres.</p> : <div className="divide-y divide-[var(--ic-border)]">{filteredServices.map(service => <button key={service.service_id} onClick={() => setSelected(service.service_id)} className={`flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-[var(--ic-surface-2)] ${selected === service.service_id ? 'bg-cyan-500/5' : ''}`}><div className="min-w-0"><div className="font-medium text-[var(--ic-heading)]">{service.label}</div><div className="text-xs text-[var(--ic-muted)]">{service.service_id} · {service.engine}</div></div><div className="flex shrink-0 items-center gap-3"><span className={`text-xs ${service.active ? 'text-emerald-300' : 'text-rose-300'}`}>{service.active ? 'Disponible' : 'Désactivé'}</span><span className="text-[var(--ic-muted)]">{service.active ? <ToggleRight className="h-5 w-5 text-emerald-400" /> : <ToggleLeft className="h-5 w-5" />}</span></div></button>)}</div>}
         </div>
 
         <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
