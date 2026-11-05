@@ -16,6 +16,7 @@ from app.core.platform_rbac import has_permission
 from app.database import get_db
 from app.models import AuditLog, Organization, PlatformSubscription, PlanEntitlementV2, PlatformSetting, User
 from app.core.security import get_current_user
+from app.services import connectors
 
 router = APIRouter(prefix="/platform/subscriptions", tags=["Platform Subscriptions"])
 
@@ -27,8 +28,8 @@ async def _active_service_ids(db: AsyncSession) -> set[str] | None:
     setting = await db.get(PlatformSetting, "platform.service_catalog")
     if setting is None or not isinstance(setting.value_json, dict):
         return None
-    return {service_id for service_id, config in setting.value_json.items()
-            if not isinstance(config, dict) or config.get("active", True) is True}
+    return {service_id for service_id in connectors.SERVICE_CONNECTORS
+            if setting.value_json.get(service_id, {}).get("active", True) is True}
 
 
 class SubscriptionCreate(BaseModel):
