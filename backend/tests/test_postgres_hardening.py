@@ -152,7 +152,7 @@ def test_m1_migration_graph_has_one_reachable_head():
 
     all_parents = {parent for revision in mods for parent in parents(revision)}
     heads = sorted(revision for revision in mods if revision not in all_parents)
-    assert heads == ["f9a1b3d5e7g9"], f"expected one migration head, got {heads}"
+    assert heads == ["f9a1b3d5e7g9"], f"expected one migration head at f9a1b3d5e7g9, got {heads}"
 
     reachable = set()
     def visit(revision):
