@@ -1,317 +1,131 @@
-import React, { useState } from 'react';
-import { 
-  FileCheck, Download, Calendar, CheckCircle, 
-  AlertTriangle, TrendingUp, Shield
-} from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, Download, FileCheck, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { isDemoMode } from '../../services/demoMode';
+import { reportsApi } from '../../services/reportsApi';
 
-interface ComplianceReport {
+type ReportState = {
   id: string;
-  framework: string;
   title: string;
-  date: string;
-  score: number;
-  status: 'compliant' | 'partial' | 'non-compliant';
-  controls: number;
-  passed: number;
-}
+  status: 'demo' | 'available' | 'unavailable' | 'error';
+  message: string;
+};
+
+const REPORTS = [
+  { id: 'compliance', title: 'Compliance Status Report' },
+  { id: 'regulatory', title: 'Regulatory Compliance Report' },
+  { id: 'audit', title: 'Audit Trail Report' },
+];
 
 export default function ComplianceReports() {
-  const [reports] = useState<ComplianceReport[]>([
-    {
-      id: '1',
-      framework: 'SOC 2 Type II',
-      title: 'Annual SOC 2 Audit Report',
-      date: '2027-01-13',
-      score: 98,
-      status: 'compliant',
-      controls: 64,
-      passed: 63,
-    },
-    {
-      id: '2',
-      framework: 'NIST CSF 2.0',
-      title: 'NIST Cybersecurity Framework Assessment',
-      date: '2027-01-05',
-      score: 94,
-      status: 'compliant',
-      controls: 108,
-      passed: 102,
-    },
-    {
-      id: '3',
-      framework: 'ISO 27001',
-      title: 'ISO 27001 Compliance Report',
-      date: '2026-12-20',
-      score: 96,
-      status: 'compliant',
-      controls: 114,
-      passed: 109,
-    },
-    {
-      id: '4',
-      framework: 'GDPR',
-      title: 'GDPR Compliance Assessment',
-      date: '2026-12-15',
-      score: 100,
-      status: 'compliant',
-      controls: 47,
-      passed: 47,
-    },
-    {
-      id: '5',
-      framework: 'HIPAA',
-      title: 'HIPAA Security Rule Compliance',
-      date: '2026-12-01',
-      score: 92,
-      status: 'compliant',
-      controls: 75,
-      passed: 69,
-    },
-    {
-      id: '6',
-      framework: 'PCI DSS',
-      title: 'PCI DSS Compliance Report',
-      date: '2026-11-15',
-      score: 88,
-      status: 'partial',
-      controls: 312,
-      passed: 275,
-    },
-  ]);
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const demo = isDemoMode();
+  const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [reports, setReports] = useState<ReportState[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
-  const stats = {
-    totalReports: reports.length,
-    compliant: reports.filter(r => r.status === 'compliant').length,
-    avgScore: Math.round(reports.reduce((sum, r) => sum + r.score, 0) / reports.length),
-    totalControls: reports.reduce((sum, r) => sum + r.controls, 0),
-  };
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const results = await Promise.all(REPORTS.map(async item => {
+        const report = await reportsApi.report(item.id, String(user?.orgId ?? 'tenant'), period);
+        const unavailable = report.pages.some(page => page[2].some(block =>
+          block[0] === 'M' && (block as any)[2]?.some((entry: any[]) =>
+            String(entry[0]).toLowerCase().includes('donnee indisponible') ||
+            String(entry[0]).toLowerCase().includes('donnée indisponible'),
+          ),
+        ));
+        return {
+          id: item.id, title: report.title,
+          status: demo ? 'demo' as const : unavailable ? 'unavailable' as const : 'available' as const,
+          message: demo ? 'Deterministic sample report — not production evidence.'
+            : unavailable ? 'Live adapter is not connected; no compliance result is available.'
+            : 'Built from the live reporting API.',
+        };
+      }));
+      setReports(results);
+    } catch (e) {
+      setReports([]);
+      setError(e instanceof Error ? e.message : 'Unable to load compliance reports');
+    } finally {
+      setLoading(false);
+    }
+  }, [demo, period, user?.orgId]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'compliant': return 'bg-green-500/20 text-green-400 border-green-500/30';
-      case 'partial': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
-      case 'non-compliant': return 'bg-red-500/20 text-red-400 border-red-500/30';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
+  useEffect(() => { void load(); }, [load]);
+
+  const download = async (id: string) => {
+    setBusy(id);
+    setError('');
+    try {
+      await reportsApi.downloadCsv(id, String(user?.orgId ?? 'tenant'), period);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'CSV export failed');
+    } finally {
+      setBusy(null);
     }
   };
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="p-4 lg:p-6 space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Compliance Reports</h1>
-          <p className="text-gray-400 mt-1">
-            Automated compliance monitoring and audit-ready reports
-          </p>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
+            <FileCheck className="w-6 h-6 text-cyan-400" /> Compliance & Audit Reports
+          </h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">Report availability is determined by the reporting API, not prefilled sample scores.</p>
         </div>
-        <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-[var(--ic-heading)] rounded-lg flex items-center gap-2">
-          <Download className="w-4 h-4" />
-          Export All Reports
-        </button>
-      </div>
+        <div className="flex gap-2">
+          <input type="month" value={period} onChange={e => setPeriod(e.target.value)}
+            className="rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface)] px-3 py-2 text-sm text-[var(--ic-heading)]" />
+          <button onClick={() => void load()} disabled={loading}
+            className="rounded-lg border border-[var(--ic-border)] p-2 text-[var(--ic-muted)] disabled:opacity-50">
+            <RefreshCw className={'w-4 h-4 ' + (loading ? 'animate-spin' : '')} />
+          </button>
+        </div>
+      </header>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <FileCheck className="w-6 h-6 text-blue-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.totalReports}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Total Reports</p>
-          <p className="text-blue-400 text-xs mt-1">Active frameworks</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <CheckCircle className="w-6 h-6 text-green-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.compliant}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Compliant</p>
-          <p className="text-green-400 text-xs mt-1">Audit-ready</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <TrendingUp className="w-6 h-6 text-purple-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.avgScore}%</span>
-          </div>
-          <p className="text-gray-400 text-sm">Avg Score</p>
-          <p className="text-purple-400 text-xs mt-1">Across all frameworks</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <Shield className="w-6 h-6 text-cyan-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.totalControls}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Total Controls</p>
-          <p className="text-cyan-400 text-xs mt-1">Monitored continuously</p>
-        </div>
-      </div>
+      {demo && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+        Demo Mode: report content is simulated and must not be used as customer audit evidence.
+      </div>}
+      {!demo && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+        Some compliance and audit report families still have no live data adapter. They will remain unavailable rather than display invented scores or report dates.
+      </div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-300">{error}</div>}
 
-      {/* Info Banner */}
-      <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/10 border border-green-500/20 rounded-xl p-6">
-        <div className="flex items-start gap-4">
-          <div className="p-3 bg-green-500/20 rounded-lg">
-            <CheckCircle className="w-6 h-6 text-green-400" />
-          </div>
-          <div className="flex-1">
-            <h3 className="text-[var(--ic-heading)] font-semibold mb-2">Continuous Compliance Monitoring</h3>
-            <p className="text-gray-400 text-sm mb-3">
-              Infracentra continuously monitors your compliance posture across all frameworks. 
-              These reports are automatically generated and updated in real-time, ensuring you're 
-              always audit-ready. Your compliance history is maintained indefinitely, providing 
-              a complete audit trail for regulators and auditors.
-            </p>
-            <div className="flex items-center gap-4 text-xs">
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-green-400" />
-                <span className="text-gray-300">Updated daily</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 text-green-400" />
-                <span className="text-gray-300">Audit-ready format</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-green-400" />
-                <span className="text-gray-300">Immutable history</span>
-              </div>
+      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {loading ? <div className="col-span-full p-10 text-center text-sm text-[var(--ic-muted)]">Checking report sources…</div> :
+          reports.map(report => <article key={report.id} className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="font-semibold text-[var(--ic-heading)]">{report.title}</h2>
+              <span className={'rounded-full px-2 py-1 text-[10px] uppercase ' +
+                (report.status === 'available' ? 'bg-emerald-500/10 text-emerald-400' :
+                 report.status === 'demo' ? 'bg-fuchsia-500/10 text-fuchsia-300' :
+                 'bg-amber-500/10 text-amber-300')}>
+                {report.status}
+              </span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Reports List */}
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[var(--ic-border)] bg-[var(--ic-surface)]">
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Framework</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Report Title</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Date</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Score</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Status</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Controls</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reports.map((report) => (
-                <tr key={report.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] transition-colors">
-                  <td className="py-3 px-4">
-                    <span className="text-[var(--ic-heading)] font-semibold">{report.framework}</span>
-                  </td>
-                  <td className="py-3 px-4 text-gray-300">{report.title}</td>
-                  <td className="py-3 px-4 text-gray-400 text-sm">
-                    {new Date(report.date).toLocaleDateString('en-US', { 
-                      year: 'numeric', 
-                      month: 'short', 
-                      day: 'numeric' 
-                    })}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 bg-[var(--ic-surface)] rounded-full h-2">
-                        <div 
-                          className={`h-2 rounded-full ${
-                            report.score >= 95 ? 'bg-green-500' :
-                            report.score >= 85 ? 'bg-yellow-500' : 'bg-red-500'
-                          }`}
-                          style={{ width: `${report.score}%` }}
-                        />
-                      </div>
-                      <span className="text-[var(--ic-heading)] font-semibold">{report.score}%</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(report.status)}`}>
-                      {report.status}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-gray-300">
-                    <span className="text-[var(--ic-heading)] font-semibold">{report.passed}</span>
-                    <span className="text-gray-400"> / {report.controls}</span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <button className="p-2 hover:bg-[var(--ic-surface-2)] rounded text-gray-400 hover:text-[var(--ic-heading)] transition-colors">
-                        <Download className="w-4 h-4" />
-                      </button>
-                      <button className="p-2 hover:bg-[var(--ic-surface-2)] rounded text-gray-400 hover:text-[var(--ic-heading)] transition-colors">
-                        <FileCheck className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Compliance History */}
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] p-6">
-        <h2 className="text-xl font-bold text-[var(--ic-heading)] mb-4">Compliance History</h2>
-        <p className="text-gray-400 text-sm mb-6">
-          Your compliance journey with Infracentra - all reports are stored indefinitely for audit purposes
-        </p>
-        <div className="space-y-3">
-          {[
-            { date: '2027-01', score: 94, label: 'Current Month' },
-            { date: '2026-12', score: 92, label: 'Last Month' },
-            { date: '2026-11', score: 89, label: '2 Months Ago' },
-            { date: '2026-10', score: 87, label: '3 Months Ago' },
-            { date: '2026-09', score: 85, label: '4 Months Ago' },
-          ].map((item, idx) => (
-            <div key={idx} className="flex items-center justify-between p-3 bg-[var(--ic-surface-2)] rounded-lg">
-              <div className="flex items-center gap-4">
-                <Calendar className="w-5 h-5 text-gray-400" />
-                <div>
-                  <p className="text-[var(--ic-heading)] font-medium">{item.date}</p>
-                  <p className="text-gray-400 text-xs">{item.label}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="w-32 bg-[var(--ic-surface-2)] rounded-full h-2">
-                  <div 
-                    className={`h-2 rounded-full ${
-                      item.score >= 95 ? 'bg-green-500' :
-                      item.score >= 85 ? 'bg-yellow-500' : 'bg-red-500'
-                    }`}
-                    style={{ width: `${item.score}%` }}
-                  />
-                </div>
-                <span className="text-[var(--ic-heading)] font-semibold w-12 text-right">{item.score}%</span>
-                <TrendingUp className="w-4 h-4 text-green-400" />
-              </div>
+            <p className="text-xs text-[var(--ic-muted)] min-h-9">{report.message}</p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => navigate('/reports')} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-xs text-[var(--ic-text)]">
+                Open Reporting Center
+              </button>
+              <button onClick={() => void download(report.id)} disabled={busy === report.id || report.status === 'unavailable' || report.status === 'error'}
+                className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">
+                <Download className="w-3.5 h-3.5" /> {busy === report.id ? 'Exporting…' : 'Export CSV'}
+              </button>
             </div>
-          ))}
-        </div>
+          </article>)}
       </div>
 
-      {/* Export Options */}
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] p-6">
-        <h2 className="text-xl font-bold text-[var(--ic-heading)] mb-4">Export for Auditors</h2>
-        <p className="text-gray-400 text-sm mb-6">
-          Generate audit-ready reports in multiple formats for your compliance requirements
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <button className="p-4 bg-[var(--ic-surface-2)] hover:bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg transition-all text-left">
-            <FileCheck className="w-6 h-6 text-blue-400 mb-2" />
-            <p className="text-[var(--ic-heading)] font-semibold mb-1">PDF Report</p>
-            <p className="text-gray-400 text-xs">Complete audit package</p>
-          </button>
-          <button className="p-4 bg-[var(--ic-surface-2)] hover:bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg transition-all text-left">
-            <FileCheck className="w-6 h-6 text-green-400 mb-2" />
-            <p className="text-[var(--ic-heading)] font-semibold mb-1">Excel Export</p>
-            <p className="text-gray-400 text-xs">Raw data for analysis</p>
-          </button>
-          <button className="p-4 bg-[var(--ic-surface-2)] hover:bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-lg transition-all text-left">
-            <FileCheck className="w-6 h-6 text-purple-400 mb-2" />
-            <p className="text-[var(--ic-heading)] font-semibold mb-1">API Access</p>
-            <p className="text-gray-400 text-xs">Direct integration</p>
-          </button>
-        </div>
-      </div>
+      {!loading && !reports.length && <div className="rounded-xl border border-dashed border-[var(--ic-border)] p-8 text-center text-sm text-[var(--ic-muted)] flex flex-col items-center gap-2">
+        <AlertTriangle className="w-5 h-5" /> No report catalogue data was returned for this tenant and period.
+      </div>}
     </div>
   );
 }
