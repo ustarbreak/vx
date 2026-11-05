@@ -233,3 +233,21 @@ async def test_scoped_tenant_read_defaults_and_owner_granted_write_scope(session
         assert allowed.status_code == 201, allowed.text
         denied=await staff.post("/api/admin/tenants/2/tickets", json={"title": "Must be denied"})
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_registration_cannot_create_privileged_platform_roles(session_factory):
+    async def override_db():
+        async with session_factory() as db:
+            yield db
+    app.dependency_overrides[get_db] = override_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as public:
+        for role in ("platform_admin", "platform_expert", "platform_analyst", "platform_user", "client_admin"):
+            response = await public.post("/api/auth/register", json={
+                "email": f"{role}@registration.example",
+                "name": "Untrusted Registration",
+                "password": "long-enough-password",
+                "role": role,
+                "org_id": 1,
+            })
+            assert response.status_code == 403, (role, response.text)
