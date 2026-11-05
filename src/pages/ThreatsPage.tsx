@@ -326,7 +326,7 @@ function ThreatsContent() {
               {feedStatus === 'loading' && <span className="text-cyan-400">● Fetching live feed from backend…</span>}
               {feedStatus === 'ok' && (liveThreats?.length ?? 0) > 0 &&
                 <span className="text-emerald-400">● LIVE FEED — {liveThreats?.length ?? 0} events from the configured MISP instance</span>}
-              {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — showing reference dataset</span>}
+              {feedStatus === 'error' && <span className="text-amber-400" title={feedError}>● Live feed unreachable ({feedError}) — no live feed rows are shown</span>}
               {feedStatus === 'ok' && (liveThreats?.length ?? 0) === 0 &&
                 <span className="text-amber-400">● Backend reachable but no MISP instance configured — recent-feed results are empty by design (Settings → Integrations → MISP). Per-indicator lookups below still use OTX.</span>}
             </div>
