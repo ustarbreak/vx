@@ -34,6 +34,7 @@ import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
 import PlatformIntegrationsPage from './pages/platform/PlatformIntegrationsPage';
 import PlatformServicesOverviewPage from './pages/platform/PlatformServicesOverviewPage';
+import PlatformServiceCatalogPage from './pages/platform/PlatformServiceCatalogPage';
 // T4.3 (additive): platform onboarding page — flag-gated backend, safe empty state.
 import PlatformOnboardingPage from './pages/platform-admin/PlatformOnboardingPage';
 import PlatformPartnersPage from './pages/platform/PlatformPartnersPage';
@@ -194,6 +195,7 @@ function AppRoutes() {
         <Route path="admin/packs" element={<PackCustomizerPage />} />
         <Route path="admin/integrations" element={<PlatformIntegrationsPage />} />
         <Route path="admin/services-ops" element={<PlatformServicesOverviewPage />} />
+        <Route path="admin/service-catalog" element={<PlatformServiceCatalogPage />} />
         {/* T4.3 (additive): catalog-gated onboarding; empty state when flag off */}
         <Route path="admin/onboarding" element={<PlatformOnboardingPage />} />
 
