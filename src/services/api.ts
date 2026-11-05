@@ -1333,10 +1333,10 @@ export interface PlatformPermissionAssignmentDto {
   effect: 'allow' | 'deny';
   scope_type: 'global' | 'tenant' | 'partner';
   scope_id: number | null;
-  granted_by: number;
-  created_at: string;
-  expires_at: string | null;
-  revoked_at: string | null;
+  granted_by?: number;
+  created_at?: string;
+  expires_at?: string | null;
+  revoked_at?: string | null;
 }
 export interface PlatformStaffDto {
   id: number; email: string; name: string; role: PlatformStaffRole;
