@@ -70,7 +70,7 @@ export default function PlatformAuditPage() {
 
   const isPlatformAdmin = user?.role === 'platform_admin';
   // Backend /audit/logs (platform) supports actor_role/outcome server-side;
-  // /logs/my-org supports only skip/limit → q + role + outcome are applied
+  // /logs/my-org supports only skip/limit → role + outcome are applied
   // locally for client-role sessions. Track so the UI can label this honestly.
   const serverFilters = isPlatformAdmin || !backendMode;
 
@@ -150,6 +150,20 @@ export default function PlatformAuditPage() {
       : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit' });
   };
 
+  const exportCsv = () => {
+    const cell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+    const columns = ['timestamp', 'actor_name', 'actor_role', 'org_id', 'action', 'resource', 'resource_id', 'outcome', 'ip_address', 'details'];
+    const csv = [columns, ...rows2.map(row => columns.map(key => (row as any)[key]))]
+      .map(row => row.map(cell).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'infracentra-audit-filtered.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-4 lg:p-6 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -160,11 +174,15 @@ export default function PlatformAuditPage() {
             {isDemoMode() && <span className="ml-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-semibold uppercase">DEMO DATA</span>}
           </p>
         </div>
-        <button onClick={() => { setRefreshing(true); setReloadKey(k => k + 1); setTimeout(() => setRefreshing(false), 400); }}
-          disabled={refreshing || state === 'loading'}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-[var(--ic-text)] text-sm hover:bg-[var(--ic-surface)] disabled:opacity-50">
-          <RefreshCw className={`w-4 h-4 ${refreshing || state === 'loading' ? 'animate-spin' : ''}`} /> Actualiser
-        </button>
+        <div className="flex gap-2">
+          <button onClick={exportCsv} disabled={rows2.length === 0 || state !== 'ready'}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-[var(--ic-text)] text-sm hover:bg-[var(--ic-surface)] disabled:opacity-50">Exporter CSV ({rows2.length})</button>
+          <button onClick={() => { setRefreshing(true); setReloadKey(k => k + 1); setTimeout(() => setRefreshing(false), 400); }}
+            disabled={refreshing || state === 'loading'}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-[var(--ic-text)] text-sm hover:bg-[var(--ic-surface)] disabled:opacity-50">
+            <RefreshCw className={`w-4 h-4 ${refreshing || state === 'loading' ? 'animate-spin' : ''}`} /> Actualiser
+          </button>
+        </div>
       </div>
 
       {/* Filters — server-applied params */}
@@ -179,7 +197,10 @@ export default function PlatformAuditPage() {
           <select value={filterRole} onChange={e => setFilterRole(e.target.value)}
             className="px-3 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-text)] focus:outline-none focus:border-cyan-500/50">
             <option value="all">All Roles</option>
-            <option value="platform_admin">Platform Admin</option>
+            <option value="platform_admin">Platform Owner</option>
+            <option value="platform_expert">Platform Expert</option>
+            <option value="platform_analyst">Platform Analyst</option>
+            <option value="platform_user">Platform User</option>
             <option value="client_admin">Client Admin</option>
             <option value="client_user">Client User</option>
           </select>
