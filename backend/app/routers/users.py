@@ -104,8 +104,8 @@ async def update_client_user(
             raise HTTPException(status_code=403, detail="Client admins may only manage technician, analyst, and client-user accounts")
         allowed_roles = CLIENT_ASSIGNABLE_ROLES
     else:
-        if target.role == "platform_admin":
-            raise HTTPException(status_code=403, detail="Platform administrator accounts cannot be changed through this endpoint")
+        if target.role == "platform_admin" or target.role in PLATFORM_STAFF_ROLES:
+            raise HTTPException(status_code=403, detail="Platform staff accounts must be managed through the Owner access-control endpoint")
         allowed_roles = PLATFORM_ASSIGNABLE_ROLES
 
     changes = body.model_dump(exclude_none=True)
