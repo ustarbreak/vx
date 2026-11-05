@@ -296,3 +296,30 @@ async def test_channel_permissions_are_tenant_scoped_and_writes_are_audited(sess
         )).scalars().first()
         assert audit is not None
         assert audit.org_id == 1
+
+
+@pytest.mark.asyncio
+async def test_platform_user_directory_is_not_leaked_without_users_read(session_factory):
+    async with client_for(session_factory, 4) as platform_user:
+        listing = await platform_user.get("/api/users/")
+        self_record = await platform_user.get("/api/users/4")
+        assert listing.status_code == 403
+        assert self_record.status_code == 200
+
+    async with client_for(session_factory, 3) as analyst:
+        listing = await analyst.get("/api/users/")
+        assert listing.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.users.read",
+            "effect": "allow", "scope_type": "global"
+        })
+        assert grant.status_code == 201, grant.text
+
+    async with client_for(session_factory, 3) as analyst:
+        listing = await analyst.get("/api/users/")
+        assert listing.status_code == 200, listing.text
+        assert all(row["role"].startswith("platform_") for row in listing.json())
+        missing = await analyst.get("/api/users/99999")
+        assert missing.status_code == 404
