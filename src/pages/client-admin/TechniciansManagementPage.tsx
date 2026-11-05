@@ -1,596 +1,317 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  UserCog, Plus, Search, Filter, Edit, Trash2, 
-  Eye, Mail, Phone, Shield, CheckCircle, XCircle,
-  AlertTriangle, Clock
-} from 'lucide-react';
-import { ticketsApi } from '../../services/api';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Mail, Plus, RefreshCw, ShieldCheck, UserCog, UserCheck, UserX, AlertTriangle } from 'lucide-react';
+import { api, ApiError } from '../../services/api';
 import { isDemoMode } from '../../services/demoMode';
+import { useAuth } from '../../context/AuthContext';
 
-interface Technician {
-  id: string;
-  firstName: string;
-  lastName: string;
+type Member = {
+  id: number | string;
   email: string;
-  phone?: string;
-  grade: 'L1' | 'L2' | 'L3' | 'Admin';
+  name: string;
   role: string;
-  status: 'active' | 'inactive' | 'pending';
-  permissions: string[];
-  mfaEnabled: boolean;
-  lastLogin?: string;
-  createdAt: string;
-  assignedServices: string[];
-  /** Live workload — joined from the ticketing backend (GET /tickets), NOT a
-   *  fixture. null = not loaded / unavailable (rendered as "unavailable"). */
-  openTickets: number | null;
-  p1Tickets: number | null;
+  status: string;
+  mfa_enabled: boolean;
+  last_login: string | null;
+  created_at: string | null;
+  org_id: number | null;
+};
+
+type Invitation = {
+  id: number | string;
+  email: string;
+  role: string;
+  status: string;
+  error?: string | null;
+  created_at?: string | null;
+  sent_at?: string | null;
+};
+
+const INVITABLE_ROLES = [
+  { value: 'technician', label: 'Technician' },
+  { value: 'analyst', label: 'SOC Analyst' },
+  { value: 'client_user', label: 'Client User' },
+];
+
+function errorMessage(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  return error instanceof Error ? error.message : 'Unexpected request error';
 }
 
 export default function TechniciansManagementPage() {
-  const [technicians, setTechnicians] = useState<Technician[]>([]);
+  const { user } = useAuth();
+  const demo = isDemoMode();
+  const [members, setMembers] = useState<Member[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterGrade, setFilterGrade] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [selectedTechnician, setSelectedTechnician] = useState<Technician | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [showInvite, setShowInvite] = useState(false);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('technician');
+  const [filter, setFilter] = useState('all');
 
-  useEffect(() => {
-    // Simulate API call
-    const fetchTechnicians = async () => {
-      try {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Same people as the ticketing engine assignees (demoWorld) => tickets
-        // assigned to "Y. El Amrani" here match Technicians list and vice versa.
-        const { demoTechnicians, demoTicketSeeds } = await import('../../data/demoWorld');
-        const gradeFor = (role: string) => role === 'client_admin' ? 'Admin' : role === 'analyst' ? 'L3' : role === 'technician' ? 'L2' : 'L1';
-        const roleLabel = (g: string) => g === 'Admin' ? 'Security Administrator' : g === 'L3' ? 'Expert Technician' : g === 'L2' ? 'Senior Technician' : 'Junior Technician';
-        const mockTechnicians: Technician[] = demoTechnicians.filter(t => t.role !== 'client_admin').map((t, i) => {
-          const g = gradeFor(t.role);
-          const [firstName, ...rest] = t.name.replace(/^([A-Z]\w*)\.\s/, '$1 ').split(' ');
-          const myTickets = demoTicketSeeds.filter(tk => tk.assignee === t.name);
-          return {
-            id: String(i + 1),
-            firstName: firstName.trim(), lastName: rest.join(' ') || '—',
-            email: t.email, phone: `+212 5 ${String(40 + i)} ${String(20 + i * 3)} ${String(11 + i * 7)} ${String(30 + i * 9)}`,
-            grade: g, role: roleLabel(g), status: 'active',
-            permissions: g === 'Admin' ? ['all'] : ['view-alerts', 'edit-alerts', 'view-tickets', 'edit-tickets', 'create-tickets'],
-            mfaEnabled: true,
-            lastLogin: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
-            createdAt: '2026-06-15T00:00:00Z',
-            assignedServices: myTickets.length ? ['threat-intel', 'endpoint-protection', 'ticketing'] : ['threat-intel'],
-            openTickets: null, p1Tickets: null,
-          };
-        });
-        
-        setTechnicians(mockTechnicians);
-        setLoading(false);
-
-        // Workload columns via users+tickets join through the API layer:
-        // GET /tickets hits the real backend query in production and the
-        // demoStore tickets array in Demo Mode — never a second mock here.
-        try {
-          const rows: any[] = await ticketsApi.list();
-          const byAssignee: Record<string, { open: number; p1: number }> = {};
-          for (const t of rows) {
-            if (['resolved', 'closed'].includes(t.status)) continue;
-            const key = String(t.assignee ?? '').trim();
-            if (!key) continue;
-            const agg = (byAssignee[key] ??= { open: 0, p1: 0 });
-            agg.open += 1;
-            if (t.priority === 'p1') agg.p1 += 1;
-          }
-          setTechnicians(prev => prev.map(tc => {
-            const full = `${tc.firstName} ${tc.lastName}`.replace(/\s+/g, ' ').trim();
-            const hit = byAssignee[full];
-            return { ...tc, openTickets: hit ? hit.open : 0, p1Tickets: hit ? hit.p1 : 0 };
-          }));
-        } catch {
-          // Leave workload null → table shows "unavailable", never fake zeros.
-        }
-      } catch (error) {
-        console.error('Failed to fetch technicians:', error);
-        setLoading(false);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const rows = await api.get<Member[]>('/users/?limit=200');
+      setMembers(Array.isArray(rows) ? rows : []);
+      if (demo) {
+        // Demo Mode intentionally has no invitation-mail transport.
+        setInvitations([]);
+      } else {
+        const pending = await api.get<Invitation[]>('/invitations');
+        setInvitations(Array.isArray(pending) ? pending : []);
       }
-    };
+    } catch (e) {
+      setError(errorMessage(e));
+      setMembers([]);
+      setInvitations([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [demo]);
 
-    fetchTechnicians();
-  }, []);
+  useEffect(() => { void load(); }, [load]);
 
-  const filteredTechnicians = technicians.filter(tech => {
-    const matchesSearch = 
-      tech.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tech.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      tech.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesGrade = filterGrade === 'all' || tech.grade === filterGrade;
-    const matchesStatus = filterStatus === 'all' || tech.status === filterStatus;
-    return matchesSearch && matchesGrade && matchesStatus;
+  const invite = async () => {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized || !normalized.includes('@')) {
+      setError('Enter a valid email address.');
+      return;
+    }
+    setWorking('invite');
+    setError('');
+    setNotice('');
+    try {
+      if (demo) {
+        const local: Invitation = {
+          id: 'demo-' + Date.now(), email: normalized, role, status: 'simulated',
+          created_at: new Date().toISOString(),
+        };
+        setInvitations(prev => [local, ...prev]);
+        setNotice('Demo invitation simulated locally. No email was sent and no account was created.');
+      } else {
+        const result = await api.post<{ id: number; email: string; status: string; note?: string; delivery_error?: string | null }>(
+          '/invitations', { email: normalized, role },
+        );
+        setInvitations(prev => [{
+          id: result.id, email: result.email, role, status: result.status,
+          error: result.delivery_error, created_at: new Date().toISOString(),
+        }, ...prev.filter(item => item.email !== normalized)]);
+        setNotice(result.note || 'Invitation created.');
+      }
+      setEmail('');
+      setShowInvite(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const updateMember = async (member: Member, patch: { role?: string; status?: string }) => {
+    setWorking(String(member.id));
+    setError('');
+    setNotice('');
+    try {
+      if (demo) {
+        setMembers(prev => prev.map(row => row.id === member.id ? { ...row, ...patch } : row));
+        setNotice('Demo member updated locally. No live account was changed.');
+      } else {
+        const updated = await api.patch<Member>('/users/' + member.id, patch);
+        setMembers(prev => prev.map(row => row.id === member.id ? updated : row));
+        setNotice('Member changes saved.');
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const resend = async (inv: Invitation) => {
+    if (demo) {
+      setNotice('Demo Mode has no email transport. No invitation email was sent.');
+      return;
+    }
+    setWorking('invite-' + inv.id);
+    setError('');
+    setNotice('');
+    try {
+      const result = await api.post<{ ok: boolean; status: string; error?: string | null }>(
+        '/invitations/' + inv.id + '/resend',
+      );
+      setInvitations(prev => prev.map(row => row.id === inv.id
+        ? { ...row, status: result.status, error: result.error }
+        : row));
+      setNotice(result.ok ? 'Invitation email sent.' : (result.error || 'Invitation remains pending.'));
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const visible = members.filter(member => {
+    const q = filter.toLowerCase();
+    return q === 'all' || member.role === q;
   });
-
-  const stats = {
-    total: technicians.length,
-    active: technicians.filter(t => t.status === 'active').length,
-    inactive: technicians.filter(t => t.status === 'inactive').length,
-    pending: technicians.filter(t => t.status === 'pending').length,
-    l1: technicians.filter(t => t.grade === 'L1').length,
-    l2: technicians.filter(t => t.grade === 'L2').length,
-    l3: technicians.filter(t => t.grade === 'L3').length,
-    admin: technicians.filter(t => t.grade === 'Admin').length,
-  };
-
-  const getGradeColor = (grade: string) => {
-    switch (grade) {
-      case 'Admin': return 'bg-purple-500/20 text-purple-400 border-purple-500/30';
-      case 'L3': return 'bg-red-500/20 text-red-400 border-red-500/30';
-      case 'L2': return 'bg-orange-500/20 text-orange-400 border-orange-500/30';
-      case 'L1': return 'bg-blue-500/20 text-blue-400 border-blue-500/30';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'bg-green-500/20 text-green-400 border-green-500/30';
-      case 'inactive': return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-      case 'pending': return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30';
-      default: return 'bg-gray-500/20 text-gray-400 border-gray-500/30';
-    }
-  };
-
-  const handleEdit = (tech: Technician) => {
-    setSelectedTechnician(tech);
-    setShowEditModal(true);
-  };
-
-  const handleDelete = (id: string) => {
-    if (confirm('Are you sure you want to delete this technician?')) {
-      setTechnicians(technicians.filter(t => t.id !== id));
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
-          <p className="mt-4 text-gray-400">Loading technicians...</p>
-        </div>
-      </div>
-    );
-  }
+  const active = members.filter(member => member.status === 'active').length;
+  const inactive = members.filter(member => member.status !== 'active').length;
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+    <div className="p-4 lg:p-6 space-y-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Technicians Management</h1>
-          <p className="text-gray-400 mt-1">
-            Manage platform technicians and their permissions
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
+            <UserCog className="w-6 h-6 text-cyan-400" /> Team & Technicians
+          </h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">
+            Tenant-scoped team directory, invitations, roles and account status.
+            {demo ? ' Demo Mode actions are local simulations.' : ' Live Mode changes are saved by the backend.'}
           </p>
         </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-[var(--ic-heading)] flex items-center gap-2"
-        >
-          <Plus className="w-4 h-4" />
-          Add Technician
-        </button>
-      </div>
+        <div className="flex gap-2">
+          <button onClick={() => void load()} disabled={loading}
+            className="p-2 rounded-lg border border-[var(--ic-border)] text-[var(--ic-muted)] hover:text-[var(--ic-heading)]">
+            <RefreshCw className={'w-4 h-4 ' + (loading ? 'animate-spin' : '')} />
+          </button>
+          <button onClick={() => { setError(''); setShowInvite(true); }}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold">
+            <Plus className="w-4 h-4" /> Invite member
+          </button>
+        </div>
+      </header>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <UserCog className="w-6 h-6 text-blue-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.total}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Total Technicians</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <CheckCircle className="w-6 h-6 text-green-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.active}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Active</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <Clock className="w-6 h-6 text-yellow-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.pending}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Pending</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-          <div className="flex items-center justify-between mb-2">
-            <XCircle className="w-6 h-6 text-gray-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">{stats.inactive}</span>
-          </div>
-          <p className="text-gray-400 text-sm">Inactive</p>
-        </div>
-      </div>
+      {demo && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+        Demo Mode: member changes are simulated in this browser session. Invitations do not send email or create real accounts.
+      </div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-300 flex items-center gap-2">
+        <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+      </div>}
+      {notice && <div role="status" className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-sm text-cyan-300">{notice}</div>}
 
-      {/* Grade Distribution */}
-      <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-        <h2 className="text-xl font-bold text-[var(--ic-heading)] mb-4">Grade Distribution</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
-            <p className="text-blue-400 text-2xl font-bold">{stats.l1}</p>
-            <p className="text-gray-400 text-sm">L1 Technicians</p>
-          </div>
-          <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg p-4">
-            <p className="text-orange-400 text-2xl font-bold">{stats.l2}</p>
-            <p className="text-gray-400 text-sm">L2 Technicians</p>
-          </div>
-          <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4">
-            <p className="text-red-400 text-2xl font-bold">{stats.l3}</p>
-            <p className="text-gray-400 text-sm">L3 Technicians</p>
-          </div>
-          <div className="bg-purple-500/10 border border-purple-500/20 rounded-lg p-4">
-            <p className="text-purple-400 text-2xl font-bold">{stats.admin}</p>
-            <p className="text-gray-400 text-sm">Admins</p>
-          </div>
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+          <p className="text-xs text-[var(--ic-muted)]">Tenant members</p>
+          <p className="text-2xl font-bold text-[var(--ic-heading)]">{members.length}</p>
         </div>
-      </div>
+        <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+          <p className="text-xs text-[var(--ic-muted)]">Active accounts</p>
+          <p className="text-2xl font-bold text-emerald-400">{active}</p>
+        </div>
+        <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+          <p className="text-xs text-[var(--ic-muted)]">Inactive / disabled</p>
+          <p className="text-2xl font-bold text-[var(--ic-heading)]">{inactive}</p>
+        </div>
+      </section>
 
-      {/* Filters */}
-      <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
-        <div className="flex items-center gap-4">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by name or email..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <select
-            value={filterGrade}
-            onChange={(e) => setFilterGrade(e.target.value)}
-            className="bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="all">All Grades</option>
-            <option value="L1">L1</option>
-            <option value="L2">L2</option>
-            <option value="L3">L3</option>
-            <option value="Admin">Admin</option>
-          </select>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="all">All Status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-            <option value="pending">Pending</option>
+      <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b border-[var(--ic-border)]">
+          <h2 className="font-semibold text-[var(--ic-heading)]">Organization directory</h2>
+          <select value={filter} onChange={e => setFilter(e.target.value)}
+            className="rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]">
+            <option value="all">All roles</option>
+            <option value="client_admin">Client admins</option>
+            <option value="technician">Technicians</option>
+            <option value="analyst">SOC analysts</option>
+            <option value="client_user">Client users</option>
           </select>
         </div>
-      </div>
-
-      {/* Technicians Table */}
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[var(--ic-border)] bg-[var(--ic-surface)]">
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Technician</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Email</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Phone</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Grade</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Role</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Status</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">MFA</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Services</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold" title="Open / P1 tickets currently assigned — joined live from the ticketing API">Workload</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Last Login</th>
-                <th className="text-left py-3 px-4 text-gray-400 font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTechnicians.map((tech) => (
-                <tr key={tech.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500 flex items-center justify-center text-sm font-bold text-[var(--ic-heading)]">
-                        {tech.firstName[0]}{tech.lastName[0]}
-                      </div>
-                      <div>
-                        <p className="text-[var(--ic-heading)] font-medium">{tech.firstName} {tech.lastName}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-gray-300">{tech.email}</td>
-                  <td className="py-3 px-4 text-gray-300">{tech.phone || '-'}</td>
-                  <td className="py-3 px-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getGradeColor(tech.grade)}`}>
-                      {tech.grade}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-gray-300">{tech.role}</td>
-                  <td className="py-3 px-4">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getStatusColor(tech.status)}`}>
-                      {tech.status}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    {tech.mfaEnabled ? (
-                      <span className="text-green-400 flex items-center gap-1">
-                        <Shield className="w-4 h-4" />
-                        Enabled
-                      </span>
-                    ) : (
-                      <span className="text-red-400 flex items-center gap-1">
-                        <AlertTriangle className="w-4 h-4" />
-                        Disabled
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-gray-300 text-sm">
-                      {tech.assignedServices.includes('all') ? 'All Services' : `${tech.assignedServices.length} services`}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    {tech.openTickets == null ? (
-                      <span className="text-[var(--ic-muted)] text-xs italic" title="Ticket data could not be loaded — no value is invented">unavailable</span>
-                    ) : (
-                      <span className="text-sm text-gray-300" title={isDemoMode() ? 'Open/P1 tickets assigned (demo ticket store)' : 'Open/P1 tickets assigned (live from /api/tickets)'}>
-                        {tech.openTickets} open{tech.p1Tickets ? <span className="ml-1 text-cyber-red font-semibold">· {tech.p1Tickets} P1</span> : null}
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4 text-gray-400 text-sm">
-                    {tech.lastLogin ? new Date(tech.lastLogin).toLocaleString() : 'Never'}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={() => handleEdit(tech)}
-                        className="p-1 hover:bg-[var(--ic-surface-2)] rounded text-gray-400 hover:text-[var(--ic-heading)]"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button 
-                        onClick={() => handleDelete(tech.id)}
-                        className="p-1 hover:bg-red-500/20 rounded text-gray-400 hover:text-red-400"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
+        {loading ? <p className="p-8 text-sm text-[var(--ic-muted)]">Loading tenant members…</p> :
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="text-xs text-[var(--ic-muted)] uppercase">
+                <tr className="border-b border-[var(--ic-border)]">
+                  <th className="text-left p-3">Member</th><th className="text-left p-3">Role</th>
+                  <th className="text-left p-3">Status</th><th className="text-left p-3">MFA</th>
+                  <th className="text-left p-3">Last login</th><th className="text-left p-3">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+              </thead>
+              <tbody>
+                {visible.map(member => {
+                  const editable = member.email !== user?.email && member.role !== 'client_admin';
+                  return <tr key={member.id} className="border-b border-[var(--ic-border)] last:border-0">
+                    <td className="p-3">
+                      <p className="font-medium text-[var(--ic-heading)]">{member.name || 'Unnamed member'}</p>
+                      <p className="text-xs text-[var(--ic-muted)]">{member.email}</p>
+                    </td>
+                    <td className="p-3">
+                      <select aria-label={'Role for ' + member.email} value={member.role}
+                        disabled={!editable || working === String(member.id)}
+                        onChange={e => void updateMember(member, { role: e.target.value })}
+                        className="rounded-md border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-2 py-1 text-xs text-[var(--ic-heading)] disabled:opacity-60">
+                        {member.role === 'client_admin' && <option value="client_admin">Client Admin</option>}
+                        {INVITABLE_ROLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-3">
+                      <span className={'inline-flex items-center gap-1 text-xs ' + (member.status === 'active' ? 'text-emerald-400' : 'text-amber-400')}>
+                        {member.status === 'active' ? <UserCheck className="w-3.5 h-3.5" /> : <UserX className="w-3.5 h-3.5" />}
+                        {member.status}
+                      </span>
+                    </td>
+                    <td className="p-3 text-xs text-[var(--ic-muted)]">
+                      <span className="inline-flex items-center gap-1">{member.mfa_enabled ? <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> : null}{member.mfa_enabled ? 'Enabled' : 'Not enabled'}</span>
+                    </td>
+                    <td className="p-3 text-xs text-[var(--ic-muted)]">{member.last_login ? new Date(member.last_login).toLocaleString() : 'Not recorded'}</td>
+                    <td className="p-3">
+                      {editable ? <button disabled={working === String(member.id)}
+                        onClick={() => void updateMember(member, { status: member.status === 'active' ? 'inactive' : 'active' })}
+                        className="rounded-md border border-[var(--ic-border)] px-2 py-1 text-xs text-[var(--ic-text)] disabled:opacity-50">
+                        {member.status === 'active' ? 'Deactivate' : 'Reactivate'}
+                      </button> : <span className="text-xs text-[var(--ic-muted)]">Protected</span>}
+                    </td>
+                  </tr>;
+                })}
+                {!visible.length && <tr><td colSpan={6} className="p-8 text-center text-sm text-[var(--ic-muted)]">No members match this filter.</td></tr>}
+              </tbody>
+            </table>
+          </div>}
+      </section>
 
-      {/* Add Technician Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[var(--ic-surface)] rounded-xl p-6 max-w-2xl w-full mx-4 border border-[var(--ic-border)] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold text-[var(--ic-heading)] mb-6">Add New Technician</h2>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">First Name</label>
-                  <input
-                    type="text"
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., John"
-                  />
-                </div>
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Last Name</label>
-                  <input
-                    type="text"
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., Doe"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Email</label>
-                <input
-                  type="email"
-                  className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., john.doe@company.com"
-                />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Phone</label>
-                <input
-                  type="tel"
-                  className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g., +1 (555) 123-4567"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Grade</label>
-                  <select className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <option value="L1">L1 - Junior Technician</option>
-                    <option value="L2">L2 - Senior Technician</option>
-                    <option value="L3">L3 - Expert Technician</option>
-                    <option value="Admin">Admin - Administrator</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Role</label>
-                  <input
-                    type="text"
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., Security Analyst"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Permissions</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['view-alerts', 'edit-alerts', 'view-tickets', 'edit-tickets', 'create-tickets', 'escalate-tickets'].map(perm => (
-                    <label key={perm} className="flex items-center gap-2">
-                      <input type="checkbox" className="rounded" />
-                      <span className="text-gray-300 text-sm">{perm}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Assigned Services</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['threat-intel', 'endpoint-protection', 'network-monitoring', 'compliance', 'incident-response'].map(service => (
-                    <label key={service} className="flex items-center gap-2">
-                      <input type="checkbox" className="rounded" />
-                      <span className="text-gray-300 text-sm">{service}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" id="sendInvite" className="rounded" defaultChecked />
-                <label htmlFor="sendInvite" className="text-gray-300">Send invitation email</label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" id="requireMfa" className="rounded" defaultChecked />
-                <label htmlFor="requireMfa" className="text-gray-300">Require MFA</label>
-              </div>
-              <div className="flex items-center gap-3 pt-4">
-                <button
-                  onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-2 bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)] rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-[var(--ic-heading)] rounded-lg">
-                  Add Technician
-                </button>
-              </div>
-            </div>
+      <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden">
+        <div className="p-4 border-b border-[var(--ic-border)]">
+          <h2 className="font-semibold text-[var(--ic-heading)] flex items-center gap-2"><Mail className="w-4 h-4 text-cyan-400" /> Invitations</h2>
+          <p className="text-xs text-[var(--ic-muted)] mt-1">Delivery status comes from the invitation service; queued does not mean email delivered.</p>
+        </div>
+        {demo ? <p className="p-4 text-xs text-[var(--ic-muted)]">No real invitation records are available in Demo Mode.</p> :
+          <div className="divide-y divide-[var(--ic-border)]">
+            {invitations.map(inv => <div key={inv.id} className="p-4 flex flex-wrap items-center justify-between gap-3">
+              <div><p className="text-sm text-[var(--ic-heading)]">{inv.email}</p>
+                <p className="text-xs text-[var(--ic-muted)]">{inv.role} · {inv.status}{inv.error ? ' · ' + inv.error : ''}</p></div>
+              {['pending', 'sent'].includes(inv.status) && <button onClick={() => void resend(inv)} disabled={working === 'invite-' + inv.id}
+                className="rounded-md border border-[var(--ic-border)] px-3 py-1.5 text-xs text-[var(--ic-text)] disabled:opacity-50">Resend</button>}
+            </div>)}
+            {!invitations.length && <p className="p-6 text-center text-sm text-[var(--ic-muted)]">No invitations recorded.</p>}
+          </div>}
+      </section>
+
+      {showInvite && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowInvite(false)}>
+        <div className="w-full max-w-md rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+          <div><h2 className="text-lg font-semibold text-[var(--ic-heading)]">Invite a team member</h2>
+            <p className="text-xs text-[var(--ic-muted)] mt-1">The invitation grants only the selected tenant role.</p></div>
+          <label className="block text-xs text-[var(--ic-muted)]">Email address
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="person@company.com"
+              className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]" />
+          </label>
+          <label className="block text-xs text-[var(--ic-muted)]">Role
+            <select value={role} onChange={e => setRole(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]">
+              {INVITABLE_ROLES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <button onClick={() => setShowInvite(false)} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-text)]">Cancel</button>
+            <button onClick={() => void invite()} disabled={working === 'invite' || !email.trim()}
+              className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              {working === 'invite' ? 'Sending…' : 'Create invitation'}
+            </button>
           </div>
         </div>
-      )}
-
-      {/* Edit Technician Modal */}
-      {showEditModal && selectedTechnician && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-[var(--ic-surface)] rounded-xl p-6 max-w-2xl w-full mx-4 border border-[var(--ic-border)] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-2xl font-bold text-[var(--ic-heading)] mb-6">Edit Technician</h2>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">First Name</label>
-                  <input
-                    type="text"
-                    defaultValue={selectedTechnician.firstName}
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Last Name</label>
-                  <input
-                    type="text"
-                    defaultValue={selectedTechnician.lastName}
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Email</label>
-                <input
-                  type="email"
-                  defaultValue={selectedTechnician.email}
-                  className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Phone</label>
-                <input
-                  type="tel"
-                  defaultValue={selectedTechnician.phone || ''}
-                  className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Grade</label>
-                  <select 
-                    defaultValue={selectedTechnician.grade}
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="L1">L1 - Junior Technician</option>
-                    <option value="L2">L2 - Senior Technician</option>
-                    <option value="L3">L3 - Expert Technician</option>
-                    <option value="Admin">Admin - Administrator</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-gray-400 text-sm mb-2">Status</label>
-                  <select 
-                    defaultValue={selectedTechnician.status}
-                    className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="pending">Pending</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Role</label>
-                <input
-                  type="text"
-                  defaultValue={selectedTechnician.role}
-                  className="w-full bg-[var(--ic-surface)] text-[var(--ic-heading)] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Permissions</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {['view-alerts', 'edit-alerts', 'view-tickets', 'edit-tickets', 'create-tickets', 'escalate-tickets'].map(perm => (
-                    <label key={perm} className="flex items-center gap-2">
-                      <input 
-                        type="checkbox" 
-                        className="rounded" 
-                        defaultChecked={selectedTechnician.permissions.includes(perm) || selectedTechnician.permissions.includes('all')}
-                      />
-                      <span className="text-gray-300 text-sm">{perm}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <input 
-                  type="checkbox" 
-                  id="editMfa" 
-                  className="rounded" 
-                  defaultChecked={selectedTechnician.mfaEnabled}
-                />
-                <label htmlFor="editMfa" className="text-gray-300">Require MFA</label>
-              </div>
-              <div className="flex items-center gap-3 pt-4">
-                <button
-                  onClick={() => setShowEditModal(false)}
-                  className="flex-1 px-4 py-2 bg-[var(--ic-surface-2)] hover:bg-slate-600 text-[var(--ic-heading)] rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={() => setShowEditModal(false)}
-                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-[var(--ic-heading)] rounded-lg"
-                >
-                  Save Changes
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      </div>}
     </div>
   );
 }
