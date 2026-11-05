@@ -170,7 +170,7 @@ export default function DeviceStatistics() {
           <select value={filterType} onChange={e => setFilterType(e.target.value)}
             className="rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface)] px-3 py-2 text-sm text-[var(--ic-heading)]">
             <option value="all">All device types</option>
-            {['server','endpoint','router','switch','firewall','printer','ap'].map(type => <option key={type} value={type}>{type}</option>)}
+            {['server','endpoint','router','switch','firewall','printer','ap','access_point','wireless_ap','gateway'].map(type => <option key={type} value={type}>{type}</option>)}
           </select>
         </header>
         {liveError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{liveError}</div>}
