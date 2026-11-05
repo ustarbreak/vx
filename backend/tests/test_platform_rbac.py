@@ -524,3 +524,22 @@ async def test_entitlement_graph_and_chain_honor_tenant_scoped_billing_read(sess
         assert chain.status_code == 200, chain.text
         assert cross_graph.status_code == 403
         assert cross_chain.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_dashboard_uses_database_aggregates_and_dashboard_permission(session_factory):
+    async with client_for(session_factory, 4) as staff:
+        response = await staff.get("/api/platform/dashboard/overview")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["source"] == "database"
+        assert payload["tenants"]["total"] == 2
+        assert payload["partners"]["total"] == 1
+        assert payload["users"]["total"] == 5
+        assert payload["infrastructure"]["collector_probes"] == 0
+        assert payload["commercial"]["subscriptions"]["available"] is False
+        assert "not represented as subscriptions" in payload["commercial"]["subscriptions"]["reason"]
+
+    async with client_for(session_factory, 5) as tenant:
+        denied = await tenant.get("/api/platform/dashboard/overview")
+        assert denied.status_code == 403
