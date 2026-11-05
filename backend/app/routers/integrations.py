@@ -33,7 +33,7 @@ async def get_integrations(
 async def get_integration(
     integration_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.integrations.configure"))
+    current_user: User = Depends(require_permission("platform.integrations.read"))
 ):
     """Get integration by ID"""
     result = await db.execute(select(Integration).where(Integration.id == integration_id))
@@ -53,7 +53,7 @@ async def create_integration(
     integration_data: IntegrationCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.integrations.delete"))
+    current_user: User = Depends(require_permission("platform.integrations.configure"))
 ):
     """Create a new integration (platform admin only)"""
     new_integration = Integration(**integration_data.model_dump())
@@ -85,7 +85,7 @@ async def update_integration(
     integration_data: IntegrationUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.configure"))
 ):
     """Update integration (platform admin only)"""
     result = await db.execute(select(Integration).where(Integration.id == integration_id))
@@ -128,7 +128,7 @@ async def test_integration(
     integration_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.configure"))
 ):
     """Test integration connection (platform admin only)"""
     result = await db.execute(select(Integration).where(Integration.id == integration_id))
@@ -231,7 +231,7 @@ async def delete_integration(
     integration_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.delete"))
 ):
     """Delete integration (platform admin only)"""
     result = await db.execute(select(Integration).where(Integration.id == integration_id))
