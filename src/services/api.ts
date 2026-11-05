@@ -1367,3 +1367,28 @@ export const platformAccessApi = {
   updateRole: (userId: number, role: Exclude<PlatformStaffRole, 'platform_admin'>) =>
     api.patch<{ id: number; role: PlatformStaffRole; auth_version: number }>(`/platform/access/users/${userId}/role`, { role }),
 };
+
+
+// ---------------------------------------------------------------------------
+// Platform dashboard — aggregate-only live metrics from persisted DB rows.
+// ---------------------------------------------------------------------------
+export interface PlatformDashboardOverview {
+  generated_at: string;
+  source: 'database';
+  tenants: { total: number; active: number };
+  partners: { total: number; active: number };
+  users: { total: number; active: number; platform_staff: number };
+  commercial: {
+    enabled_entitlements: number;
+    enabled_services_in_use: number;
+    subscriptions: { available: boolean; reason: string };
+  };
+  integrations: { total: number; active: number };
+  infrastructure: { collector_probes: number; collector_probes_online: number; discovered_devices: number };
+  operations: { alerts: number; tickets: number; playbook_runs: number; security_ops_tasks: number };
+  notification_queue: { total: number; queued: number; failed_or_dead_letter: number };
+  audit: { total: number; failures: number; blocked: number };
+}
+export const platformDashboardApi = {
+  overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
+};
