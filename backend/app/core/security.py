@@ -78,6 +78,10 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
     
+    token_version = payload.get("ver", 0)
+    if token_version != int(user.auth_version or 0):
+        raise credentials_exception
+
     if user.status != "active":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
