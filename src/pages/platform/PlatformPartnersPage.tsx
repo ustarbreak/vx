@@ -60,11 +60,15 @@ export default function PlatformPartnersPage() {
   const reactivate = (p: Partner) => act(p.id, () => partnersAdminApi.update(p.id, { status: 'active' }));
   const migrate = (p: Partner) => {
     const target = window.prompt(`Forcer un tier partenaire (registered / silver / gold / platinum — pricing_config) — actuel : ${p.license.plan}`, p.license.plan);
-    if (!target || !['Starter', 'Business', 'Scale'].includes(target)) return;
-    void act(p.id, () => partnersAdminApi.migrate(p.id, target as 'Starter' | 'Business' | 'Scale'));
+    if (!target || !['registered', 'silver', 'gold', 'platinum'].includes(target.toLowerCase())) return;
+    void act(p.id, () => partnersAdminApi.migrate(p.id, target.toLowerCase() as 'registered' | 'silver' | 'gold' | 'platinum'));
   };
   const remove = (p: Partner) => {
-    if (!window.confirm(`Supprimer définitivement le partenaire « ${p.company} » ? Ses clients finaux seront migrés vers Infracentra direct.`)) return;
+    if (p.end_clients.length > 0) {
+      alert(`Retrait impossible : ${p.end_clients.length} client(s) final(aux) sont encore rattachés. Réaffectez-les d’abord.`);
+      return;
+    }
+    if (!window.confirm(`Retirer « ${p.company} » du programme partenaire ? Aucun client final ne sera migré automatiquement.`)) return;
     void act(p.id, () => partnersAdminApi.remove(p.id));
   };
   const startEdit = (p: Partner) => {

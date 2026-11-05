@@ -351,7 +351,7 @@ export const organizationsApi = {
 export const partnersAdminApi = {
   update: (id: string, data: Record<string, unknown>) => api.patch<any>(`/partners/${id}`, data),
   suspend: (id: string) => api.post<{ status: string }>(`/partners/${id}/suspend`),
-  migrate: (id: string, plan: 'Starter' | 'Business' | 'Scale') => api.post<any>(`/partners/${id}/migrate`, { plan }),
+  migrate: (id: string, tier: 'registered' | 'silver' | 'gold' | 'platinum') => api.post<any>(`/partners/${id}/migrate`, { tier }),
   remove: (id: string) => api.del<void>(`/partners/${id}`),
 };
 
