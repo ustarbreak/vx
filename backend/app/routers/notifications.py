@@ -550,6 +550,8 @@ async def update_rule(rule_id: int, body: RuleUpdate,
     rule = (await db.execute(select(NotificationRule).where(NotificationRule.id == rule_id))).scalars().first()
     if not rule:
         raise HTTPException(404, "Rule not found")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Notification rule administration requires an administrator role")
     if rule.org_id is None:
         if current_user.role != "platform_admin" and not (
             is_platform_role(current_user.role) and await has_permission(
@@ -572,6 +574,8 @@ async def delete_rule(rule_id: int, current_user: User = Depends(get_current_use
     rule = (await db.execute(select(NotificationRule).where(NotificationRule.id == rule_id))).scalars().first()
     if not rule:
         raise HTTPException(404, "Rule not found")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Notification rule administration requires an administrator role")
     if rule.org_id is None:
         if current_user.role != "platform_admin" and not (
             is_platform_role(current_user.role) and await has_permission(
