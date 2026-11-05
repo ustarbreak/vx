@@ -208,3 +208,77 @@ The source audit is substantially expanded but **PA-01 is not complete yet**. St
 7. Produce a final action-to-endpoint matrix with a disposition for every platform UI action.
 
 No authorization or product behavior should be changed as part of this audit-only extension. The confirmed security defects should be fixed in PA-02, with any emergency security fix separately reviewed if the repository owner wants it prioritized.
+
+
+### PA01-F14 — Checked-in route/page inventories are stale or contradictory to source
+
+Evidence: `docs/audit/pages.csv`, `docs/audit/routes.csv`, compared with current source files inspected on `main`.
+
+Findings:
+- `pages.csv` marks the Platform Dashboard as having no API import and a demo-world dependency; direct source inspection confirms it imports demo fixtures and has no live dashboard API client.
+- `pages.csv` marks the theme page as having no API and no demo-world source; source inspection shows it applies themes through the local ThemeContext and browser event/local preference behavior. It is not a persisted organization-wide platform default setting.
+- `routes.csv` records multiple Platform Admin endpoint auth dependencies as `current_user`, while current source for tenant_manager and integrations uses `require_role("platform_admin")`. The CSV therefore cannot be trusted as the sole authorization inventory.
+- The route inventory lists `/api/settings/system` and `/api/settings/overview` as authenticated-user endpoints, consistent with the confirmed security issue.
+- **Risk:** implementation planning based on these generated/maintained CSVs can miss security boundaries and misstate live/demo behavior.
+- **Required action:** regenerate or reconcile the route and page inventories from current source, and add a CI check or documented regeneration procedure so they do not silently drift.
+
+### PA01-F15 — Theme controls are local user preferences, not a persisted global platform default
+
+Evidence: `src/pages/platform-admin/InfracentraThemesPage.tsx`; source lines show `useTheme()`, `setTheme()`, a browser event listener for `infracentra-theme-default-changed`, and direct calls to `setTheme`.
+
+Finding:
+- The page's theme selector applies a theme through the current frontend ThemeContext. The inspected page does not call a backend settings API.
+- **Risk:** the Owner may believe they are setting a platform-wide default when the inspected behavior is local to the current frontend context/browser.
+- **Required action:** distinguish personal preview/preference from organization/platform default. Persist a true global default server-side, audit changes and define whether it applies to all users or only new sessions.
+
+### PA01-F16 — Platform onboarding is explicitly feature-flagged and may be unavailable
+
+Evidence: `src/pages/platform-admin/PlatformOnboardingPage.tsx`.
+
+Finding:
+- The page calls `/platform/services/{service_id}/first-success` and `/platform/lifecycle`.
+- Its own comments and empty state state that the backend catalog may be disabled when `PLATFORM_CATALOG_ENABLED=false`, resulting in 404.
+- **Risk:** a route existing in the frontend does not mean the platform catalog lifecycle is enabled or operational in the target environment.
+- **Required action:** verify deployment flag, backend router registration, persistence and role permissions. If disabled, label it as unavailable rather than presenting it as an operational feature.
+
+### PA01-F17 — Pack customizer UI loads defaults before server response
+
+Evidence: `src/pages/platform-admin/PackCustomizerPage.tsx`; `backend/app/routers/pricing_v2.py` `GET /packs`, `PUT /packs/{pack_id}`, `POST /packs/reset`.
+
+Finding:
+- The page initializes its pack state from shipped defaults, then loads pricing config and pack definitions asynchronously.
+- Backend update/reset handlers enforce `platform_admin` inline and persist entitlement rows, but the live config also uses a module-level `_live_config` structure and a persistence helper. Runtime restart/multi-worker consistency needs verification.
+- **Risk:** transient UI state can look like live configuration before the server response; in-memory effective configuration and database entitlement rows may diverge if persistence/rehydration is incomplete.
+- **Required action:** keep save/reset disabled until the authoritative load succeeds; verify startup rehydration and multi-worker consistency; audit every change.
+
+### PA01-F18 — Services Operations mixes live monitoring with an explicit demo-ingestion action
+
+Evidence: `src/pages/platform/PlatformServicesOverviewPage.tsx`.
+
+Finding:
+- The page polls tickets, alerts, dead-letter notifications and alert analytics through API clients and loads tenant choices from `settingsApi.overview()`.
+- It also exposes a clearly labeled "Demo Mode: simulate an alert feed" action that pushes sample events through the ingestion pipeline; the UI disables this action unless `user.role === "platform_admin"`.
+- **Risk:** the monitoring view depends on the under-authorized global settings overview endpoint; the demo ingestion action is a production side effect even though it is explicitly labeled as sample data.
+- **Required action:** protect tenant metadata through platform capability and scope checks; require a dedicated demo-data permission and explicit environment/demo-mode gate for sample event injection; ensure it cannot be mistaken for customer telemetry.
+
+## Further audit of existing route inventory and implementation status
+
+The checked-in `docs/audit/routes.csv` is a useful starting list of registered routes, but its `auth` column is not reliable enough to prove the live dependency because several rows disagree with the actual handler source. The `pages.csv` similarly provides a navigation/data-source index, not proof of behavior. PA-01 acceptance must use the actual route handler and frontend action source as its authority.
+
+## PA-01 status after extended inspection
+
+Completed in this source pass:
+- Major Platform Admin page set reviewed: dashboard, clients, tenant detail, partners, audit, integrations, service operations, settings, themes, pack customizer and onboarding.
+- Primary related routers reviewed: organizations, tenant_manager, partners and its operational/commercial/service/team/key/connector subrouters, integrations, settings, audit, pricing_v2 and agent.
+- Demo/live mixing and several endpoint authorization patterns recorded.
+- Existing CSV inventories compared against source and found to need reconciliation.
+
+Still open before PA-01 acceptance:
+1. Complete handler-level review of every platform-facing route in the registered backend routers, including the security-sensitive partner, billing, user, notification and service actions not fully traced above.
+2. Verify exact frontend API method to endpoint mapping for every Platform Admin button/form, including all tabs and dialogs.
+3. Inspect model/migration definitions for User, sessions, platform settings, permission-related records (if any), audit, organization billing and agent lifecycle.
+4. Inspect relevant existing tests and identify missing test coverage for direct API access by all four target roles.
+5. Run backend tests, frontend tests, lint/typecheck and production build in a real checkout/CI environment; capture exact outcomes.
+6. Finalize a complete permission matrix (capability × HTTP endpoint × resource scope × approval × audit) as the input to PA-02.
+
+**PA-01 remains open.** The green checks on the documentation PR validate the documentation change only; they do not establish that runtime tests or all audit tasks have passed. No product behavior has been changed in this audit branch.
