@@ -164,3 +164,18 @@ async def test_client_admin_cannot_invite_another_client_admin(session_factory):
             "email": "admin2@example.com", "role": "client_admin",
         })
     assert response.status_code == 403
+
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_list_or_resend_invitations(session_factory):
+    await seed(session_factory)
+    async with session_factory() as db:
+        db.add(Invitation(org_id=1, email="pending@example.com", role="technician",
+                          token="test-token", status="pending"))
+        await db.commit()
+    async with client_for(session_factory, 3) as client:
+        listed = await client.get("/api/invitations")
+        resent = await client.post("/api/invitations/1/resend")
+    assert listed.status_code == 403
+    assert resent.status_code == 403
