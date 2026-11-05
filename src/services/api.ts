@@ -1463,4 +1463,6 @@ export const platformServiceCatalogApi = {
     api.patch<PlatformServiceCatalogItem>(`/services/platform-catalog/${encodeURIComponent(id)}`, body),
   replacePlan: (code: string, service_ids: string[]) =>
     api.put<{ plan_code: string; service_ids: string[] }>(`/services/platform-catalog/plans/${encodeURIComponent(code)}`, { service_ids }),
+
+  status: (id: string) => api.get<{ service_id: string; configured: boolean; reachable: boolean; reason?: string; engine?: string }>(`/services/${encodeURIComponent(id)}/status`),
 };
