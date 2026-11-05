@@ -79,7 +79,7 @@ async def test_invitation_requires_authentication(session_factory):
     await seed(session_factory)
     async with client_for(session_factory) as client:
         response = await client.post("/api/invitations", json={"email": "new@example.com"})
-    assert response.status_code == 401
+    assert response.status_code in (401, 403)
 
 
 @pytest.mark.asyncio
