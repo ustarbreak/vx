@@ -65,6 +65,7 @@ PERMISSION_CATALOG = {
     "platform.alerts.evidence.read": "Read raw event evidence and provenance",
     "platform.notifications.read": "Read tenant notification delivery logs and analytics",
     "platform.notifications.manage": "Acknowledge or retry tenant notification deliveries",
+    "platform.notification_rules.read": "Read tenant notification rules",
     "platform.notification_rules.manage": "Create, update and delete tenant notification rules",
 }
 
