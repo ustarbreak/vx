@@ -87,8 +87,6 @@ async def has_permission(user: User, permission: str, db: AsyncSession,
         PlatformPermissionAssignment.user_id == user.id,
         PlatformPermissionAssignment.permission_key == permission,
         PlatformPermissionAssignment.revoked_at.is_(None),
-        or_(PlatformPermissionAssignment.expires_at.is_(None),
-            PlatformPermissionAssignment.expires_at > now),
     ))).scalars().all()
     matching = []
     for row in rows:
