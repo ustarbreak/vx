@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user, get_password_hash
-from app.models import User, Invitation, ChannelConfig
+from app.models import User, Invitation, ChannelConfig, Organization, AuditLog
 from app.services import transports
 
 router = APIRouter(prefix="/invitations", tags=["Activation Emails"])
@@ -44,11 +44,22 @@ class InviteAccept(BaseModel):
 
 
 def _scope_org(user: User, requested_org: int | None) -> int:
+    """Resolve invitation scope without allowing caller-selected tenant changes."""
     if user.role == "platform_admin":
-        return requested_org or (user.org_id or 1)
+        if requested_org is None:
+            raise HTTPException(422, "Platform admins must provide org_id for an invitation")
+        return requested_org
+    if user.role != "client_admin":
+        raise HTTPException(403, "Only client admins can invite users for their organization")
     if not user.org_id:
         raise HTTPException(400, "User has no organization")
+    if requested_org is not None and requested_org != user.org_id:
+        raise HTTPException(403, "Cross-tenant access denied")
     return user.org_id
+
+
+CLIENT_INVITABLE_ROLES = {"technician", "analyst", "client_user"}
+PLATFORM_INVITABLE_ROLES = CLIENT_INVITABLE_ROLES | {"client_admin"}
 
 
 async def _send_activation(db: AsyncSession, inv: Invitation, org_id: int, actor_email: str) -> bool:
@@ -71,18 +82,49 @@ async def _send_activation(db: AsyncSession, inv: Invitation, org_id: int, actor
 async def create_invitation(body: InviteCreate, current_user: User = Depends(get_current_user),
                             db: AsyncSession = Depends(get_db)):
     org = _scope_org(current_user, body.org_id)
-    existing_user = (await db.execute(select(User).where(
-        User.email == body.email.lower()))).scalars().first()
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(422, "A valid email address is required")
+
+    allowed_roles = PLATFORM_INVITABLE_ROLES if current_user.role == "platform_admin" else CLIENT_INVITABLE_ROLES
+    role = body.role.strip().lower()
+    if role not in allowed_roles:
+        raise HTTPException(403, "Role '" + role + "' cannot be assigned through invitations")
+
+    organization = (await db.execute(select(Organization).where(Organization.id == org))).scalars().first()
+    if not organization:
+        raise HTTPException(404, "Organization not found")
+
+    existing_user = (await db.execute(select(User).where(User.email == email))).scalars().first()
     if existing_user:
         raise HTTPException(409, "A user with this email already exists")
-    inv = (await db.execute(select(Invitation).where(
-        Invitation.email == body.email.lower(), Invitation.status.in_(["pending", "sent"])))).scalars().first()
+
+    # Pending invitations are globally unique by email in practice. Never reuse
+    # another tenant's token or resend it using the caller's requested org.
+    pending = (await db.execute(select(Invitation).where(
+        Invitation.email == email, Invitation.status.in_(["pending", "sent"])
+    ))).scalars().first()
+    if pending and pending.org_id != org:
+        raise HTTPException(409, "This email already has a pending invitation for another organization")
+    if pending and pending.role != role:
+        raise HTTPException(409, "This email already has a pending invitation with a different role")
+
+    inv = pending
     if not inv:
-        inv = Invitation(org_id=org, email=body.email.lower(), role=body.role,
+        inv = Invitation(org_id=org, email=email, role=role,
                          token=secrets.token_urlsafe(24))
         db.add(inv)
         await db.flush()
+
     sent = await _send_activation(db, inv, org, current_user.email)
+    db.add(AuditLog(
+        actor_id=current_user.id, actor_name=current_user.email,
+        actor_role=current_user.role, org_id=org,
+        action="invitation.created" if not pending else "invitation.resent",
+        resource="Invitation", resource_id=str(inv.id),
+        details="Invitation for " + email + " with role " + role,
+        outcome="success" if sent else "pending",
+    ))
     await db.commit()
     await db.refresh(inv)
     return {"id": inv.id, "email": inv.email, "status": inv.status,
