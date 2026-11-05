@@ -147,3 +147,43 @@ async def test_owner_cannot_create_second_owner_and_platform_staff_must_be_globa
             "password": "long-enough-password", "role": "platform_expert", "org_id": None
         })
         assert valid.status_code == 201, valid.text
+
+
+@pytest.mark.asyncio
+async def test_global_audit_read_is_granted_to_analyst_but_not_tenant_admin(session_factory):
+    async with client_for(session_factory, 3) as analyst:
+        response=await analyst.get("/api/audit/logs")
+        assert response.status_code == 200, response.text
+    async with client_for(session_factory, 5) as tenant:
+        response=await tenant.get("/api/audit/logs")
+        assert response.status_code == 403
+
+@pytest.mark.asyncio
+async def test_integration_read_and_write_are_separate_capabilities(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        read=await expert.get("/api/integrations/")
+        assert read.status_code == 200, read.text
+        write=await expert.post("/api/integrations/", json={
+            "name": "Denied integration", "service_id": "test",
+            "integration_type": "api", "status": "inactive",
+            "license_type": "open-source", "pricing": "free"
+        })
+        assert write.status_code == 403
+    async with client_for(session_factory, 3) as analyst:
+        read=await analyst.get("/api/integrations/")
+        assert read.status_code == 403
+
+@pytest.mark.asyncio
+async def test_platform_system_settings_are_owner_only_and_persist(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        response=await expert.get("/api/settings/system")
+        assert response.status_code == 403
+    async with client_for(session_factory, 1) as owner:
+        before=await owner.get("/api/settings/system")
+        assert before.status_code == 200
+        saved=await owner.put("/api/settings/system", json={"auto_ticketing": False})
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["auto_ticketing"] is False
+        again=await owner.get("/api/settings/system")
+        assert again.status_code == 200
+        assert again.json()["auto_ticketing"] is False
