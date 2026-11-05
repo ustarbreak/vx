@@ -526,9 +526,11 @@ async def list_rules(org_id: int | None = Query(None),
 @router.post("/notification-rules", response_model=RuleResponse, status_code=201)
 async def create_rule(body: RuleCreate, current_user: User = Depends(get_current_user),
                       db: AsyncSession = Depends(get_db)):
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Notification rule administration requires an administrator role")
     org = await _scope_org(current_user, body.org_id, db, "platform.notification_rules.manage")
-    if current_user.role != "platform_admin":
-        org = current_user.org_id  # clients can only build tenant-scoped rules
+    if current_user.role != "platform_admin" and not is_platform_role(current_user.role):
+        org = current_user.org_id  # tenant administrators can only build tenant-scoped rules
     rule = NotificationRule(
         org_id=org, name=body.name, enabled=body.enabled, conditions=body.conditions,
         channels=body.channels, recipients=body.recipients, create_ticket=body.create_ticket,
@@ -672,7 +674,8 @@ async def retry_dlq(current_user: User = Depends(get_current_user),
 
 
 @router.get("/notifications/analytics")
-async def notif_analytics(current_user: User = Depends(get_current_user),
+async def notif_analytics(org_id: int | None = Query(None),
+                          current_user: User = Depends(get_current_user),
                           db: AsyncSession = Depends(get_db)):
-    eff = await _scope_org(current_user, None, db, "platform.notifications.read")
+    eff = await _scope_org(current_user, org_id, db, "platform.notifications.read")
     return await nv.analytics(db, org_id=eff)
