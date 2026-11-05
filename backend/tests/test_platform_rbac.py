@@ -551,7 +551,10 @@ async def test_owner_subscription_lifecycle_is_persisted_and_audited(session_fac
     trial_end = now + timedelta(days=14)
     period_end = now + timedelta(days=30)
     async with session_factory() as db:
-        db.add_all([\n            PlanEntitlementV2(plan="pro", service_id="analytics", included=True),\n            PlanEntitlementV2(plan="trial", service_id="analytics", included=True),\n        ])
+        db.add_all([
+            PlanEntitlementV2(plan="pro", service_id="analytics", included=True),
+            PlanEntitlementV2(plan="trial", service_id="analytics", included=True),
+        ])
         await db.commit()
 
     async with client_for(session_factory, 1) as owner:
