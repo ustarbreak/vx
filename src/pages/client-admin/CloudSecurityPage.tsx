@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Cloud, AlertTriangle, CheckCircle, Shield, Server } from 'lucide-react';
-import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { fetchServiceLive } from '../../services/serviceData';
 import OpsConsole from '../../components/OpsConsole';
 import type { ActionGroup } from '../../services/securityOps';
+import { isDemoMode } from '../../services/demoMode';
 
 const CLOUD_GROUPS: ActionGroup[] = [
   {
@@ -70,24 +71,43 @@ interface CloudAlert {
 
 export default function CloudSecurityPage() {
   const navigate = useNavigate();
+  const demo = isDemoMode();
   const [alerts, setAlerts] = useState<CloudAlert[]>([]);
   const [loading, setLoading] = useState(true);
+  const [feedState, setFeedState] = useState<'demo' | 'live' | 'unavailable'>('unavailable');
 
   useEffect(() => {
+    let cancelled = false;
     const fetchAlerts = async () => {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      // REAL DATA: same structure, fed by the service's open-source engine
-      const live = await tryLiveFeed('cloud-security');
-      if (live) { setAlerts(live as any); setLoading(false); return; }
-      setAlerts([
-        { id: 'CLOUD-001', provider: 'AWS', service: 'S3', type: 'Public Bucket', severity: 'critical', resource: 'my-company-data', status: 'active', timestamp: '2027-01-15T09:00:00Z', ticketCreated: true },
-        { id: 'CLOUD-002', provider: 'Azure', service: 'VM', type: 'Unpatched OS', severity: 'high', resource: 'web-server-01', status: 'investigating', timestamp: '2027-01-15T08:30:00Z', ticketCreated: false },
-        { id: 'CLOUD-003', provider: 'GCP', service: 'IAM', type: 'Overprivileged Role', severity: 'medium', resource: 'service-account-prod', status: 'resolved', timestamp: '2027-01-15T07:00:00Z', ticketCreated: true },
-      ]);
-      setLoading(false);
+      if (demo) {
+        setAlerts([
+          { id: 'CLOUD-001', provider: 'AWS', service: 'S3', type: 'Public Bucket', severity: 'critical', resource: 'my-company-data', status: 'active', timestamp: '2027-01-15T09:00:00Z', ticketCreated: true },
+          { id: 'CLOUD-002', provider: 'Azure', service: 'VM', type: 'Unpatched OS', severity: 'high', resource: 'web-server-01', status: 'investigating', timestamp: '2027-01-15T08:30:00Z', ticketCreated: false },
+          { id: 'CLOUD-003', provider: 'GCP', service: 'IAM', type: 'Overprivileged Role', severity: 'medium', resource: 'service-account-prod', status: 'resolved', timestamp: '2027-01-15T07:00:00Z', ticketCreated: true },
+        ]);
+        setFeedState('demo');
+      } else {
+        try {
+          const result = await fetchServiceLive<CloudAlert>('cloud-security');
+          if (cancelled) return;
+          if (result.source === 'live' && Array.isArray(result.records)) {
+            setAlerts(result.records);
+            setFeedState('live');
+          } else {
+            setAlerts([]);
+            setFeedState('unavailable');
+          }
+        } catch {
+          if (cancelled) return;
+          setAlerts([]);
+          setFeedState('unavailable');
+        }
+      }
+      if (!cancelled) setLoading(false);
     };
-    fetchAlerts();
-  }, []);
+    void fetchAlerts();
+    return () => { cancelled = true; };
+  }, [demo]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
@@ -98,6 +118,9 @@ export default function CloudSecurityPage() {
       <div>
         <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Cloud Security (CSPM)</h1>
         <p className="text-gray-400 mt-1">Monitor cloud security posture across AWS, Azure, and GCP</p>
+        <p className={`mt-2 text-xs ${feedState === 'live' ? 'text-emerald-400' : feedState === 'demo' ? 'text-fuchsia-300' : 'text-amber-300'}`}>
+          {feedState === 'live' ? 'LIVE DATA · Connected cloud security feed' : feedState === 'demo' ? 'DEMO DATA · Simulated findings; not customer telemetry' : 'UNAVAILABLE · No live cloud security feed is configured or reachable. No sample findings are shown.'}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -124,7 +147,11 @@ export default function CloudSecurityPage() {
         </div>
       </div>
 
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
+      {alerts.length === 0 ? (
+        <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] p-10 text-center text-sm text-gray-400">
+          {feedState === 'unavailable' ? 'Cloud findings are unavailable until a cloud security integration is configured and returns records.' : 'No cloud findings were returned by the connected feed.'}
+        </div>
+      ) : <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="border-b border-[var(--ic-border)] bg-[var(--ic-surface)]">
@@ -162,7 +189,7 @@ export default function CloudSecurityPage() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   );
 }

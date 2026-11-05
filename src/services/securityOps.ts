@@ -111,20 +111,15 @@ export async function runSecurityAction(
       output: typeof res?.output === 'string' ? res.output : JSON.stringify(res?.output ?? {}, null, 2),
     };
   } catch (e: any) {
-    // Backend unreachable: fall back to the LOCAL honest simulation instead of
-    // failing the whole console. Clearly labelled "offline" so nobody mistakes
-    // it for a live dispatch.
-    await new Promise((r) => setTimeout(r, 450));
+    // A live-mode dispatch failure is a failure. Demo simulation is available
+    // only when Demo Mode is explicitly enabled above.
+    const detail = typeof e?.message === 'string' ? e.message.slice(0, 120) : 'No response from API';
     return {
-      ok: true,
+      ok: false,
       actionId: action.id,
-      source: 'demo',
-      message: `Backend unreachable (${e?.message ? e.message.slice(0, 90) : 'no response'} — nothing was sent to any device). Running local simulation so you can rehearse the playbook.`,
-      output: [
-        `[offline-sim] task=${action.id} service=${service}`,
-        'No live channel to the collector / device integrations while the API is down.',
-        buildDemoOutput(service, action, params),
-      ].join('\n'),
+      source: 'live',
+      message: `Live dispatch failed — nothing was sent to any device. ${detail}`,
+      output: '[live-error] No task confirmation was received from the backend.',
     };
   }
 }

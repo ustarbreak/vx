@@ -4,11 +4,12 @@ import {
   Shield, AlertTriangle, CheckCircle, XCircle, 
   Filter, Search, Clock, Server, Activity
 } from 'lucide-react';
-import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { fetchServiceLive } from '../../services/serviceData';
 import { useAuth } from '../../context/AuthContext';
 import { demoEndpointAlerts } from '../../data/demoWorld';
 import OpsConsole from '../../components/OpsConsole';
 import type { ActionGroup } from '../../services/securityOps';
+import { isDemoMode } from '../../services/demoMode';
 
 const EP_GROUPS: ActionGroup[] = [
   {
@@ -79,7 +80,9 @@ interface EndpointAlert {
 export default function EndpointProtectionPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const demo = isDemoMode();
   const [alerts, setAlerts] = useState<EndpointAlert[]>([]);
+  const [feedState, setFeedState] = useState<'demo' | 'live' | 'unavailable'>('unavailable');
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -89,16 +92,24 @@ export default function EndpointProtectionPage() {
       try {
         await new Promise(resolve => setTimeout(resolve, 500));
         
-        // REAL DATA: same structure, fed by the service's open-source engine
-        const live = await tryLiveFeed('endpoint-protection');
-        if (live) { setAlerts(live as any); setLoading(false); return; }
-        // Unified demo world fallback — devices/IPs all exist in demoDevices
-        // and correlate with ALR-0001/0006/0010 and TCK-01001/0002/0008/0010.
-        const n = Number(String(user?.orgId ?? '').replace(/^org-dw-/, ''));
-        const orgId = Number.isFinite(n) && n > 0 ? n : null;
-        setAlerts(orgId != null
-          ? demoEndpointAlerts.filter(a => a.orgId === orgId)
-          : demoEndpointAlerts);
+        if (demo) {
+          // Demo fixtures are only used when Demo Mode is explicitly enabled.
+          const n = Number(String(user?.orgId ?? '').replace(/^org-dw-/, ''));
+          const orgId = Number.isFinite(n) && n > 0 ? n : null;
+          setAlerts(orgId != null
+            ? demoEndpointAlerts.filter(a => a.orgId === orgId)
+            : demoEndpointAlerts);
+          setFeedState('demo');
+        } else {
+          const result = await fetchServiceLive<EndpointAlert>('endpoint-protection');
+          if (result.source === 'live' && Array.isArray(result.records)) {
+            setAlerts(result.records);
+            setFeedState('live');
+          } else {
+            setAlerts([]);
+            setFeedState('unavailable');
+          }
+        }
         setLoading(false);
       } catch (error) {
         console.error('Failed to fetch endpoint alerts:', error);
@@ -107,7 +118,7 @@ export default function EndpointProtectionPage() {
     };
 
     fetchAlerts();
-  }, [user?.orgId]);
+  }, [user?.orgId, demo]);
 
   const filteredAlerts = alerts.filter(alert => {
     const matchesFilter = filter === 'all' || alert.type === filter;
@@ -172,6 +183,9 @@ export default function EndpointProtectionPage() {
         <h1 className="text-3xl font-bold text-[var(--ic-heading)]">Endpoint Protection (EDR/XDR)</h1>
         <p className="text-gray-400 mt-1">
           Monitor and manage endpoint threats, malware, and suspicious activities
+        </p>
+        <p className={`mt-2 text-xs ${feedState === 'live' ? 'text-emerald-400' : feedState === 'demo' ? 'text-fuchsia-300' : 'text-amber-300'}`}>
+          {feedState === 'live' ? 'LIVE DATA · Connected endpoint protection feed' : feedState === 'demo' ? 'DEMO DATA · Simulated alerts; not customer telemetry' : 'UNAVAILABLE · No live endpoint feed is configured or reachable. No sample alerts are shown.'}
         </p>
       </div>
 
@@ -240,7 +254,11 @@ export default function EndpointProtectionPage() {
       <OpsConsole service="endpoint-protection" title="EDR / XDR Response Console" groups={EP_GROUPS} />
 
       {/* Alerts List */}
-      <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
+      {filteredAlerts.length === 0 ? (
+        <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] p-10 text-center text-sm text-gray-400">
+          {feedState === 'unavailable' ? 'Endpoint alerts are unavailable until an endpoint protection integration is configured and returns records.' : 'No endpoint alerts match the current filters.'}
+        </div>
+      ) : <div className="bg-[var(--ic-surface)] rounded-xl border border-[var(--ic-border)] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -341,7 +359,7 @@ export default function EndpointProtectionPage() {
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
