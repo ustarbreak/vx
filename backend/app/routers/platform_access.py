@@ -115,6 +115,7 @@ async def create_assignment(
         granted_by=owner.id, expires_at=body.expires_at,
     )
     db.add(row)
+    target.auth_version = int(target.auth_version or 0) + 1
     await db.flush()
     db.add(AuditLog(
         actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
@@ -140,6 +141,9 @@ async def revoke_assignment(
     if not row or row.revoked_at is not None:
         raise HTTPException(404, "Active permission assignment not found")
     row.revoked_at = datetime.now(timezone.utc)
+    target = await db.get(User, row.user_id)
+    if target:
+        target.auth_version = int(target.auth_version or 0) + 1
     db.add(AuditLog(
         actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
         org_id=row.scope_id if row.scope_type == "tenant" else None,
