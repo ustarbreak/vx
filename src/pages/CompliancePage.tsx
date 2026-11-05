@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, CircleHelp, RefreshCw, Save, ShieldCheck, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, HelpCircle, RefreshCw, Save, ShieldCheck, XCircle } from 'lucide-react';
 import ServiceGate from '../components/ServiceGate';
 import { api, ApiError } from '../services/api';
 import { isDemoMode } from '../services/demoMode';
