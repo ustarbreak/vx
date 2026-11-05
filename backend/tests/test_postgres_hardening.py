@@ -21,7 +21,7 @@ Covers the previously SQLite-only evidence gaps:
       semantics on Postgres)
 
 STAGE 6A additions (outcome labeling):
-  M1 now asserts a single reachable head == f8a0c2e4g6i8 across the full migration DAG;
+  M1 now asserts a single reachable head == f9a1b3d5e7g9 across the full migration DAG;
   M3 executes the Stage 6A revision's real op.* code paths on Postgres and
      verifies its downgrade() removes ONLY outcome_labels.
 """
@@ -152,7 +152,7 @@ def test_m1_migration_graph_has_one_reachable_head():
 
     all_parents = {parent for revision in mods for parent in parents(revision)}
     heads = sorted(revision for revision in mods if revision not in all_parents)
-    assert heads == ["f8a0c2e4g6i8"], f"expected one migration head, got {heads}"
+    assert heads == ["f9a1b3d5e7g9"], f"expected one migration head, got {heads}"
 
     reachable = set()
     def visit(revision):
@@ -486,6 +486,37 @@ async def test_m5_platform_subscription_migration_upgrade_and_downgrade_postgres
             tables_after = {r[0] for r in sync_conn.execute(sa.text(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
             assert "platform_subscriptions" not in tables_after
+
+        await conn.run_sync(exercise)
+        await tx.rollback()
+
+
+async def test_m6_integration_username_migration_upgrade_and_downgrade_postgres(engine):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import importlib.util
+
+    async with engine.connect() as conn:
+        tx = await conn.begin()
+
+        def exercise(sync_conn):
+            sync_conn.execute(sa.text("CREATE TABLE integrations (id SERIAL PRIMARY KEY)"))
+            mc = MigrationContext.configure(connection=sync_conn, opts={"target_metadata": None})
+            spec = importlib.util.spec_from_file_location(
+                "rev_f9a1", os.path.join(os.path.dirname(__file__), "..",
+                "migrations", "versions", "f9a1b3d5e7g9_integration_account_username.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            with Operations.context(mc):
+                mod.upgrade()
+            cols = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='integrations'"))}
+            assert "api_username" in cols
+            with Operations.context(mc):
+                mod.downgrade()
+            cols_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='integrations'"))}
+            assert "api_username" not in cols_after
 
         await conn.run_sync(exercise)
         await tx.rollback()
