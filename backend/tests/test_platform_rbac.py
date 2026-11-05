@@ -206,3 +206,30 @@ async def test_owner_can_change_platform_staff_role_and_revoke_session(session_f
         headers={"Authorization": f"Bearer {old_token}"}) as old_expert:
         response=await old_expert.get("/api/platform/access/me")
         assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_scoped_tenant_read_defaults_and_owner_granted_write_scope(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        read=await expert.get("/api/admin/tenants/1/summary")
+        assert read.status_code == 200, read.text
+    async with client_for(session_factory, 5) as tenant_admin:
+        read=await tenant_admin.get("/api/admin/tenants/1/summary")
+        assert read.status_code == 403
+    async with client_for(session_factory, 1) as owner:
+        grant=await owner.post("/api/platform/access/assignments", json={
+            "user_id": 4, "permission_key": "platform.tenants.manage",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert grant.status_code == 201, grant.text
+    token=create_access_token({"sub": "4", "ver": 1})
+    async def override_db():
+        async with session_factory() as db:
+            yield db
+    app.dependency_overrides[get_db]=override_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"}) as staff:
+        allowed=await staff.post("/api/admin/tenants/1/tickets", json={"title": "Scoped permission test"})
+        assert allowed.status_code == 201, allowed.text
+        denied=await staff.post("/api/admin/tenants/2/tickets", json={"title": "Must be denied"})
+        assert denied.status_code == 403
