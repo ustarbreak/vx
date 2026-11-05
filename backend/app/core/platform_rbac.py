@@ -22,7 +22,7 @@ ROLE_DEFAULTS = {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.integrations.read",
         "platform.infrastructure.read", "platform.services.read",
-    "platform.analytics.read": "Read tenant-scoped security analytics",
+        "platform.analytics.read",
     },
     "platform_analyst": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
@@ -33,6 +33,7 @@ ROLE_DEFAULTS = {
 }
 
 PERMISSION_CATALOG = {
+    "platform.analytics.read": "Read tenant-scoped security analytics",
     "platform.dashboard.read": "View platform dashboard and aggregate metrics",
     "platform.tenants.read": "View global tenant directory and tenant details",
     "platform.tenants.manage": "Create, update, suspend and delete tenants",
