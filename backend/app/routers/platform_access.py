@@ -120,8 +120,11 @@ async def create_assignment(
         raise HTTPException(403, "Owner does not need permission overrides")
     if body.scope_type == "tenant":
         from app.models import Organization
-        if not await db.get(Organization, body.scope_id):
+        tenant = await db.get(Organization, body.scope_id)
+        if not tenant:
             raise HTTPException(404, "Tenant scope not found")
+        if tenant.is_partner:
+            raise HTTPException(422, "Partner organizations must use partner scope")
     if body.scope_type == "partner":
         from app.models import Organization
         partner = await db.get(Organization, body.scope_id)
