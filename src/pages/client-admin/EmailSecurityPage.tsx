@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { 
   Mail, Shield, AlertTriangle, CheckCircle, XCircle, 
   Filter, Search, Clock, User, Server
@@ -8,6 +8,8 @@ import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import { useAuth } from '../../context/AuthContext';
 import { demoEmailAlerts } from '../../data/demoWorld';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
+import { isDemoMode } from '../../services/demoMode';
 import type { ActionGroup } from '../../services/securityOps';
 
 const EMAIL_GROUPS: ActionGroup[] = [
@@ -94,6 +96,7 @@ const numericOrgId = (raw?: string | number | null): number | null => {
 
 export default function EmailSecurityPage() {
   const navigate = useNavigate();
+  const { alertId } = useParams<{ alertId: string }>();
   const { user } = useAuth();
   const [alerts, setAlerts] = useState<EmailAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,6 +184,27 @@ export default function EmailSecurityPage() {
       </div>
     );
   }
+
+
+  const selectedAlert = alertId ? alerts.find((alert) => alert.id === alertId) : undefined;
+  if (alertId) return (
+    <SecurityRecordDetail
+      backPath="/client-admin/email-security" service="email-security" serviceTitle="Email Security"
+      recordId={alertId} recordType="Email threat" subtitle={selectedAlert ? selectedAlert.subject : "Email alert"}
+      severity={selectedAlert?.severity} status={selectedAlert?.status}
+      sourceLabel={isDemoMode() ? "Demo fixtures" : "Tenant email-security feed"}
+      fields={selectedAlert ? [
+        { label: "Sender", value: selectedAlert.sender }, { label: "Recipient", value: selectedAlert.recipient },
+        { label: "Subject", value: selectedAlert.subject }, { label: "Threat type", value: selectedAlert.type },
+        { label: "Device", value: selectedAlert.device }, { label: "Detected", value: new Date(selectedAlert.timestamp).toLocaleString() },
+        { label: "Ticket linked", value: selectedAlert.ticketCreated ? "Yes" : "No" },
+      ] : []}
+      groups={EMAIL_GROUPS}
+      contextParams={selectedAlert ? { message_id: selectedAlert.id, reason: "Investigation of " + selectedAlert.type + " email from " + selectedAlert.sender + " to " + selectedAlert.recipient, device: selectedAlert.device || "" } : {}}
+      recommendations={["Preserve the original message and full headers before remediation.","Validate SPF, DKIM and DMARC results and inspect sender/domain age.","Search tenant mailboxes for the same message, URLs and attachment hashes.","Identify recipients who opened, forwarded, replied to or clicked the message.","Obtain approval before purging messages or revoking user access."]}
+      notFound={!selectedAlert}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
