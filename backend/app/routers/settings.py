@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user, get_password_hash
+from app.core.platform_rbac import require_permission
 from app.models import User, Organization, NotificationRule, PlatformSetting, AuditLog
 from app.schemas import OrganizationResponse, OrganizationUpdate
 from app.services.seed import seed_demo_tenant
@@ -56,11 +57,32 @@ class SystemSettingsPatch(BaseModel):
 
 
 @router.get("/system")
-async def get_system_settings(current_user: User = Depends(require_permission("platform.settings.read")),\n                             db: AsyncSession = Depends(get_db)):\n    row = await db.get(PlatformSetting, "system")\n    return {**_DEFAULT_SETTINGS, **(row.value_json if row else {})}
+async def get_system_settings(current_user: User = Depends(require_permission("platform.settings.read")),
+                             db: AsyncSession = Depends(get_db)):
+    row = await db.get(PlatformSetting, "system")
+    return {**_DEFAULT_SETTINGS, **(row.value_json if row else {})}
 
 
 @router.put("/system")
-async def update_system_settings(patch: SystemSettingsPatch,\n                                 current_user: User = Depends(require_permission("platform.settings.manage")),\n                                 db: AsyncSession = Depends(get_db)):\n    row = await db.get(PlatformSetting, "system")\n    if row is None:\n        row = PlatformSetting(key="system", value_json=dict(_DEFAULT_SETTINGS), updated_by=current_user.id)\n        db.add(row)\n    updated = {**_DEFAULT_SETTINGS, **(row.value_json or {}), **patch.model_dump(exclude_none=True)}\n    row.value_json = updated\n    row.updated_by = current_user.id\n    db.add(AuditLog(\n        actor_id=current_user.id, actor_name=current_user.email, actor_role=current_user.role,\n        org_id=None, action="platform.settings.updated", resource="PlatformSetting",\n        resource_id="system", details="Updated keys: " + ", ".join(sorted(patch.model_dump(exclude_none=True))),\n        outcome="success",\n    ))\n    await db.commit()\n    await db.refresh(row)\n    return updated
+async def update_system_settings(patch: SystemSettingsPatch,
+                                 current_user: User = Depends(require_permission("platform.settings.manage")),
+                                 db: AsyncSession = Depends(get_db)):
+    row = await db.get(PlatformSetting, "system")
+    if row is None:
+        row = PlatformSetting(key="system", value_json=dict(_DEFAULT_SETTINGS), updated_by=current_user.id)
+        db.add(row)
+    updated = {**_DEFAULT_SETTINGS, **(row.value_json or {}), **patch.model_dump(exclude_none=True)}
+    row.value_json = updated
+    row.updated_by = current_user.id
+    db.add(AuditLog(
+        actor_id=current_user.id, actor_name=current_user.email, actor_role=current_user.role,
+        org_id=None, action="platform.settings.updated", resource="PlatformSetting",
+        resource_id="system", details="Updated keys: " + ", ".join(sorted(patch.model_dump(exclude_none=True))),
+        outcome="success",
+    ))
+    await db.commit()
+    await db.refresh(row)
+    return updated
 
 
 @router.get("/overview")
