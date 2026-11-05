@@ -137,7 +137,10 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin"))
 ):
-    """Create a new user (platform admin only)"""
+    """Create a tenant/partner account or non-Owner platform staff account."""
+    if user_data.role not in CREATABLE_USER_ROLES:
+        raise HTTPException(status_code=403, detail="This role cannot be created through the generic user endpoint")
+
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
@@ -146,15 +149,25 @@ async def create_user(
             detail="Email already registered"
         )
     
-    # If org_id provided, check if organization exists
+    # Validate platform-vs-tenant identity boundaries before persisting.
+    organization = None
     if user_data.org_id:
         result = await db.execute(select(Organization).where(Organization.id == user_data.org_id))
-        if not result.scalar_one_or_none():
+        organization = result.scalar_one_or_none()
+        if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Organization not found"
             )
-    
+
+    if user_data.role in PLATFORM_STAFF_ROLES:
+        if user_data.org_id is not None:
+            raise HTTPException(status_code=422, detail="Platform staff accounts must not belong to a tenant")
+    elif user_data.role != "sales" and user_data.org_id is None:
+        raise HTTPException(status_code=422, detail="Tenant and partner accounts require an organization")
+    if user_data.role == "partner_admin" and not getattr(organization, "is_partner", False):
+        raise HTTPException(status_code=422, detail="partner_admin accounts require a partner organization")
+
     # Create user
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
@@ -166,9 +179,7 @@ async def create_user(
     )
     
     db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-    
+
     # Log audit
     audit_log = AuditLog(
         actor_id=current_user.id,
@@ -184,7 +195,8 @@ async def create_user(
     )
     db.add(audit_log)
     await db.commit()
-    
+    await db.refresh(new_user)
+
     return new_user
 
 
