@@ -61,6 +61,7 @@ class User(Base):
     role = Column(String, nullable=False)  # platform_admin, client_admin, client_user
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     status = Column(String, default="active")
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
     mfa_enabled = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
