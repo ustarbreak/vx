@@ -5,6 +5,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
+from datetime import datetime, timedelta
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -414,3 +415,32 @@ async def test_infrastructure_credentials_require_scoped_permission_and_mask_sec
         assert credential["community"] is None
         assert credential["auth_passphrase"] == "********"
         assert credential["priv_passphrase"] == "********"
+
+
+@pytest.mark.asyncio
+async def test_permission_expiry_handles_naive_and_aware_datetimes(session_factory):
+    from app.models import PlatformPermissionAssignment
+
+    async with session_factory() as db:
+        analyst = await db.get(User, 3)
+        db.add(PlatformPermissionAssignment(
+            user_id=3, permission_key="platform.billing.read", effect="allow",
+            scope_type="global", granted_by=1,
+            expires_at=datetime.utcnow() - timedelta(minutes=1),
+        ))
+        await db.commit()
+        assert await has_permission(analyst, "platform.billing.read", db) is False
+
+    async with client_for(session_factory, 1) as owner:
+        past = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.billing.read",
+            "effect": "allow", "scope_type": "global",
+            "expires_at": (datetime.now() - timedelta(minutes=1)).isoformat()
+        })
+        future = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.billing.read",
+            "effect": "allow", "scope_type": "global",
+            "expires_at": (datetime.now() + timedelta(hours=1)).isoformat()
+        })
+        assert past.status_code == 422
+        assert future.status_code == 201, future.text
