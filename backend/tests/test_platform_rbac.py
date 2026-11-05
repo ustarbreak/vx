@@ -581,6 +581,8 @@ async def test_owner_subscription_lifecycle_is_persisted_and_audited(session_fac
         assert cancelled.json()["status"] == "cancelled"
         assert cancelled.json()["is_current"] is False
 
+    from sqlalchemy import select
+    from app.models import AuditLog
     async with session_factory() as db:
         org = await db.get(Organization, 1)
         assert org.plan_tier == "STARTER"
