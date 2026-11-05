@@ -276,8 +276,11 @@ export default function PlatformClientsPage() {
           notes: row.notes ?? undefined,
         }))] as const;
       }));
-      const values = settled.filter((item): item is PromiseFulfilledResult<readonly [string, ManagedEntitlement[]]> => item.status === 'fulfilled');
-      setEntitlements(previous => ({ ...previous, ...Object.fromEntries(values.map(item => item.value)) }));
+      const values: [string, ManagedEntitlement[]][] = [];
+      for (const item of settled) {
+        if (item.status === 'fulfilled') values.push([item.value[0], item.value[1]]);
+      }
+      setEntitlements(previous => ({ ...previous, ...Object.fromEntries(values) }));
       setLoadError(settled.some(item => item.status === 'rejected') ? 'La liste des tenants est chargée, mais certains entitlements sont indisponibles.' : '');
     } catch (error) {
       setBackendOrgs([]);
