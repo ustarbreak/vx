@@ -251,3 +251,48 @@ async def test_public_registration_cannot_create_privileged_platform_roles(sessi
                 "org_id": 1,
             })
             assert response.status_code == 403, (role, response.text)
+
+
+@pytest.mark.asyncio
+async def test_channel_permissions_are_tenant_scoped_and_writes_are_audited(session_factory):
+    from app.models import AuditLog
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        own = await tenant_admin.get("/api/channels/configs?org_id=1")
+        cross = await tenant_admin.get("/api/channels/configs?org_id=2")
+        assert own.status_code == 200, own.text
+        assert cross.status_code == 403
+
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.get("/api/channels/configs?org_id=1")
+        assert denied.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.channels.manage",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert grant.status_code == 201, grant.text
+
+    async with client_for(session_factory, 2) as expert:
+        allowed = await expert.put("/api/channels/configs", json={
+            "channel": "webhook", "enabled": True,
+            "config": {"url": "https://hooks.example.test/tenant-one"},
+            "org_id": 1
+        })
+        assert allowed.status_code == 200, allowed.text
+        cross_write = await expert.put("/api/channels/configs", json={
+            "channel": "webhook", "enabled": True,
+            "config": {"url": "https://hooks.example.test/tenant-two"},
+            "org_id": 2
+        })
+        assert cross_write.status_code == 403
+
+    async with session_factory() as db:
+        audit = (await db.execute(
+            __import__("sqlalchemy").select(AuditLog).where(
+                AuditLog.action == "notification_channel.config_updated"
+            )
+        )).scalars().first()
+        assert audit is not None
+        assert audit.org_id == 1
