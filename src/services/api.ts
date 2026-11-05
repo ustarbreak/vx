@@ -1383,7 +1383,7 @@ export interface PlatformDashboardOverview {
   commercial: {
     enabled_entitlements: number;
     enabled_services_in_use: number;
-    subscriptions: { available: boolean; reason: string };
+    subscriptions: { available: boolean; current?: number; active?: number; trialing?: number; reason: string | null };
   };
   integrations: { total: number; active: number };
   infrastructure: { collector_probes: number; collector_probes_online: number; discovered_devices: number };
