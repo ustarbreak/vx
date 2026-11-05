@@ -142,10 +142,19 @@ async def test_integration(
     
     # Never attempt a provider call with missing credentials. Secret values are
     # write-only and are deliberately absent from IntegrationResponse.
-    if integration.name in {"Wazuh", "MISP", "Elastic Security"} and not integration.api_key:
-        return IntegrationTestResult(success=False, message="Credential is not configured; add the API key before testing.")
-    if integration.name == "Wazuh" and not integration.api_username:
-        return IntegrationTestResult(success=False, message="Wazuh account username is not configured.")
+    missing_credential = (
+        integration.name in {"Wazuh", "MISP", "Elastic Security"} and not integration.api_key
+    ) or (integration.name == "Wazuh" and not integration.api_username)
+    if missing_credential:
+        integration.status = "inactive"
+        db.add(AuditLog(
+            actor_id=current_user.id, actor_name=current_user.name, actor_role=current_user.role,
+            action="integration.test_failed", resource="Integration", resource_id=str(integration.id),
+            details="Connection test blocked: required credentials are not configured.",
+            ip_address=request.client.host if request.client else None, outcome="failure",
+        ))
+        await db.commit()
+        return IntegrationTestResult(success=False, message="Required credentials are not configured; add them before testing.")
 
     # Test connection based on integration name
     try:
