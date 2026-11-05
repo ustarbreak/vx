@@ -1419,3 +1419,27 @@ export const platformSubscriptionsApi = {
   }) => api.post<PlatformSubscriptionDto>('/platform/subscriptions', data),
   cancel: (id: number) => api.post<PlatformSubscriptionDto>(`/platform/subscriptions/${id}/cancel`),
 };
+
+
+// ---------------------------------------------------------------------------
+// Platform integrations — credentials are write-only and never returned.
+// ---------------------------------------------------------------------------
+export interface PlatformIntegrationDto {
+  id: number; name: string; service_id: string; integration_type: string;
+  license_type: string; pricing: string; status: string; api_username: string | null;
+  api_endpoint: string | null; documentation_url: string | null; last_sync: string | null;
+  notes: string | null; created_at: string; updated_at: string | null;
+}
+export interface PlatformIntegrationInput {
+  name: string; service_id: string; integration_type: 'api' | 'webhook' | 'agent' | 'native';
+  license_type: 'open-source' | 'commercial' | 'freemium'; pricing: 'free' | 'paid' | 'custom';
+  status?: 'active' | 'inactive' | 'pending'; api_key?: string; api_username?: string;
+  api_endpoint?: string; documentation_url?: string; notes?: string;
+}
+export const platformIntegrationsApi = {
+  list: () => api.get<PlatformIntegrationDto[]>('/integrations/'),
+  create: (body: PlatformIntegrationInput) => api.post<PlatformIntegrationDto>('/integrations/', body),
+  update: (id: number, body: Partial<PlatformIntegrationInput>) => api.patch<PlatformIntegrationDto>(`/integrations/${id}`, body),
+  test: (id: number) => api.post<{ success: boolean; message: string; details?: Record<string, unknown> }>(`/integrations/${id}/test`),
+  remove: (id: number) => api.del<void>(`/integrations/${id}`),
+};
