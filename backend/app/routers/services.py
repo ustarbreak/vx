@@ -11,7 +11,7 @@ so whatever they return is genuine data from the configured OSS tools.
 import logging
 from typing import List
 from fastapi import Body
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from app.core.platform_rbac import require_permission
 from app.models import PlatformSetting, PlanEntitlementV2, ServiceLifecycleState, Integration, AuditLog
 
@@ -204,11 +204,9 @@ async def replace_plan_services(
     unknown = set(service_ids) - set(connectors.SERVICE_CONNECTORS)
     if unknown:
         raise HTTPException(422, "Unknown service IDs: " + ", ".join(sorted(unknown)))
-    existing = (await db.execute(
-        select(PlanEntitlementV2).where(PlanEntitlementV2.plan == plan_code)
-    )).scalars().all()
-    for row in existing:
-        await db.delete(row)
+    await db.execute(
+        delete(PlanEntitlementV2).where(PlanEntitlementV2.plan == plan_code)
+    )
     for service_id in service_ids:
         db.add(PlanEntitlementV2(plan=plan_code, service_id=service_id, included=True))
     db.add(AuditLog(
