@@ -142,9 +142,9 @@ async def create_user(
     user_data: UserCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.users.manage"))
+    current_user: User = Depends(require_role("platform_admin"))
 ):
-    """Create a tenant/partner account or non-Owner platform staff account."""
+    """Create a tenant/partner account; platform staff provisioning uses the Owner access API."""
     if user_data.role not in CREATABLE_USER_ROLES:
         raise HTTPException(status_code=403, detail="This role cannot be created through the generic user endpoint")
 
@@ -213,9 +213,9 @@ async def delete_user(
     user_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.users.manage"))
+    current_user: User = Depends(require_role("platform_admin"))
 ):
-    """Delete user (platform admin only)"""
+    """Delete a user (Owner only)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     
