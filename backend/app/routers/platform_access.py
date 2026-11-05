@@ -43,7 +43,10 @@ async def effective_access(
     ))).scalars().all()
     now = datetime.now(timezone.utc)
     for row in rows:
-        if row.expires_at and row.expires_at <= now:
+        expires_at = row.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at is not None and expires_at <= now:
             continue
         if row.effect == "allow" and row.scope_type == "global":
             keys.add(row.permission_key)
@@ -184,6 +187,8 @@ async def update_platform_staff_role(
         raise HTTPException(404, "Platform Expert, Analyst or User account not found")
     if target.id == owner.id:
         raise HTTPException(403, "Owner role cannot be changed")
+    if target.org_id is not None:
+        raise HTTPException(409, "Platform staff account has an invalid tenant assignment")
     before = target.role
     target.role = body.role
     target.auth_version = int(target.auth_version or 0) + 1
