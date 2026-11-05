@@ -426,7 +426,8 @@ async def bulk_alert_action(body: BulkAlertActionIn,
                 assignee=(body.assignee if body.action == "assign" else ...))
             results.append({"id": aid, "ok": True, "changed": changed})
         except HTTPException as e:
-            results.append({"id": aid, "ok": False, "reason": str(e.detail)})
+            reason = "not_found_or_cross_tenant" if e.status_code == 403 else str(e.detail)
+            results.append({"id": aid, "ok": False, "reason": reason})
     return {"results": results,
             "applied": sum(1 for r in results if r.get("ok") and r.get("changed"))}
 
