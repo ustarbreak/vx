@@ -101,7 +101,7 @@ async def update_partner(
 async def suspend_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.partners.manage")),
+    current_user: User = Depends(get_current_user),
 ):
     org = await _get_partner(pid, db)
     await _require_partner_manage(current_user, org, db)
@@ -116,7 +116,7 @@ async def suspend_partner(
 async def migrate_partner(
     pid: str, body: PartnerMigrateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.partners.manage")),
+    current_user: User = Depends(get_current_user),
 ):
     """Repurposed (Phase 1): force a pricing_config partner tier instead of the
     old EUR Starter/Business/Scale plans. The override pins the license tier in
@@ -140,7 +140,7 @@ async def migrate_partner(
 async def delete_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.partners.manage")),
+    current_user: User = Depends(get_current_user),
 ):
     org = await _get_partner(pid, db)
     await _require_partner_manage(current_user, org, db)
