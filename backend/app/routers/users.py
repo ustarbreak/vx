@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import UserCreate, UserResponse
 from app.core.security import get_password_hash, get_current_user, require_role
+from app.core.platform_rbac import require_permission
 from app.core.platform_rbac import has_permission, is_platform_role
 
 router = APIRouter(prefix="/users", tags=["Users"])
@@ -141,7 +142,7 @@ async def create_user(
     user_data: UserCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.users.manage"))
 ):
     """Create a tenant/partner account or non-Owner platform staff account."""
     if user_data.role not in CREATABLE_USER_ROLES:
