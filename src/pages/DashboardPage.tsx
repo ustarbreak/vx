@@ -100,7 +100,13 @@ export default function DashboardPage() {
   const load = useCallback(async () => {
     setLoading(true);
     if (demo) {
-      const alerts = mockAlerts as unknown as AlertRow[];
+      const alerts = mockAlerts.map((alert, index) => ({
+        id: index + 1, uid: String(alert.id), org_id: 0, title: alert.title,
+        severity: alert.severity, source: alert.source,
+        status: alert.status === 'open' ? 'active' : alert.status === 'acknowledged' ? 'acked' : 'resolved',
+        created_at: alert.timestamp, correlated_count: 0, storm_suppressed: false,
+        version: 1,
+      })) as AlertRow[];
       setData({
         alerts,
         openAlerts: mockAlerts.filter(a => a.status === 'open').length,
@@ -195,7 +201,7 @@ export default function DashboardPage() {
           <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
             <KpiTile icon={<AlertTriangle className="w-5 h-5" />} tone="text-red-400" value={loading ? '…' : value(data.openAlerts)} />
           </DashboardWidget>
-          <DashboardWidget id="kpi-threats" title="Active Threat Indicators" spanOptions={[1, 2]}>
+          <DashboardWidget id="kpi-threats" title={demo ? "Threat Feed Events" : "Active Threat Indicators"} spanOptions={[1, 2]}>
             <KpiTile icon={<Target className="w-5 h-5" />} tone="text-orange-400" value={loading ? '…' : value(data.activeThreats)} />
           </DashboardWidget>
           <DashboardWidget id="kpi-compliance" title="Assessed Controls" spanOptions={[1, 2]}>
