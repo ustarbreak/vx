@@ -111,9 +111,9 @@ export default function PlatformDashboardPage() {
             </div>
           </article>
           <article className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-5">
-            <h2 className="font-semibold text-[var(--ic-heading)]">Données commerciales non disponibles</h2>
-            <p className="mt-2 text-sm text-[var(--ic-muted)]">{data.commercial.subscriptions.reason}</p>
-            <p className="mt-2 text-xs text-amber-300">Aucun MRR, ARR ou nombre d’abonnements n’est estimé à partir des tarifs ou des entitlements.</p>
+            <h2 className="font-semibold text-[var(--ic-heading)]">Abonnements et facturation</h2>
+            <p className="mt-2 text-sm text-[var(--ic-muted)]">{data.commercial.subscriptions.available ? (data.commercial.subscriptions.current ?? 0) + ' abonnement(s) courant(s), dont ' + (data.commercial.subscriptions.active ?? 0) + ' actif(s) et ' + (data.commercial.subscriptions.trialing ?? 0) ' en essai.' : (data.commercial.subscriptions.reason ?? 'Données d’abonnement indisponibles.')}</p>
+            <p className="mt-2 text-xs text-amber-300">Les contrats sont enregistrés dans la base. Aucun prestataire de paiement n’est connecté et aucun MRR/ARR encaissé n’est calculé ici.</p>
           </article>
         </section>
       </>}
