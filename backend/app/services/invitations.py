@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.core.security import get_current_user, get_password_hash
+from app.core.security import get_current_user, get_password_hash, require_role
 from app.models import User, Invitation, ChannelConfig, Organization, AuditLog
 from app.services import transports
 
@@ -135,7 +135,7 @@ async def create_invitation(body: InviteCreate, current_user: User = Depends(get
 
 @router.get("")
 async def list_invitations(org_id: int | None = None,
-                           current_user: User = Depends(get_current_user),
+                           current_user: User = Depends(require_role("client_admin")),
                            db: AsyncSession = Depends(get_db)):
     stmt = select(Invitation).order_by(Invitation.created_at.desc())
     if current_user.role != "platform_admin":
@@ -149,7 +149,7 @@ async def list_invitations(org_id: int | None = None,
 
 
 @router.post("/{inv_id}/resend")
-async def resend(inv_id: int, current_user: User = Depends(get_current_user),
+async def resend(inv_id: int, current_user: User = Depends(require_role("client_admin")),
                  db: AsyncSession = Depends(get_db)):
     inv = (await db.execute(select(Invitation).where(Invitation.id == inv_id))).scalars().first()
     if not inv:
