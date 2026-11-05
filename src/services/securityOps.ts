@@ -7,9 +7,9 @@
 //  - Demo Mode ON  -> simulated execution against the in-memory demo world
 //                     (no network), so analysts can rehearse playbooks safely.
 //  - Real backend  -> POST /api/security-ops/actions; the FastAPI router
-//                     validates the command catalog, queues the task toward
-//                     the tenant's enrolled goinfra agents / configured
-//                     device integrations and records it in the audit trail.
+//                     validates the command catalog and records a manual task
+//                     in the audit trail. There is no agent pickup/ack endpoint
+//                     yet, so live mode does not claim device execution.
 import { api } from './api';
 import { isDemoMode } from './demoMode';
 
