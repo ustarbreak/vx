@@ -79,6 +79,13 @@ async def update_partner(
             org.name = v
         elif k == "contact_email":
             org.contact_email = v
+        elif k == "contact_name":
+            contact_user = (await db.execute(
+                select(User).where(User.org_id == org.id, User.role == "partner_admin").order_by(User.id).limit(1)
+            )).scalars().first()
+            if contact_user is None:
+                raise HTTPException(422, "Aucun compte partner_admin n’est associé à ce partenaire")
+            contact_user.name = v
         elif k == "tier":
             org.partner_tier_override = v
         elif k == "status":
