@@ -658,6 +658,24 @@ class ProjectRunbook(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class ComplianceAssessment(Base):
+    """Evidence-backed assessment state for a tenant/framework/control pair."""
+    __tablename__ = "compliance_assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    framework = Column(String(80), nullable=False)
+    control_id = Column(String(40), nullable=False)
+    status = Column(String(24), nullable=False, default="not_assessed")
+    evidence = Column(Text, nullable=True)
+    assessed_by = Column(String(255), nullable=True)
+    assessed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "framework", "control_id", name="uq_compliance_assessment_tenant_control"),
+    )
+
+
 class ProjectAttachment(Base):
     """Documents that describe a project further: scope PDFs, diagrams,
     config files, images, text notes… Same storage model as ticket evidence
