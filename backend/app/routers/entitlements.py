@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models import Entitlement, Organization, User, AuditLog, TenantServiceGrant
 from app.schemas import EntitlementCreate, EntitlementUpdate, EntitlementResponse
 from app.core.security import get_current_user
-from app.core.platform_rbac import has_permission, is_platform_role
+from app.core.platform_rbac import has_permission, is_platform_role, require_permission
 
 router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
 
