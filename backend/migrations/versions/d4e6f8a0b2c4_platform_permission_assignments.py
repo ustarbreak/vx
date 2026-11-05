@@ -35,6 +35,7 @@ def upgrade() -> None:
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("effect IN ('allow','deny')", name="ck_platform_perm_effect"),
         sa.CheckConstraint("scope_type IN ('global','tenant','partner')", name="ck_platform_perm_scope"),
+        sa.CheckConstraint("(scope_type = 'global' AND scope_id IS NULL) OR (scope_type IN ('tenant','partner') AND scope_id IS NOT NULL)", name="ck_platform_perm_scope_id"),
     )
     op.create_index("ix_platform_permission_assignments_user_id", "platform_permission_assignments", ["user_id"])
     op.create_index("ix_platform_perm_user_key", "platform_permission_assignments", ["user_id", "permission_key"])
