@@ -1,17 +1,10 @@
-// Wire a client-admin service page to its REAL open-source engine while keeping
-// the exact same record structure the page was built around.
+// Shared live-feed boundary for Client Admin service pages.
 //
-// Usage inside an existing useEffect (one line per page):
-//   const live = await tryLiveFeed<Vulnerability>('vuln-scanning');
-//   if (live) { setVulnerabilities(live); setLoading(false); return; }
-//   ...existing mock assignment stays untouched below...
-//
-// Behaviour:
-//  - Demo Mode ON  -> returns null instantly, ZERO network calls (mock renders).
-//  - Real backend  -> GET /api/services/{id}/live; the FastAPI connector pulls
-//    genuine records from the service's OSS engine and normalizers.py maps them
-//    onto this platform shape. Returns null when unconfigured/unreachable so the
-//    page honestly falls back to the reference dataset.
+// Demo Mode returns null so each page can render its explicit demo fixtures.
+// Live Mode returns the real records, or [] when the connector is unavailable
+// or has no records. An empty array is intentionally truthy: existing callers
+// using `if (live) { setRows(live); return; }` will stop before their demo
+// fallback and cannot accidentally present fixtures as customer telemetry.
 import { isDemoMode } from '../services/demoMode';
 import { fetchServiceLive } from '../services/serviceData';
 
@@ -19,12 +12,10 @@ export async function tryLiveFeed<T>(serviceId: string, limit = 100): Promise<T[
   if (isDemoMode()) return null;
   try {
     const res = await fetchServiceLive<T>(serviceId, limit);
-    if (res.source === 'live' && Array.isArray(res.records) && res.records.length > 0) {
-      return res.records;
-    }
-    return null;
+    if (res.source === 'live' && Array.isArray(res.records)) return res.records;
+    return [];
   } catch {
-    return null; // never break the page — fallback badge/mock handles honesty
+    return [];
   }
 }
 
