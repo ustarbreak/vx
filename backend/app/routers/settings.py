@@ -56,7 +56,7 @@ class SystemSettingsPatch(BaseModel):
 
 
 @router.get("/system")
-async def get_system_settings(current_user: User = Depends(get_current_user)):
+async def get_system_settings(current_user: User = Depends(require_permission("platform.settings.read"))):
     return _SYSTEM_SETTINGS
 
 
@@ -69,7 +69,7 @@ async def update_system_settings(patch: SystemSettingsPatch,
 
 
 @router.get("/overview")
-async def settings_overview(current_user: User = Depends(get_current_user),
+async def settings_overview(current_user: User = Depends(require_permission("platform.tenants.read")),
                             db: AsyncSession = Depends(get_db)):
     """Everything the platform-admin Settings page renders, from real data."""
     orgs = (await db.execute(select(Organization).order_by(Organization.name))).scalars().all()
