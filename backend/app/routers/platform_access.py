@@ -43,21 +43,27 @@ async def effective_access(
     ))).scalars().all()
     now = datetime.now(timezone.utc)
     active_assignments = []
+    active_rows = []
     for row in rows:
         expires_at = row.expires_at
         if expires_at is not None and expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at is not None and expires_at <= now:
             continue
+        active_rows.append(row)
         active_assignments.append({
             "id": row.id, "permission_key": row.permission_key, "effect": row.effect,
             "scope_type": row.scope_type, "scope_id": row.scope_id,
             "expires_at": row.expires_at,
         })
-        if row.effect == "allow" and row.scope_type == "global":
-            keys.add(row.permission_key)
-        elif row.effect == "deny" and row.scope_type == "global":
-            keys.discard(row.permission_key)
+    # Match the backend's deny-overrides-allow rule regardless of row order.
+    for key in PERMISSION_CATALOG:
+        global_rows = [row for row in active_rows
+                       if row.permission_key == key and row.scope_type == "global"]
+        if any(row.effect == "deny" for row in global_rows):
+            keys.discard(key)
+        elif any(row.effect == "allow" for row in global_rows):
+            keys.add(key)
     if current_user.role == "platform_admin":
         keys = set(PERMISSION_CATALOG)
     return {
