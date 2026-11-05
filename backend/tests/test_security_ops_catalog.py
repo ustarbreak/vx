@@ -112,7 +112,8 @@ async def test_email_security_catalog_uses_frontend_em_prefix(session_factory):
             "service": "email-security", "action_id": "em-header-analysis",
         })
     assert response.status_code == 200, response.text
-    assert response.json()["task"]["status"] == "queued"
+    assert response.json()["task"]["status"] == "manual"
+    assert "no device command was sent" in response.json()["message"].lower()
 
 
 @pytest.mark.asyncio
