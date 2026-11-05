@@ -15,8 +15,16 @@ from app.core.platform_rbac import (
 )
 from app.database import get_db
 from app.models import User, PlatformPermissionAssignment, AuditLog
+from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/platform/access", tags=["Platform Access"])
+
+
+class PlatformStaffCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=160)
+    password: str = Field(min_length=10, max_length=256)
+    role: str = Field(pattern="^(platform_expert|platform_analyst|platform_user)$")
 
 class PlatformRoleUpdate(BaseModel):
     role: str = Field(pattern="^(platform_expert|platform_analyst|platform_user)$")
@@ -180,6 +188,34 @@ async def revoke_assignment(
         outcome="success",
     ))
     await db.commit()
+
+
+
+@router.post("/users", status_code=201)
+async def create_platform_staff(
+    body: PlatformStaffCreate,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    existing = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "Email already registered")
+    staff = User(
+        email=body.email, name=body.name, hashed_password=get_password_hash(body.password),
+        role=body.role, org_id=None, auth_version=0,
+    )
+    db.add(staff)
+    await db.flush()
+    db.add(AuditLog(
+        actor_id=owner.id, actor_name=owner.email, actor_role=owner.role, org_id=None,
+        action="platform.staff_created", resource="User", resource_id=str(staff.id),
+        details=f"Created platform staff account with role {staff.role}",
+        outcome="success",
+    ))
+    await db.commit()
+    await db.refresh(staff)
+    return {"id": staff.id, "email": staff.email, "name": staff.name,
+            "role": staff.role, "status": staff.status, "auth_version": staff.auth_version}
 
 
 @router.get("/users")
