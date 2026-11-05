@@ -166,7 +166,7 @@ def test_m1_migration_graph_has_one_reachable_head():
     visit(heads[0])
     assert reachable == set(mods), f"unreachable migrations: {sorted(set(mods) - reachable)}"
     assert set(parents("d4e6f8a0b2c4")) == {
-        "c3d9e1f7a2b4", "h8i0j2k4l6m8", "k1l3m5n7o9p1"
+        "h8i0j2k4l6m8", "k1l3m5n7o9p1"
     }
     assert "b7d2f4a1c8e3" in reachable and "a3c5e7f9b1d2" in reachable
 
