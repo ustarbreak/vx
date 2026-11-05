@@ -141,7 +141,7 @@ const DeviceDetailsPage: React.FC = () => {
           const inv = await agentApi.latestInventory(m.id).catch(() => null);
           setInventory(inv);
         }
-      } else if (isDemoMode() || String(deviceId).startsWith('dw-')) {
+      } else if (isDemoMode()) {
         // Demo-world device: identity from the synchronised CMDB; live status
         // attaches ONLY through the simulated probe fleet (same matching rule
         // as GET /agents/probes), never because the row exists.
