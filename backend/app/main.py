@@ -11,7 +11,7 @@ from app.core.config import settings
 from app.database import init_db, AsyncSessionLocal
 from app.routers import auth, organizations, users, entitlements, integrations, audit
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
-from app.routers import security_map, org_topology
+from app.routers import security_map, org_topology, compliance
 from app.routers import incidents as incidents_router
 from app.routers import soar as soar_router
 from app.routers import value as value_router
@@ -152,6 +152,7 @@ app.include_router(triage_router.router, prefix="/api")
 app.include_router(threat_intel.router, prefix="/api")
 app.include_router(analytics_router.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
+app.include_router(compliance.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(value_router.router, prefix="/api")
 app.include_router(reports_router.router, prefix="/api")
