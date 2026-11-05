@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { 
   Shield, AlertTriangle, CheckCircle, XCircle, 
-  Filter, Search, Clock, Server, Activity
+  Filter, Search, Clock, Server, Activity, ArrowLeft, ExternalLink
 } from 'lucide-react';
 import { fetchServiceLive } from '../../services/serviceData';
 import { useAuth } from '../../context/AuthContext';
@@ -79,6 +79,7 @@ interface EndpointAlert {
 
 export default function EndpointProtectionPage() {
   const navigate = useNavigate();
+  const { alertId } = useParams<{ alertId: string }>();
   const { user } = useAuth();
   const demo = isDemoMode();
   const [alerts, setAlerts] = useState<EndpointAlert[]>([]);
@@ -172,6 +173,95 @@ export default function EndpointProtectionPage() {
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
           <p className="mt-4 text-gray-400">Loading endpoint protection data...</p>
         </div>
+      </div>
+    );
+  }
+
+  const selectedAlert = alertId ? alerts.find((alert) => alert.id === alertId) : undefined;
+
+  if (alertId) {
+    if (!selectedAlert) {
+      return (
+        <div className="p-6 space-y-4">
+          <button onClick={() => navigate('/client-admin/endpoint-protection')} className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300">
+            <ArrowLeft className="w-4 h-4" /> Back to Endpoint Protection
+          </button>
+          <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-8">
+            <h1 className="text-xl font-semibold text-[var(--ic-heading)]">Alert not found</h1>
+            <p className="mt-2 text-sm text-gray-400">
+              {feedState === 'unavailable'
+                ? 'The live endpoint feed is unavailable, so this alert cannot be loaded.'
+                : 'This alert is not present in the current tenant feed or may have been removed.'}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="p-6 space-y-6">
+        <button onClick={() => navigate('/client-admin/endpoint-protection')} className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300">
+          <ArrowLeft className="w-4 h-4" /> Back to Endpoint Protection
+        </button>
+        <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden">
+          <div className="p-6 border-b border-[var(--ic-border)] flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-gray-500">Endpoint alert · {selectedAlert.id}</p>
+              <h1 className="mt-2 text-2xl font-bold text-[var(--ic-heading)]">{selectedAlert.threat}</h1>
+              <p className="mt-1 text-sm text-gray-400">{selectedAlert.type} detection on {selectedAlert.device}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold border ${getSeverityColor(selectedAlert.severity)}`}>{selectedAlert.severity.toUpperCase()}</span>
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${getActionColor(selectedAlert.action)}`}>{selectedAlert.action}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-6">
+            <div className="rounded-lg border border-[var(--ic-border)] p-4">
+              <p className="text-xs text-gray-500">Affected endpoint</p>
+              <p className="mt-1 font-semibold text-[var(--ic-heading)]">{selectedAlert.device}</p>
+              <p className="text-sm font-mono text-gray-400">{selectedAlert.deviceIp}</p>
+              <button onClick={() => navigate(`/client-admin/infrastructure/device/${encodeURIComponent(selectedAlert.device)}`)} className="mt-3 text-xs text-cyan-400 hover:text-cyan-300">Open asset record <ExternalLink className="inline w-3 h-3" /></button>
+            </div>
+            <div className="rounded-lg border border-[var(--ic-border)] p-4">
+              <p className="text-xs text-gray-500">Detection time</p>
+              <p className="mt-1 font-semibold text-[var(--ic-heading)]">{new Date(selectedAlert.timestamp).toLocaleString()}</p>
+              <p className="text-xs text-gray-400 mt-2">Source: {feedState === 'demo' ? 'Demo fixture' : feedState === 'live' ? 'Connected endpoint feed' : 'Unavailable'}</p>
+            </div>
+            <div className="rounded-lg border border-[var(--ic-border)] p-4">
+              <p className="text-xs text-gray-500">Case linkage</p>
+              <p className="mt-1 font-semibold text-[var(--ic-heading)]">{selectedAlert.ticketCreated ? 'Ticket linked' : 'No ticket linked'}</p>
+              <button onClick={() => navigate('/client-admin/tickets')} className="mt-3 text-xs text-cyan-400 hover:text-cyan-300">Open service desk <ExternalLink className="inline w-3 h-3" /></button>
+            </div>
+          </div>
+          <div className="px-6 pb-6 space-y-4">
+            <section>
+              <h2 className="text-sm font-semibold text-[var(--ic-heading)]">Analyst notes / detection details</h2>
+              <p className="mt-2 rounded-lg bg-black/20 border border-[var(--ic-border)] p-4 text-sm text-gray-300 whitespace-pre-wrap">{selectedAlert.details || 'No additional detection details were supplied by the endpoint feed.'}</p>
+            </section>
+            <section>
+              <h2 className="text-sm font-semibold text-[var(--ic-heading)]">Recommended investigation sequence</h2>
+              <ol className="mt-2 list-decimal list-inside space-y-2 text-sm text-gray-300">
+                <li>Validate the endpoint identity and confirm the detection timestamp with the asset owner.</li>
+                <li>Review process ancestry, persistence, network connections and any related user activity in the EDR/XDR source.</li>
+                <li>Search the indicator across the tenant and correlate endpoint, DNS, firewall and email telemetry.</li>
+                <li>Preserve forensic evidence before containment where operationally safe.</li>
+                <li>Document the decision and obtain approval before disruptive containment or credential actions.</li>
+              </ol>
+            </section>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => navigate(`/client-admin/vulnerability-scanning?device=${encodeURIComponent(selectedAlert.device)}`)} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-xs text-gray-200 hover:border-cyan-500/50">Check asset vulnerabilities</button>
+              <button onClick={() => navigate('/client-admin/alerts')} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-xs text-gray-200 hover:border-cyan-500/50">Review related alerts</button>
+              <button onClick={() => navigate('/client-admin/soar')} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-xs text-gray-200 hover:border-cyan-500/50">Open SOAR playbooks</button>
+            </div>
+          </div>
+        </div>
+        <OpsConsole
+          service="endpoint-protection"
+          title="Response actions for this alert"
+          groups={EP_GROUPS}
+          contextParams={{ device: selectedAlert.device, ip: selectedAlert.deviceIp, reason: `Response to ${selectedAlert.type} alert ${selectedAlert.id}: ${selectedAlert.threat}` }}
+          logHeader={`Alert ${selectedAlert.id} · ${selectedAlert.device} · ${selectedAlert.threat}`}
+        />
       </div>
     );
   }
