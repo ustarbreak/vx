@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Cloud, AlertTriangle, CheckCircle, Shield, Server } from 'lucide-react';
 import { fetchServiceLive } from '../../services/serviceData';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 import { isDemoMode } from '../../services/demoMode';
 
@@ -71,6 +72,7 @@ interface CloudAlert {
 
 export default function CloudSecurityPage() {
   const navigate = useNavigate();
+  const { alertId } = useParams<{ alertId: string }>();
   const demo = isDemoMode();
   const [alerts, setAlerts] = useState<CloudAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -113,6 +115,27 @@ export default function CloudSecurityPage() {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
 
+
+  const selectedAlert = alertId ? alerts.find((alert) => alert.id === alertId) : undefined;
+  if (alertId) return (
+    <SecurityRecordDetail
+      backPath="/client-admin/cloud-security" service="cloud-security" serviceTitle="Cloud Security"
+      recordId={alertId} recordType="Cloud posture finding" subtitle={selectedAlert ? selectedAlert.type : "Cloud finding"}
+      severity={selectedAlert?.severity} status={selectedAlert?.status}
+      sourceLabel={feedState === "demo" ? "Demo fixtures" : feedState === "live" ? "Connected cloud security feed" : "Unavailable"}
+      fields={selectedAlert ? [
+        { label: "Provider", value: selectedAlert.provider }, { label: "Cloud service", value: selectedAlert.service },
+        { label: "Resource", value: selectedAlert.resource }, { label: "Finding type", value: selectedAlert.type },
+        { label: "Detected", value: new Date(selectedAlert.timestamp).toLocaleString() },
+        { label: "Ticket linked", value: selectedAlert.ticketCreated ? "Yes" : "No" },
+      ] : []}
+      groups={CLOUD_GROUPS}
+      contextParams={selectedAlert ? { resource: selectedAlert.resource, query: selectedAlert.provider + " " + selectedAlert.service + " " + selectedAlert.resource, reason: "Cloud finding " + selectedAlert.id + ": " + selectedAlert.type } : {}}
+      recommendations={["Confirm cloud account, region and resource ownership.","Inspect public exposure, IAM permissions and recent control-plane activity.","Review CloudTrail or equivalent audit events around the finding time.","Check whether the resource contains regulated or sensitive data.","Use a reviewed change and approval before modifying access, keys or network exposure."]}
+      notFound={!selectedAlert}
+    />
+  );
+
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -122,6 +145,8 @@ export default function CloudSecurityPage() {
           {feedState === 'live' ? 'LIVE DATA · Connected cloud security feed' : feedState === 'demo' ? 'DEMO DATA · Simulated findings; not customer telemetry' : 'UNAVAILABLE · No live cloud security feed is configured or reachable. No sample findings are shown.'}
         </p>
       </div>
+
+      <OpsConsole service="cloud-security" title="Cloud Posture Investigation & Response Console" groups={CLOUD_GROUPS} />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
