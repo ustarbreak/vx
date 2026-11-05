@@ -183,10 +183,11 @@ async def cancel_subscription(
     row.is_current = False
     row.cancelled_at = datetime.now(timezone.utc)
     org = await db.get(Organization, row.org_id)
-    if org is not None and org.trial:
+    if org is not None:
         org.trial = False
         org.trial_expires_at = None
         org.plan_tier = "STARTER"
+        org.billing_cycle = "MONTHLY"
     db.add(AuditLog(
         actor_id=user.id, actor_name=user.name, actor_role=user.role,
         org_id=row.org_id, action="subscription.cancelled", resource="platform_subscription",
