@@ -183,12 +183,12 @@ _PB_SEQ = {"n": 0}
 
 
 @router_playbooks.get("")
-async def list_playbooks(current_user: User = Depends(_gcu)):
+async def list_playbooks(current_user: User = Depends(require_permission("platform.services.read"))):
     return list(_PLAYBOOKS.values())
 
 
 @router_playbooks.post("", status_code=201)
-async def save_playbook(pb: PlaybookDef, current_user: User = Depends(_gcu)):
+async def save_playbook(pb: PlaybookDef, current_user: User = Depends(require_permission("platform.services.manage"))):
     try:
         pb.steps = [s for s in pb.steps]  # keep shape
         _validate_steps([s.model_dump() for s in pb.steps])
@@ -202,7 +202,7 @@ async def save_playbook(pb: PlaybookDef, current_user: User = Depends(_gcu)):
 
 
 @router_playbooks.put("/{pb_id}")
-async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depends(_gcu)):
+async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depends(require_permission("platform.services.manage"))):
     if pb_id not in _PLAYBOOKS:
         raise HTTPException(404, "Playbook not found")
     try:
@@ -215,12 +215,12 @@ async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depe
 
 
 @router_playbooks.delete("/{pb_id}", status_code=204)
-async def delete_playbook(pb_id: int, current_user: User = Depends(_gcu)):
+async def delete_playbook(pb_id: int, current_user: User = Depends(require_permission("platform.services.manage"))):
     _PLAYBOOKS.pop(pb_id, None)
 
 
 @router_playbooks.post("/{pb_id}/run", status_code=410)
-async def run_playbook_legacy(pb_id: int, current_user: User = Depends(_gcu)):
+async def run_playbook_legacy(pb_id: int, current_user: User = Depends(require_permission("platform.services.manage"))):
     """The legacy executor fabricated 'completed' results for every step —
     it violated the no-invented-execution-rules policy and is retired.
     Use POST /api/soar/playbooks/{id}/run (simulate | preview | execute) which
