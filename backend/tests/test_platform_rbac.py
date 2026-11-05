@@ -500,3 +500,27 @@ async def test_partner_operations_writes_require_partner_scoped_manage_grant(ses
         })
         assert allowed.status_code == 201, allowed.text
         assert cross_partner.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_entitlement_graph_and_chain_honor_tenant_scoped_billing_read(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.get("/api/entitlements/graph?org_id=1")
+        assert denied.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.billing.read",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert grant.status_code == 201, grant.text
+
+    async with client_for(session_factory, 2, version=1) as expert:
+        graph = await expert.get("/api/entitlements/graph?org_id=1")
+        chain = await expert.get("/api/entitlements/chain/siem?org_id=1")
+        cross_graph = await expert.get("/api/entitlements/graph?org_id=2")
+        cross_chain = await expert.get("/api/entitlements/chain/siem?org_id=2")
+        assert graph.status_code == 200, graph.text
+        assert chain.status_code == 200, chain.text
+        assert cross_graph.status_code == 403
+        assert cross_chain.status_code == 403
