@@ -34,7 +34,7 @@ export default function PlatformServiceCatalogPage() {
   const services = data?.services ?? [];
   const activeCount = services.filter(s => s.active).length;
   const configuredCount = services.filter(s => Object.values(s.integrations).some(v => v > 0)).length;
-  const connectedCount = services.filter(s => Object.values(s.lifecycle).some((v, i) => v > 0 && ['connected', 'first_success'][i] !== undefined)).length;
+  const connectedCount = services.filter(s => Object.entries(s.lifecycle).some(([state, count]) => ['connected', 'first_success'].includes(state) && count > 0)).length;
   const selectedService = services.find(s => s.service_id === selected) ?? null;
 
   const updateService = async (service: PlatformServiceCatalogItem, patch: { active?: boolean }) => {
