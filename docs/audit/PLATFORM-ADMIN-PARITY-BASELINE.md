@@ -341,3 +341,182 @@ The source review now covers all currently identified Platform Admin pages and t
 - [ ] Publish the final PA-01 matrix and mark each item implemented/partial/missing/blocked with source and test evidence.
 
 **Status: PA-01 is materially advanced but remains open.** This document update does not change product code. PA-02 should not start until the user confirms the PA-01 audit PR is merged and the final audit closure criteria are satisfied, or explicitly authorizes a security-priority implementation ahead of audit closure.
+
+
+# PA-01 final audit extension — 2026-11-05
+
+## Final handler-level review: user administration, invitations, notifications, channels, discovery and security operations
+
+This section records source-level behavior for the requested endpoint families. It does not imply runtime penetration testing.
+
+### Users — `backend/app/routers/users.py`
+
+| Method + endpoint | Handler | Current authorization/scope | Persistence/audit | Finding |
+|---|---|---|---|---|
+| GET `/api/users/` | get_users | Authenticated; platform_admin sees all, other users are silently limited to own org | DB read | No explicit user-list permission; scope depends on role string |
+| GET `/api/users/{user_id}` | get_user | Authenticated; self or same-org check; platform_admin global | DB read | Unsafe missing-target dereference can occur before 404 when requested ID does not exist |
+| PATCH `/api/users/{user_id}` | update_client_user | require_role(client_admin); tenant admins constrained to their org and assignable roles; platform_admin may manage non-platform users | DB write + AuditLog | Role assignment is role-string based; no platform Expert/Analyst/User capability/profile model |
+| POST `/api/users/` | create_user | require_role(platform_admin) | DB write; audit written in a second commit | Audit and user creation are not atomic; arbitrary `user_data.role` is accepted unless schema validation prevents it |
+| DELETE `/api/users/{user_id}` | delete_user | require_role(platform_admin); blocks self-delete | AuditLog + DB delete | No soft-disable/session revocation workflow; deletion audit is separate from delete transaction |
+
+### Invitations — `backend/app/services/invitations.py`
+
+| Method + endpoint | Handler | Current authorization/scope | Persistence/audit | Finding |
+|---|---|---|---|---|
+| POST `/api/invitations` | create_invitation | Authenticated then inline role/scope: platform_admin can choose org; client_admin only own org; role allow-list | Invitation row + send attempt + AuditLog | Platform invite roles currently only client roles; platform role invitations are not supported. Secret token is returned in response as activation link |
+| GET `/api/invitations` | list_invitations | require_role(client_admin), platform_admin global or optional org filter | DB read | Platform Expert/Analyst cannot receive scoped read access |
+| POST `/api/invitations/{inv_id}/resend` | resend | require_role(client_admin); tenant match unless platform_admin | DB write/send | No explicit send-invitation capability or audit record on resend |
+| POST `/api/invitations/accept` | accept | Public bearer invitation token | Creates User, marks invitation accepted | Token has no expiry field or one-time token hash; acceptance does not create a session revocation record |
+
+### Notification alerts and notification delivery — `backend/app/routers/notifications.py`
+
+| Method + endpoint | Handler family | Current authorization/scope | Finding |
+|---|---|---|---|
+| POST `/api/alerts` | ingest_alert | Authenticated | Human auth is accepted for ingestion; platform staff vs tenant ingestion permissions are not separated |
+| GET `/api/alerts`, `/summary`, `/{id}`, correlation endpoints | list/detail/correlation | Authenticated; organization scope applied in query logic | Read capability is implicit rather than explicit; platform cross-tenant view tied to role |
+| PATCH `/api/alerts/{id}`, POST `/{id}/ack`, POST `/alerts/bulk` | updates/ack/bulk | Authenticated + `_require_write_role`; cross-tenant check for bulk rows | Need discrete acknowledge, assign, resolve, reopen permissions |
+| GET/POST `/api/alerts/{id}/notes` | notes | Authenticated; write role on create | Read and write are not separately permissioned |
+| GET events/evidence | evidence history | Authenticated | Evidence access needs explicit sensitive-read capability and resource scope |
+| GET/POST/PATCH/DELETE `/api/notification-rules` | rule management | List/create platform_admin-only; update/delete permit org-scoped users with inline checks | Inconsistent policy between list/create and update/delete |
+| GET `/api/notifications`, POST `/{id}/ack`, POST `/{id}/retry` | delivery queue | Authenticated; write role and tenant scope on mutations | Read/retry/ack capabilities not separated |
+| POST `/api/notifications/retry-dead-letters` | retry_dlq | Inline platform_admin-only | Global operational action needs explicit capability + audit |
+| GET `/api/notifications/analytics` | notif_analytics | Authenticated | Confirm global-vs-tenant aggregation and scope before enabling platform roles |
+
+### Channel settings — `backend/app/services/channel_settings.py`
+
+| Method + endpoint | Handler | Current authorization/scope | Persistence | Finding |
+|---|---|---|---|---|
+| GET `/api/channels/configs` | list_configs | Authenticated; platform_admin can request org_id; others use own org | Reads ChannelConfig; masks selected secrets | Authenticated-only endpoint; role/capability not checked |
+| PUT `/api/channels/configs` | save_config | Authenticated; same org resolver | Persists per-tenant SMTP/webhook/SMS JSON | Authenticated tenant users can alter notification delivery config; sensitive secret/config write needs strict permission |
+| POST `/api/channels/test` | test_channel | Authenticated; same org resolver | Sends real email/webhook/SMS test | Externally observable side effect with no explicit test/send capability or audit event |
+
+### Discovery — `backend/app/routers/discovery.py`
+
+| Method + endpoint | Handler family | Current authorization/scope | Finding |
+|---|---|---|---|
+| GET/POST `/api/snmp-credentials` | credential list/create | Authenticated; list inline platform_admin; create has tenant/role validation | Secret-bearing credential management needs distinct read/write permissions |
+| DELETE `/api/snmp-credentials/{id}` | delete credential | Authenticated; platform_admin global, otherwise same org | Tenant scope exists; no explicit delete capability/audit coverage |
+| GET/POST `/api/scans` | list/start scan | Authenticated; list platform_admin; start validates requested org/scope and authorization fields | Scanning is a sensitive network action; should require discovery.scan and explicit target authorization |
+| POST `/api/scans/{id}/cancel`, GET scan/detail/devices | scan operations | Authenticated; platform_admin or matching org | Separate read/cancel capabilities absent |
+| GET `/api/devices`, GET `/api/devices/{id}` | inventory | Authenticated; all-device global view platform_admin; detail scoped | Inventory visibility must be separately granted |
+| POST `/api/devices/{id}/import` | import | Authenticated; tenant scoped | Mutating import should require inventory.import and audit |
+| POST `/api/devices/{id}/actions/{action}` | kill/isolate/unisolate/remote_screen | Authenticated; tenant scoped; command is queued for agent and reports executed=false | High-impact endpoint currently lacks explicit capability and approval separation; no claim of execution until agent acknowledgement |
+| GET `/api/engine-status` | scanner diagnostics | Public/no auth dependency | Confirm that diagnostic response exposes no deployment-sensitive data |
+
+### Security Operations — `backend/app/routers/security_ops.py`
+
+| Method + endpoint | Handler | Current authorization/scope | Persistence | Finding |
+|---|---|---|---|---|
+| POST `/api/security-ops/actions` | dispatch_action | require_role(client_admin); requires caller org_id; validates exact service/action allow-list | SecurityOpsTask(status=manual) + AuditLog | Does not dispatch to a device; currently manual-only. Platform Expert action capability should be scoped and approval-gated for disruptive actions |
+| GET `/api/security-ops/tasks` | list_tasks | Authenticated; own org only | DB read | No explicit read capability; platform account with no org sees empty list |
+
+## Frontend action-to-endpoint matrix
+
+The matrix below maps the platform pages and their connected client methods. Page controls not backed by a dedicated API are explicitly marked local/demo rather than treated as completed workflows.
+
+| Platform page / action | Frontend API or behavior | Backend endpoint(s) | Source disposition |
+|---|---|---|---|
+| Dashboard — KPI cards, client portfolio, activity | Imports `demoOrganizations`, `demoUsers`, `demoAuditLog`, `serviceCatalog` | No verified platform dashboard aggregate endpoint | Demo-only; must be replaced by live aggregates |
+| Clients — list tenants | `organizationsApi.list` | GET `/api/organizations/` | Live organizations; page also merges demo fixtures |
+| Clients — create/edit/delete tenant | `organizationsApi.create/update/delete` | POST/PATCH/DELETE `/api/organizations/{id}` | Live; platform_admin-only in organizations router |
+| Clients — entitlement toggle | Local React state in inspected page | No write request in handler | Not persisted |
+| Clients — keys/licenses/devices/members/activity | `demoWorld` / demo fixture selectors | No complete live API mapping in inspected page | Demo-only or unsupported; must show unavailable in Live Mode |
+| Tenant detail — summary/ticket | `tenantManagerApi.summary/createTicket` | GET/POST `/api/admin/tenants/{org_id}/summary|tickets` | Live; platform_admin-only |
+| Tenant detail — monitoring rules | `tenantManagerApi.listRules/createRule/updateRule/deleteRule` | GET/POST/PATCH/DELETE `/api/admin/tenants/{org_id}/rules[/{rule_id}]` | Live; platform_admin-only |
+| Tenant detail — service grants | `tenantManagerApi.grants/createGrant` | GET/POST `/api/admin/tenants/{org_id}/grants` | Live; platform_admin-only |
+| Tenant detail — devices/members | `demoDevices`, `demoTechnicians` | No verified live page mapping | Demo-only |
+| Partners — list/stats | `partnersApi.list/stats` | GET `/api/partners`, GET `/api/partners/stats` | Live; stats platform_admin-only; list resource-scoped |
+| Partners — suspend/migrate/remove/update | `partnersAdminApi` | PATCH/POST/DELETE `/api/partners/{id}[/{suspend,migrate}]` | Live; platform_admin-only |
+| Audit — global/tenant audit | `auditApi.list/myOrg` | GET `/api/audit/logs`, GET `/api/audit/logs/my-org` | Live; global platform_admin-only, tenant endpoint org-scoped |
+| Integrations — list/detail/create/update/test/delete | integrations client | GET/POST/PATCH/DELETE/test `/api/integrations` | Live; current backend requires platform_admin for all actions |
+| Services Ops — tickets/alerts/notifications/analytics | `ticketsApi`, `alertsApi`, `settingsApi.overview` | `/api/tickets`, `/api/alerts`, `/api/notifications`, `/api/settings/overview` | Live data; global overview endpoint under-authorized |
+| Services Ops — simulate alert feed | demo event ingestion action | POST `/api/alerts` via demo ingestion helper | Demo-only action with real ingestion side effect; must be gated to explicit demo environment |
+| Settings — global system settings | `settingsApi.get/update` | GET/PUT `/api/settings/system` | Live API but auth-only + process-local state |
+| Settings — seed demo tenant | `settingsApi.seedDemoTenant` | POST `/api/settings/seed-demo-tenant` | Owner-only; demo-only destructive data creation |
+| Settings — platform audit | `tenantManagerApi.platformAudit` | GET `/api/admin/audit-platform` | Live; platform_admin-only |
+| Themes — select preview/default | ThemeContext `setTheme` | No backend endpoint | Browser/local preference, not a global persisted default |
+| Pack customizer — load/save/reset | `pricingPacksApi` | GET/PUT `/api/packs`, POST `/api/packs/reset` (pricing_v2) | Live config path; owner-only write; startup rehydration/multi-worker behavior requires runtime verification |
+| Integrations/onboarding — lifecycle | Platform onboarding client | `/api/platform/lifecycle`, `/api/platform/services/{id}/first-success` | Feature-flagged; default catalog/lifecycle flags off |
+| Platform settings overview — tenant selector | `settingsApi.overview` | GET `/api/settings/overview` | Returns global metadata; authenticated-only |
+| Agent/discovery — scans, inventory, actions | `discoveryApi`, `agentApi` | `/api/scans`, `/api/devices`, `/api/agent-tokens`, `/api/agents`, `/api/discovery/devices/{id}/actions/{action}` | Mixed global and tenant scope; explicit capabilities missing |
+
+This matrix covers the Platform Admin page set and connected API client methods inspected in PA-01. It is not a statement that every endpoint is production-ready: rows identify current implementation and gaps.
+
+## Complete database model and migration assessment
+
+### Existing model inventory
+
+The SQLAlchemy metadata in `backend/app/models.py` defines the following model/table families (51 mapped classes/tables at the inspected main commit):
+
+- Core identity/tenant: `Organization`, `User`, `Entitlement`, `Integration`, `AuditLog`.
+- Commercial/pricing: `PricingConfigVersion`, `PricingLead`, `QuoteLink`, `QuoteRecord`, `HealthCheck`, `PartnerDealRegistration`, `PlanEntitlementV2`, `UpsellEvent`.
+- Ticketing/evidence: `Ticket`, `TicketEvidence`, `TicketAuditEntry`, `TicketApproval`.
+- Alerting/notifications: `Alert`, `AlertNote`, `AlertEvent`, `EventEvidence`, `UidCounter`, `GroupingPolicy`, `NotificationRule`, `Notification`.
+- Projects/channels/identity support: `Project`, `ProjectMilestone`, `ProjectRunbook`, `ProjectAttachment`, `ChannelConfig`, `UserTotpSecret`, `Invitation`.
+- Discovery/agents: `SnmpCredential`, `DiscoveryScan`, `DiscoveredDevice`, `AgentProbe`, `AgentInventory`, `AgentMetric`, `AgentToken`, `AgentDiscoveredDevice`.
+- Tenant operations/incidents: `TenantSetting`, `TenantServiceGrant`, `MonitoringRule`, `Incident`, `TriagePolicy`, `TriageEvaluation`, `OutcomeLabel`, `IncidentNote`, `IncidentActivity`, `IncidentEvidence`, `IncidentAction`, `Playbook`, `DeviceAction`, `PlaybookRun`, `DashboardLayout`, `SecurityOpsTask`, `ServiceLifecycleState`.
+
+### Migration strategy
+
+- Alembic is configured at `backend/migrations/env.py`; it imports `app.models` to populate `Base.metadata` and supports SQLite/PostgreSQL URL conversion.
+- Existing revision chain is linear with a single head `c3d9e1f7a2b4`; `backend/tests/test_postgres_hardening.py` asserts nine revisions and a single head.
+- `backend/app/database.py:init_db()` also calls `Base.metadata.create_all` at application startup. This creates missing tables but does not alter existing deployed tables; it is not a substitute for Alembic migrations.
+- There is no mapped DB session/revocation table in the inspected model inventory. Access tokens are JWTs; `get_current_user` reloads the user on each request and checks active status, but does not check a token version or session revocation record.
+- RBAC must be introduced by a new Alembic revision from the current single head, with safe defaults/backfill for existing `platform_admin` accounts and no destructive role rewrite. The migration chain integrity test must be updated to expect the new head/revision count.
+- Required PostgreSQL validation: upgrade from current head, verify legacy Owner account preservation, insert/read scoped permission assignments, rollback/drop only new RBAC objects, and prove no pre-existing rows are modified unexpectedly.
+
+## Demo/live separation review
+
+| Surface | Current behavior | Live-mode risk | Required control |
+|---|---|---|---|
+| Platform Dashboard | Hardcoded demo metrics/lists | Demo revenue and activity appear real | No fixture fallback in Live Mode |
+| Platform Clients | Real organization list merged with demo organizations and demo related entities | Fake devices/users/licenses appear alongside tenants | Use only API results in Live Mode |
+| Tenant Detail | Live summary/rules/grants; demo devices/members | Mixed provenance not obvious | Distinct unavailable state for unimplemented APIs |
+| Services Ops demo event | Clearly labeled demo action, posts sample alerts into backend ingestion | Sample alerts contaminate real tenant alert pipeline | Explicit server-side demo environment flag + permission |
+| Theme page | Local ThemeContext setting | Local state presented as global default | Separate personal preview from persisted platform default |
+| Pack customizer | Shipped defaults visible before async server response | Defaults can be mistaken for saved live values | Loading/error state blocks save until server authoritative response |
+| Demo fast login | `ic_fast_demo` and `ic_demo_mode` localStorage create client-side simulated session | UI must never accept it as backend identity | Backend remains authoritative; test no demo JWT/backend access |
+| Catalog/onboarding | API router only mounted when feature flag enabled | Page may render route while API returns 404 | Explicit capability/feature availability state |
+
+## Authorization test coverage gap inventory
+
+Existing tests found:
+- `backend/tests/test_platform_catalog.py`: authentication, feature-flag behavior, action guardrails and distinct approver behavior.
+- `backend/tests/test_postgres_hardening.py`: migration chain, PostgreSQL partial-index behavior; PostgreSQL test skips when no server is reachable.
+- `backend/tests/test_invitations_scope.py`: invitation tenant scope tests.
+- Existing selected domain tests cover platform-admin cross-tenant behavior (for example topology, security map, entitlement graph).
+
+Missing or not demonstrated by existing test inventory:
+- Four platform roles × each permission × allowed/denied resource scope.
+- Platform Expert/Analyst/User direct API access (roles do not yet exist).
+- Owner-only role/profile/permission assignment and prevention of self-elevation.
+- Tenant/partner users denied platform-wide metadata/settings/integration/catalog endpoints.
+- Invitation creation, resend, and acceptance with platform role assignment restrictions, token expiry/replay and audit atomicity.
+- Channel configuration secret masking, unauthorized writes and test-send capability.
+- Alert acknowledge/assign/resolve/reopen vs read permissions.
+- Notification dead-letter retry global permission.
+- Discovery scan target scope, scan cancel, credential CRUD, device action and approval separation.
+- Security Ops disruptive-action permissions and manual-only status truthfulness.
+- Session/token revocation after account disable or role/permission change.
+- Demo-mode fixture isolation from Live Mode.
+- PostgreSQL migration upgrade/backfill/rollback for RBAC tables.
+
+## PA-01 disposition and validation
+
+**Source audit: complete for the requested Platform Admin surface and the named handler families.** This is a source-level completion, not a runtime security certification.
+
+**CI/build evidence:** the GitHub connector reports no status contexts and no PR workflow runs associated with the PR #59 merge commit `5c1a86c6350f10ecad7fcc88d9a76a3cdc54c5de`. The user previously confirmed PR #59 was green and merged, but I cannot independently reproduce a frontend build or backend test run from the connected GitHub source browser. Therefore the document does not claim a fresh successful build/test run. The next implementation PR must run the repository's actual CI matrix and PostgreSQL tests; failures must be fixed before merge.
+
+**Known blocker to full PA-01 runtime acceptance:** no live checkout/container or connected CI run result is exposed in this session. Source inventory, API mapping, model inventory, migration assessment and test-gap inventory are now recorded. The PA-01 source-audit deliverable is complete; runtime verification remains an explicit CI gate for PA-02.
+
+## PA-02/PA-03 implementation constraints
+
+- Preserve the current `platform_admin` role as the Owner/superuser for backward compatibility.
+- Add `platform_expert`, `platform_analyst`, and `platform_user` as distinct platform-only roles; platform identities must have no tenant `org_id` unless an explicit scoped assignment requires one.
+- Keep partner and tenant roles distinct from platform roles.
+- Use permission keys and resource scopes; role defaults are templates, and Owner-controlled custom profiles/overrides are authoritative.
+- Backend permission checks are mandatory; frontend guards are UX only.
+- Default deny; no wildcard grants for non-Owner; no self-elevation; no grant of Owner role through invitations or generic user update.
+- Make high-impact operations request/approve/execute distinct and auditable; actor cannot approve own request.
+- Permission changes and role changes must invalidate existing access tokens/sessions. Introduce a revocation/version mechanism and test it.
+- Never expose password hashes, TOTP secrets, invitation tokens, channel secrets or integration credentials in the access-control UI.
