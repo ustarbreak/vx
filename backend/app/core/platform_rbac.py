@@ -5,7 +5,7 @@ the immutable superuser; all other platform roles are default-deny beyond
 their small baseline and persisted, scoped grants.
 """
 from datetime import datetime, timezone
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,3 +108,25 @@ def require_permission(permission: str):
             raise HTTPException(status_code=403, detail="Insufficient platform permission")
         return current_user
     return permission_checker
+
+
+def require_scoped_permission(permission: str, *, org_param: str = "org_id", partner_param: str = "partner_id"):
+    """Authorize a platform capability against an organization/partner path or query scope."""
+    async def scoped_checker(
+        request: Request,
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ):
+        if permission not in PERMISSION_CATALOG:
+            raise RuntimeError(f"Unknown platform permission: {permission}")
+        raw_org = request.path_params.get(org_param) or request.query_params.get(org_param)
+        raw_partner = request.path_params.get(partner_param) or request.query_params.get(partner_param)
+        try:
+            org_id = int(raw_org) if raw_org is not None else None
+            partner_id = int(raw_partner) if raw_partner is not None else None
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Invalid permission scope")
+        if not await has_permission(current_user, permission, db, org_id=org_id, partner_id=partner_id):
+            raise HTTPException(status_code=403, detail="Insufficient platform permission for this resource scope")
+        return current_user
+    return scoped_checker
