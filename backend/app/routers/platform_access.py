@@ -99,8 +99,13 @@ async def create_assignment(
         raise HTTPException(422, "Global scope must not include scope_id")
     if body.scope_type != "global" and (body.scope_id is None or body.scope_id <= 0):
         raise HTTPException(422, "Tenant and partner scopes require a positive scope_id")
-    if body.expires_at and body.expires_at <= datetime.now(timezone.utc):
-        raise HTTPException(422, "expires_at must be in the future")
+    if body.expires_at:
+        expiry = body.expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry <= datetime.now(timezone.utc):
+            raise HTTPException(422, "expires_at must be in the future")
+        body.expires_at = expiry
     target = await db.get(User, body.user_id)
     if not target or target.role not in PLATFORM_ROLES - {"platform_admin"}:
         raise HTTPException(404, "Platform Expert, Analyst or User account not found")
