@@ -79,7 +79,10 @@ async def test_invitation_requires_authentication(session_factory):
     await seed(session_factory)
     async with client_for(session_factory) as client:
         response = await client.post("/api/invitations", json={"email": "new@example.com"})
-    assert response.status_code in (401, 403)
+    # Starlette HTTPBearer rejects a missing Authorization header with 403.
+    # Invalid/present-but-unverifiable bearer credentials are handled by the
+    # application dependency and return 401.
+    assert response.status_code == 403
 
 
 @pytest.mark.asyncio
