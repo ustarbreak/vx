@@ -1346,6 +1346,7 @@ export const platformAccessApi = {
   me: () => api.get<{
     user_id: number; role: PlatformStaffRole; owner: boolean;
     permissions: PlatformPermissionDto[]; permission_catalog: PlatformPermissionDto[];
+    assignments: PlatformPermissionAssignmentDto[];
   }>('/platform/access/me'),
   staff: () => api.get<PlatformStaffDto[]>('/platform/access/users'),
   assignments: (userId?: number) =>
