@@ -107,6 +107,8 @@ async def update_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    if org.is_partner and current_user.role != "platform_admin":
+        raise HTTPException(status_code=403, detail="Partner organizations must be managed through the partner control-plane endpoints")
     if current_user.role != "platform_admin":
         if not is_platform_role(current_user.role) or not await has_permission(
             current_user, "platform.tenants.manage", db, org_id=org.id
@@ -155,6 +157,8 @@ async def delete_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    if org.is_partner and current_user.role != "platform_admin":
+        raise HTTPException(status_code=403, detail="Partner organizations must be managed through the partner control-plane endpoints")
     if current_user.role != "platform_admin":
         if not is_platform_role(current_user.role) or not await has_permission(
             current_user, "platform.tenants.manage", db, org_id=org.id
