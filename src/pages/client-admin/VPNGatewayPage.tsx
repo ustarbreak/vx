@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Wifi, Users, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const VPN_GROUPS: ActionGroup[] = [
@@ -68,6 +70,8 @@ interface VPNConnection {
 }
 
 export default function VPNGatewayPage() {
+  const navigate = useNavigate();
+  const { connectionId } = useParams<{ connectionId: string }>();
   const [connections, setConnections] = useState<VPNConnection[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -98,6 +102,25 @@ export default function VPNGatewayPage() {
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
+
+
+  const selectedConnection = connectionId ? connections.find((conn) => conn.id === connectionId) : undefined;
+  if (connectionId) return (
+    <SecurityRecordDetail backPath="/client-admin/vpn-gateway" service="vpn-gateway" serviceTitle="VPN Gateway"
+      recordId={connectionId} recordType="VPN session" subtitle={selectedConnection ? selectedConnection.user : "VPN session"}
+      status={selectedConnection?.status} sourceLabel="Tenant VPN gateway session feed"
+      fields={selectedConnection ? [
+        { label: "User", value: selectedConnection.user }, { label: "Device", value: selectedConnection.device },
+        { label: "Tunnel IP", value: selectedConnection.ip }, { label: "Reported location", value: selectedConnection.location },
+        { label: "Connected at", value: selectedConnection.connectedAt ? new Date(selectedConnection.connectedAt).toLocaleString() : "Not connected" },
+        { label: "Duration", value: selectedConnection.duration }, { label: "Bandwidth", value: selectedConnection.bandwidth },
+      ] : []}
+      groups={VPN_GROUPS}
+      contextParams={selectedConnection ? { user: selectedConnection.user, device: selectedConnection.device, gateway: selectedConnection.id, reason: "VPN session investigation for " + selectedConnection.user + " / " + selectedConnection.device } : {}}
+      recommendations={["Confirm user identity and verify the device is managed and compliant.","Review authentication history, MFA and certificate status.","Compare reported location and source IP with expected user travel and access patterns.","Inspect split-tunnel routes, DNS settings and gateway negotiation logs.","Obtain approval before terminating sessions, blocking users or revoking certificates."]}
+      notFound={!selectedConnection}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -157,7 +180,7 @@ export default function VPNGatewayPage() {
           </thead>
           <tbody>
             {connections.map((conn) => (
-              <tr key={conn.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
+              <tr key={conn.id} onClick={() => navigate('/client-admin/vpn-gateway/' + encodeURIComponent(conn.id))} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] cursor-pointer">
                 <td className="py-3 px-4 text-[var(--ic-heading)] font-medium">{conn.user}</td>
                 <td className="py-3 px-4 text-gray-300">{conn.device}</td>
                 <td className="py-3 px-4 text-gray-300 font-mono">{conn.ip}</td>
