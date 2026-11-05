@@ -100,6 +100,7 @@ class Integration(Base):
     license_type = Column(String, nullable=False)  # open-source, commercial, freemium
     pricing = Column(String, nullable=False)  # free, paid, custom
     api_key = Column(String)
+    api_username = Column(String(160))
     api_endpoint = Column(String)
     documentation_url = Column(String)
     last_sync = Column(DateTime(timezone=True))

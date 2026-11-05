@@ -149,6 +149,7 @@ class IntegrationBase(BaseModel):
 class IntegrationCreate(IntegrationBase):
     status: str = "inactive"
     api_key: Optional[str] = None
+    api_username: Optional[str] = None
     api_endpoint: Optional[str] = None
     documentation_url: Optional[str] = None
     notes: Optional[str] = None
@@ -158,6 +159,7 @@ class IntegrationUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
     api_key: Optional[str] = None
+    api_username: Optional[str] = None
     api_endpoint: Optional[str] = None
     documentation_url: Optional[str] = None
     notes: Optional[str] = None
@@ -167,6 +169,7 @@ class IntegrationResponse(IntegrationBase):
     id: int
     status: str
     # Credential material is write-only and must never be returned by the API.
+    api_username: Optional[str]
     api_endpoint: Optional[str]
     documentation_url: Optional[str]
     last_sync: Optional[datetime]
