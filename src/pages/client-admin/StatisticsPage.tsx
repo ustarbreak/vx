@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   BarChart3, TrendingUp, TrendingDown, Activity,
@@ -11,7 +11,42 @@ import {
 
 export default function StatisticsPage() {
   const navigate = useNavigate();
+  const demo = isDemoMode();
+  const [liveStats, setLiveStats] = useState<{ devices: number; online: number; alerts: number | null; threats: number | null; completedRuns: number | null } | null>(null);
+  const [liveLoading, setLiveLoading] = useState(true);
+  const [liveError, setLiveError] = useState('');
   const [timeRange, setTimeRange] = useState('24h');
+
+  useEffect(() => {
+    if (demo) { setLiveLoading(false); return; }
+    let active = true;
+    Promise.allSettled([
+      discoveryApi.devices(),
+      alertsApi.summary(),
+      fetchLiveThreats(),
+      soarApi.listRuns({ status: 'completed', page: 1, page_size: 1 }),
+    ]).then(results => {
+      if (!active) return;
+      const errors: string[] = [];
+      const devices = results[0].status === 'fulfilled' ? results[0].value : [];
+      if (results[0].status === 'rejected') errors.push('Device inventory unavailable');
+      const alerts = results[1].status === 'fulfilled'
+        ? Number(results[1].value.by_status.active ?? 0) + Number(results[1].value.by_status.acked ?? 0)
+        : null;
+      if (results[1].status === 'rejected') errors.push('Alert summary unavailable');
+      const threats = results[2].status === 'fulfilled' ? results[2].value.length : null;
+      if (results[2].status === 'rejected') errors.push('Threat feed unavailable');
+      const completedRuns = results[3].status === 'fulfilled' ? results[3].value.total : null;
+      if (results[3].status === 'rejected') errors.push('SOAR run history unavailable');
+      setLiveStats({
+        devices: devices.length,
+        online: devices.filter(d => ['online', 'active'].includes(String(d.status).toLowerCase())).length,
+        alerts, threats, completedRuns,
+      });
+      setLiveError(errors.join(' · '));
+    }).finally(() => { if (active) setLiveLoading(false); });
+    return () => { active = false; };
+  }, [demo]);
 
   // Mock data
   const trafficData = [
@@ -86,6 +121,43 @@ export default function StatisticsPage() {
       link: '/client-admin/statistics/performance',
     },
   ];
+
+  if (!demo) {
+    const cards = [
+      { title: 'Discovered Devices', value: liveStats?.devices ?? null, link: '/client-admin/statistics/devices' },
+      { title: 'Online Devices', value: liveStats?.online ?? null, link: '/client-admin/statistics/devices' },
+      { title: 'Open Alerts', value: liveStats?.alerts ?? null, link: '/client-admin/alerts' },
+      { title: 'Threat Feed Records', value: liveStats?.threats ?? null, link: '/threats' },
+      { title: 'Completed SOAR Runs', value: liveStats?.completedRuns ?? null, link: '/client-admin/automation/runbooks' },
+    ];
+    return (
+      <div className="p-4 lg:p-6 space-y-6">
+        <header>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Statistics & Analytics</h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">Live tenant inventory, alert, threat-feed and SOAR counts.</p>
+        </header>
+        {liveError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">{liveError}</div>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {cards.map(card => <button key={card.title} onClick={() => navigate(card.link)}
+            className="text-left rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5 hover:border-cyan-500/40">
+            <p className="text-xs text-[var(--ic-muted)]">{card.title}</p>
+            <p className="text-2xl font-bold text-[var(--ic-heading)] mt-2">{liveLoading ? '…' : card.value === null ? '—' : card.value.toLocaleString()}</p>
+          </button>)}
+        </div>
+        <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 space-y-2">
+          <h2 className="font-semibold text-amber-300">Historical telemetry is not available</h2>
+          <p className="text-sm text-[var(--ic-text)]">
+            Network throughput, packet/error trends, CPU, memory and disk time-series are not currently ingested by the live backend. This overview does not display sample charts or estimated values in Live Mode.
+          </p>
+          <p className="text-xs text-[var(--ic-muted)]">Open Network Statistics or Performance Statistics for the exact current data availability and supported inventory views.</p>
+          <div className="flex flex-wrap gap-3 pt-1">
+            <button onClick={() => navigate('/client-admin/statistics/network')} className="text-sm text-cyan-400 hover:text-cyan-300">Network inventory →</button>
+            <button onClick={() => navigate('/client-admin/statistics/performance')} className="text-sm text-cyan-400 hover:text-cyan-300">Performance telemetry →</button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
