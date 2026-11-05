@@ -213,7 +213,7 @@ async def delete_user(
     user_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.users.manage"))
 ):
     """Delete user (platform admin only)"""
     result = await db.execute(select(User).where(User.id == user_id))
