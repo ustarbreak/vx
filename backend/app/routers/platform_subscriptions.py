@@ -123,6 +123,10 @@ async def create_subscription(
     trial_end = _utc(body.trial_ends_at) if body.trial_ends_at else None
     if period_end <= period_start:
         raise HTTPException(422, "current_period_end must be after current_period_start")
+    if body.status == "trialing" and body.plan_code != "trial":
+        raise HTTPException(422, "Trial subscriptions must use the trial plan code")
+    if body.plan_code == "trial" and body.status != "trialing":
+        raise HTTPException(422, "The trial plan requires trialing status")
     if body.status == "trialing" and trial_end is None:
         raise HTTPException(422, "trial_ends_at is required for a trialing subscription")
     if body.status != "trialing" and trial_end is not None:
