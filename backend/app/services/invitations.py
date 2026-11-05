@@ -123,7 +123,7 @@ async def create_invitation(body: InviteCreate, current_user: User = Depends(get
         action="invitation.created" if not pending else "invitation.resent",
         resource="Invitation", resource_id=str(inv.id),
         details="Invitation for " + email + " with role " + role,
-        outcome="success" if sent else "pending",
+        outcome="success",
     ))
     await db.commit()
     await db.refresh(inv)
@@ -156,6 +156,8 @@ async def resend(inv_id: int, current_user: User = Depends(require_role("client_
         raise HTTPException(404, "Invitation not found")
     if current_user.role != "platform_admin" and inv.org_id != current_user.org_id:
         raise HTTPException(403, "Cross-tenant access denied")
+    if inv.status not in ("pending", "sent"):
+        raise HTTPException(409, "Only pending or previously sent invitations can be resent")
     sent = await _send_activation(db, inv, inv.org_id, current_user.email)
     await db.commit()
     return {"ok": sent, "status": inv.status, "error": inv.error or None}
