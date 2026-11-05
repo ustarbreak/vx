@@ -7,9 +7,17 @@ from app.database import get_db
 from app.models import Entitlement, Organization, User, AuditLog, TenantServiceGrant
 from app.schemas import EntitlementCreate, EntitlementUpdate, EntitlementResponse
 from app.core.security import get_current_user
-from app.core.platform_rbac import require_permission, has_permission, is_platform_role
+from app.core.platform_rbac import has_permission, is_platform_role
 
 router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
+
+async def _require_billing_scope(user: User, org_id: int, db: AsyncSession, permission: str) -> None:
+    if user.role == "platform_admin":
+        return
+    if not is_platform_role(user.role) or not await has_permission(user, permission, db, org_id=org_id):
+        raise HTTPException(403, "Billing permission required for this tenant scope")
+
+
 
 
 @router.get("/graph")
@@ -181,7 +189,7 @@ async def create_entitlement(
     entitlement_data: EntitlementCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_permission("platform.billing.manage"))
+    current_user: User = Depends(get_current_user)
 ):
     """Create entitlement (platform admin only)"""
     # Check if organization exists
@@ -193,6 +201,7 @@ async def create_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    await _require_billing_scope(current_user, org.id, db, "platform.billing.manage")
     
     # Check if entitlement already exists
     result = await db.execute(
@@ -253,6 +262,7 @@ async def update_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entitlement not found"
         )
+    await _require_billing_scope(current_user, entitlement.org_id, db, "platform.billing.manage")
     
     # Track old state for audit
     old_enabled = entitlement.enabled
@@ -308,6 +318,7 @@ async def delete_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entitlement not found"
         )
+    await _require_billing_scope(current_user, entitlement.org_id, db, "platform.billing.manage")
     
     # Log audit before deletion
     audit_log = AuditLog(
