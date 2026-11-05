@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from sqlalchemy import or_
 from app.models import (
     User, SnmpCredential, DiscoveryScan, DiscoveredDevice, Organization,
@@ -30,35 +31,70 @@ from app.services.discovery import schedule_scan, cancel_scheduled_scan, nmap_av
 router = APIRouter(prefix="/discovery", tags=["Auto-Discovery & SNMP"])
 
 
-def _scope_org(user: User, requested_org: int | None) -> int:
+async def _scope_org(user: User, requested_org: int | None, db: AsyncSession,
+                     permission: str = "platform.infrastructure.read") -> int | None:
     if user.role == "platform_admin":
-        if requested_org is None:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id required for platform admins")
         return requested_org
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, org_id=requested_org):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Infrastructure permission required for this scope")
+        return requested_org
+    if user.org_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "User has no tenant scope")
     if requested_org is not None and requested_org != user.org_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
-    if user.org_id is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "User has no organization")
     return user.org_id
+
+
+async def _ensure_infrastructure_scope(user: User, org_id: int, db: AsyncSession,
+                                       permission: str = "platform.infrastructure.read") -> None:
+    if user.role == "platform_admin":
+        return
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, org_id=org_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Infrastructure permission required for this tenant")
+        return
+    if user.org_id != org_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
+
+
+def _safe_credential(cred: SnmpCredential) -> dict:
+    return {
+        "id": cred.id, "org_id": cred.org_id, "name": cred.name, "version": cred.version,
+        "community": "********" if cred.community else None, "username": cred.username,
+        "auth_protocol": cred.auth_protocol,
+        "auth_passphrase": "********" if cred.auth_passphrase else None,
+        "priv_protocol": cred.priv_protocol,
+        "priv_passphrase": "********" if cred.priv_passphrase else None,
+        "port": cred.port, "created_at": cred.created_at,
+    }
 
 
 # ---------------------------------------------------------------------------
 # SNMP credentials — created by the client (or by us on their behalf) in Settings
 # ---------------------------------------------------------------------------
 @router.get("/snmp-credentials", response_model=list[SnmpCredentialResponse])
-async def list_credentials(current_user: User = Depends(get_current_user),
+async def list_credentials(org_id: int | None = Query(None),
+                           current_user: User = Depends(get_current_user),
                            db: AsyncSession = Depends(get_db)):
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Credential metadata requires an administrator role")
+    scope = await _scope_org(current_user, org_id, db, "platform.infrastructure.credentials.read")
     stmt = select(SnmpCredential).order_by(SnmpCredential.id)
-    if current_user.role != "platform_admin":
-        stmt = stmt.where(SnmpCredential.org_id == current_user.org_id)
-    return (await db.execute(stmt)).scalars().all()
+    if scope is not None:
+        stmt = stmt.where(SnmpCredential.org_id == scope)
+    return [_safe_credential(row) for row in (await db.execute(stmt)).scalars().all()]
 
 
 @router.post("/snmp-credentials", response_model=SnmpCredentialResponse, status_code=201)
 async def create_credential(body: SnmpCredentialCreate,
                             current_user: User = Depends(get_current_user),
                             db: AsyncSession = Depends(get_db)):
-    org = _scope_org(current_user, body.org_id)
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Credential administration requires an administrator role")
+    org = await _scope_org(current_user, body.org_id, db, "platform.infrastructure.credentials.manage")
+    if org is None:
+        raise HTTPException(422, "org_id is required to create a credential")
     if body.version in ("v1", "v2c") and not body.community:
         raise HTTPException(422, "community string required for SNMP v1/v2c")
     if body.version == "v3" and not body.username:
@@ -72,7 +108,7 @@ async def create_credential(body: SnmpCredentialCreate,
     db.add(cred)
     await db.commit()
     await db.refresh(cred)
-    return cred
+    return _safe_credential(cred)
 
 
 @router.delete("/snmp-credentials/{cred_id}", status_code=204)
@@ -81,8 +117,9 @@ async def delete_credential(cred_id: int, current_user: User = Depends(get_curre
     cred = (await db.execute(select(SnmpCredential).where(SnmpCredential.id == cred_id))).scalars().first()
     if not cred:
         raise HTTPException(404, "Credential not found")
-    if current_user.role != "platform_admin" and cred.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Credential administration requires an administrator role")
+    await _ensure_infrastructure_scope(current_user, cred.org_id, db, "platform.infrastructure.credentials.manage")
     await db.delete(cred)
     await db.commit()
 
@@ -91,11 +128,12 @@ async def delete_credential(cred_id: int, current_user: User = Depends(get_curre
 # Background network scans (nmap)
 # ---------------------------------------------------------------------------
 @router.get("/scans", response_model=list[ScanResponse])
-async def list_scans(current_user: User = Depends(get_current_user),
+async def list_scans(org_id: int | None = Query(None), current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
+    scope = await _scope_org(current_user, org_id, db, "platform.infrastructure.read")
     stmt = select(DiscoveryScan).order_by(DiscoveryScan.created_at.desc()).limit(50)
-    if current_user.role != "platform_admin":
-        stmt = stmt.where(DiscoveryScan.org_id == current_user.org_id)
+    if scope is not None:
+        stmt = stmt.where(DiscoveryScan.org_id == scope)
     return (await db.execute(stmt)).scalars().all()
 
 
@@ -105,7 +143,11 @@ MAX_SCAN_HOSTS = 1024   # engine cap (services.discovery.cidr_hosts) — scans s
 @router.post("/scans", response_model=ScanResponse, status_code=status.HTTP_202_ACCEPTED)
 async def start_scan(body: ScanCreate, current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
-    org = _scope_org(current_user, body.org_id)
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Scanning requires an administrator role")
+    org = await _scope_org(current_user, body.org_id, db, "platform.infrastructure.scan")
+    if org is None:
+        raise HTTPException(422, "org_id is required to start a scan")
     # --- explicit authorization gate --------------------------------------
     # A scan is an intrusive action; the operator must confirm the scope.
     if not body.authorized:
@@ -165,8 +207,9 @@ async def cancel_scan(scan_id: int, current_user: User = Depends(get_current_use
     scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
     if not scan:
         raise HTTPException(404, "Scan not found")
-    if current_user.role != "platform_admin" and scan.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Scan operation requires an administrator role")
+    await _ensure_infrastructure_scope(current_user, scan.org_id, db, "platform.infrastructure.scan")
     if scan.status not in ("queued", "running"):
         raise HTTPException(409, f"Scan already {scan.status} — nothing to cancel")
     scan.status = "cancelled"
@@ -184,8 +227,7 @@ async def scan_status(scan_id: int, current_user: User = Depends(get_current_use
     scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
     if not scan:
         raise HTTPException(404, "Scan not found")
-    if current_user.role != "platform_admin" and scan.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_infrastructure_scope(current_user, scan.org_id, db, "platform.infrastructure.read")
     return scan
 
 
@@ -196,8 +238,7 @@ async def scan_devices(scan_id: int, current_user: User = Depends(get_current_us
     scan = (await db.execute(select(DiscoveryScan).where(DiscoveryScan.id == scan_id))).scalars().first()
     if not scan:
         raise HTTPException(404, "Scan not found")
-    if current_user.role != "platform_admin" and scan.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_infrastructure_scope(current_user, scan.org_id, db, "platform.infrastructure.read")
     stmt = select(DiscoveredDevice).where(DiscoveredDevice.scan_id == scan_id)
     if snmp_only:
         stmt = stmt.where(DiscoveredDevice.snmp_match.is_(True))
@@ -236,7 +277,7 @@ class DeviceListResponse(BaseModel):
 
 
 @router.get("/devices")
-async def all_devices(current_user: User = Depends(get_current_user),
+async def all_devices(org_id: int | None = Query(None), current_user: User = Depends(get_current_user),
                       db: AsyncSession = Depends(get_db),
                       snmp_only: bool = Query(False),
                       q: str | None = Query(None, max_length=200),
@@ -254,11 +295,12 @@ async def all_devices(current_user: User = Depends(get_current_user),
       unknown   : probe exists but has never reported last_seen
     ('stale' sits between monitored/offline per STALE_AFTER; see thresholds.)
     """
+    scope = await _scope_org(current_user, org_id, db, "platform.infrastructure.read")
     stmt = select(DiscoveredDevice).order_by(DiscoveredDevice.created_at.desc())
     count_stmt = select(DiscoveredDevice)
-    if current_user.role != "platform_admin":
-        stmt = stmt.where(DiscoveredDevice.org_id == current_user.org_id)
-        count_stmt = count_stmt.where(DiscoveredDevice.org_id == current_user.org_id)
+    if scope is not None:
+        stmt = stmt.where(DiscoveredDevice.org_id == scope)
+        count_stmt = count_stmt.where(DiscoveredDevice.org_id == scope)
     if snmp_only:
         stmt = stmt.where(DiscoveredDevice.snmp_match.is_(True))
         count_stmt = count_stmt.where(DiscoveredDevice.snmp_match.is_(True))
@@ -326,8 +368,7 @@ async def device_detail(device_id: int, current_user: User = Depends(get_current
     dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
     if not dev:
         raise HTTPException(404, "Device not found")
-    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_infrastructure_scope(current_user, dev.org_id, db, "platform.infrastructure.read")
 
     # --- real monitoring match: probe by IP first, then by hostname ---------
     probe = None
@@ -397,8 +438,9 @@ async def import_device(device_id: int, current_user: User = Depends(get_current
     dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
     if not dev:
         raise HTTPException(404, "Device not found")
-    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Inventory import requires an administrator role")
+    await _ensure_infrastructure_scope(current_user, dev.org_id, db, "platform.infrastructure.import")
     dev.imported = True
     await db.commit()
     return {"ok": True, "ip": dev.ip}
@@ -426,8 +468,9 @@ async def _device_action(device_id: int, action: str, body: DeviceActionBody,
     dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
     if not dev:
         raise HTTPException(404, "Device not found")
-    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Device actions require an administrator role")
+    await _ensure_infrastructure_scope(current_user, dev.org_id, db, "platform.infrastructure.action")
 
     # Resolve the matching collector/probe with the SAME rule as device_detail:
     # probe by IP first, then hostname. No probe → no enforcement channel.
