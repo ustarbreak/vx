@@ -179,3 +179,16 @@ async def test_non_admin_cannot_list_or_resend_invitations(session_factory):
         resent = await client.post("/api/invitations/1/resend")
     assert listed.status_code == 403
     assert resent.status_code == 403
+
+
+
+@pytest.mark.asyncio
+async def test_accepted_invitation_cannot_be_resent(session_factory):
+    await seed(session_factory)
+    async with session_factory() as db:
+        db.add(Invitation(org_id=1, email="accepted@example.com", role="technician",
+                          token="accepted-token", status="accepted"))
+        await db.commit()
+    async with client_for(session_factory, 1) as client:
+        response = await client.post("/api/invitations/1/resend")
+    assert response.status_code == 409
