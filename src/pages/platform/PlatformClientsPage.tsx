@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Search, Eye, Edit, CheckCircle2, XCircle, Shield, Ban, Users, DollarSign, Key, FileText, Server, Activity, Copy, RefreshCw, Trash2, Plus, ExternalLink } from 'lucide-react';
 import { demoOrganizations, serviceCatalog } from '../../data/mockData';
 import { Organization, ServiceId, ServiceEntitlement } from '../../types';
-import { organizationsApi, ApiError } from '../../services/api';
+import { organizationsApi, entitlementsApi, ApiError } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
 import {
   demoApiKeys, demoLicenses, demoDevices, demoTechnicians, demoPlatformAudit,
 } from '../../data/demoWorld';
@@ -27,6 +28,8 @@ const DW_ORG_ID: Record<string, number> = {
 const dwOrgId = (orgId: string): number | null =>
   DW_ORG_ID[orgId] ?? (/^org-db-(\d+)$/.exec(orgId)?.[1] ? Number(/^org-db-(\d+)$/.exec(orgId)![1]) : null);
 
+type ManagedEntitlement = ServiceEntitlement & { backendId?: number };
+
 interface ClientApiKeyRow { key: string; label: string; createdAt: string; lastUsed: string; status: 'active' | 'revoked' }
 interface ClientLicenseRow { id: string; type: string; seats: number; endpoints: number; expiresAt: string; status: 'active' | 'expiring' | 'expired' }
 interface ClientDeviceRow { id: string; hostname: string; type: string; os: string; ip: string; status: 'online' | 'offline' | 'degraded'; lastSeen: string; agent: string; isProbe?: boolean }
@@ -34,6 +37,7 @@ interface ClientMemberRow { name: string; email: string; role: string; mfa: bool
 interface ClientActivityRow { time: string; action: string; detail: string; actor: string; type: 'system' | 'alert' | 'compliance' | 'auth' | 'ticket' | 'rule' | 'license' }
 
 const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoApiKeys
@@ -42,6 +46,7 @@ const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
 };
 
 const licenseFor = (org: Organization): ClientLicenseRow | null => {
+  if (!isDemoMode()) return null;
   const oid = dwOrgId(org.id);
   const lic = oid != null ? demoLicenses.find(l => l.orgId === oid) : undefined;
   if (lic) {
@@ -59,6 +64,7 @@ const licenseFor = (org: Organization): ClientLicenseRow | null => {
 };
 
 const devicesFor = (org: Organization): ClientDeviceRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(org.id);
   if (oid == null) return [];
   const rows = demoDevices.filter(d => d.orgId === oid).map(d => ({
@@ -78,6 +84,7 @@ const deviceCountFor = (org: Organization): number => {
 };
 
 const membersFor = (orgId: string): ClientMemberRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoTechnicians
@@ -89,6 +96,7 @@ const membersFor = (orgId: string): ClientMemberRow[] => {
 };
 
 const activityFor = (orgId: string): ClientActivityRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   const now = Date.now();
   const rel = (iso: string) => {
@@ -220,17 +228,25 @@ export default function PlatformClientsPage() {
   const [search, setSearch] = useState('');
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [activeTab, setActiveTab] = useState<'services' | 'devices' | 'members' | 'api-keys' | 'license' | 'activity'>('services');
-  const [entitlements, setEntitlements] = useState<Record<string, ServiceEntitlement[]>>(
+  const [entitlements, setEntitlements] = useState<Record<string, ManagedEntitlement[]>>(
     Object.fromEntries(demoOrganizations.map(o => [o.id, [...o.entitlements]]))
   );
   // Real tenants from the backend (POST/GET /api/organizations/) — merged with demo rows
   const [backendOrgs, setBackendOrgs] = useState<import('../../types').Organization[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
 
-  const loadOrgs = () => {
-    organizationsApi.list()
-      .then(list => setBackendOrgs(list.map(o => ({
-        id: `org-db-${o.id}`,
+  const loadOrgs = async () => {
+    if (isDemoMode()) {
+      setBackendOrgs([]);
+      setLoadError('');
+      return;
+    }
+    try {
+      const list = await organizationsApi.list();
+      const mapped = list.map(o => ({
+        id: 'org-db-' + o.id,
         dbId: o.id,
         name: o.name,
         tier: (o.tier as any) || 'sme',
@@ -246,35 +262,67 @@ export default function PlatformClientsPage() {
         planTier: o.plan_tier, endpointCount: o.endpoint_count, seatLimit: o.seat_limit,
         siemLimitGbDay: o.siem_limit_gb, billingCycle: o.billing_cycle, invoiceDisplay: o.monthly_invoice_display,
         entitlements: [],
-      } as unknown as import('../../types').Organization))))
-      .catch(() => setBackendOrgs([]));
+      } as unknown as import('../../types').Organization));
+      setBackendOrgs(mapped);
+      const settled = await Promise.allSettled(mapped.map(async org => {
+        const rows = await entitlementsApi.list(Number((org as any).dbId));
+        return [org.id, rows.map(row => ({
+          backendId: row.id,
+          serviceId: row.service_id as ServiceId,
+          enabled: row.enabled,
+          activatedAt: row.activated_at,
+          deactivatedAt: row.deactivated_at,
+          seatCount: row.seat_count,
+          notes: row.notes ?? undefined,
+        }))] as const;
+      }));
+      const values: [string, ManagedEntitlement[]][] = [];
+      for (const item of settled) {
+        if (item.status === 'fulfilled') values.push([item.value[0], item.value[1]]);
+      }
+      setEntitlements(previous => ({ ...previous, ...Object.fromEntries(values) }));
+      setLoadError(settled.some(item => item.status === 'rejected') ? 'La liste des tenants est chargée, mais certains entitlements sont indisponibles.' : '');
+    } catch (error) {
+      setBackendOrgs([]);
+      setLoadError(error instanceof ApiError ? error.message : 'Impossible de charger les tenants depuis le backend.');
+    }
   };
-  useEffect(() => { loadOrgs(); }, []);
+  useEffect(() => { void loadOrgs(); }, []);
 
   // entitlements state for backend orgs defaults to empty list
-  const getEntitlements = (orgId: string): ServiceEntitlement[] => entitlements[orgId] ?? [];
+  const getEntitlements = (orgId: string): ManagedEntitlement[] => entitlements[orgId] ?? [];
 
-  const allOrgs = [...demoOrganizations, ...backendOrgs.filter(b => !demoOrganizations.some(d => d.name.toLowerCase() === b.name.toLowerCase()))];
+  const allOrgs = isDemoMode() ? demoOrganizations : backendOrgs;
 
   const filtered = allOrgs.filter(o =>
     o.name.toLowerCase().includes(search.toLowerCase()) ||
     o.contactEmail.toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleEntitlement = (orgId: string, serviceId: ServiceId) => {
-    setEntitlements(prev => ({
-      ...prev,
-      [orgId]: (prev[orgId] ?? []).map(e =>
-        e.serviceId === serviceId
-          ? {
-              ...e,
-              enabled: !e.enabled,
-              activatedAt: !e.enabled ? new Date().toISOString().split('T')[0] : e.activatedAt,
-              deactivatedAt: !e.enabled ? null : new Date().toISOString().split('T')[0],
-            }
-          : e
-      ),
-    }));
+  const toggleEntitlement = async (orgId: string, serviceId: ServiceId) => {
+    setActionError('');
+    const current = getEntitlements(orgId).find(e => e.serviceId === serviceId);
+    if (isDemoMode()) {
+      setEntitlements(prev => ({
+        ...prev,
+        [orgId]: (prev[orgId] ?? []).map(e => e.serviceId === serviceId ? {
+          ...e, enabled: !e.enabled,
+          activatedAt: !e.enabled ? new Date().toISOString() : e.activatedAt,
+          deactivatedAt: !e.enabled ? null : new Date().toISOString(),
+        } : e),
+      }));
+      return;
+    }
+    if (!current?.backendId) {
+      setActionError('Aucun entitlement persistant n’existe pour ce service. Son activation doit être provisionnée par le workflow Billing/Plans.');
+      return;
+    }
+    try {
+      await entitlementsApi.update(current.backendId, { enabled: !current.enabled });
+      await loadOrgs();
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : 'La mise à jour de l’entitlement a échoué.');
+    }
   };
 
   return (
@@ -296,6 +344,8 @@ export default function PlatformClientsPage() {
         </button>
       </div>
 
+      {loadError && <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm text-rose-300">{loadError}</div>}
+      {actionError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{actionError}</div>}
       {showCreate && (
         <CreateOrgModal
           onClose={() => setShowCreate(false)}
@@ -497,9 +547,9 @@ export default function PlatformClientsPage() {
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="text-xs text-[var(--ic-muted)]">${service.basePrice}/mo</span>
-                            {isAvailable ? (
+                            {isAvailable && (isDemoMode() || !!ent?.backendId) ? (
                               <button
-                                onClick={() => toggleEntitlement(selectedOrg.id, service.id)}
+                                onClick={() => void toggleEntitlement(selectedOrg.id, service.id)}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                                   isEnabled
                                     ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20'
@@ -509,7 +559,7 @@ export default function PlatformClientsPage() {
                                 {isEnabled ? 'Disable' : 'Enable'}
                               </button>
                             ) : (
-                              <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--ic-surface-2)] text-[var(--ic-muted)]">N/A</span>
+                              <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--ic-surface-2)] text-[var(--ic-muted)]">{!isAvailable ? 'N/A' : isDemoMode() ? 'N/A' : 'Not provisioned'}</span>
                             )}
                           </div>
                         </div>
@@ -523,8 +573,8 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({deviceCountFor(selectedOrg)})</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
-                      Deploy Agent
+                    <button onClick={() => nav('/client-admin/agents')} className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
+                      Open Collection Agents
                     </button>
                   </div>
                   <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
@@ -578,8 +628,8 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">Organization Members</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
-                      Invite Member
+                    <button onClick={() => nav('/admin/tenants/' + String((selectedOrg as any).dbId ?? ''))} disabled={(selectedOrg as any).dbId == null} className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)] disabled:opacity-40">
+                      Open Tenant Detail
                     </button>
                   </div>
                   <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
@@ -610,7 +660,7 @@ export default function PlatformClientsPage() {
                           </tr>
                         ))}
                         {membersFor(selectedOrg.id).length === 0 && (
-                          <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">Aucun membre dans le demo world pour ce tenant — créez des utilisateurs depuis le backend.</td></tr>
+                          <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">{isDemoMode() ? 'Aucun membre dans le demo world pour ce tenant.' : 'La liste des membres en production n’est pas encore connectée à cette fiche. Consultez le module Team & Roles.'}</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -622,10 +672,7 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">API Keys</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)] flex items-center gap-2">
-                      <Key className="w-3.5 h-3.5" />
-                      Generate New Key
-                    </button>
+                    {isDemoMode() && <span className="text-xs text-[var(--ic-muted)]">Demo credentials are simulated</span>}
                   </div>
                   <div className="space-y-3">
                     {apiKeysFor(selectedOrg.id).map((apiKey, idx) => (
@@ -659,7 +706,7 @@ export default function PlatformClientsPage() {
                       </div>
                     ))}
                     {apiKeysFor(selectedOrg.id).length === 0 && (
-                      <p className="text-xs text-[var(--ic-muted)] py-6 text-center">Aucune clé API pour ce tenant dans le demo world.</p>
+                      <p className="text-xs text-[var(--ic-muted)] py-6 text-center">{isDemoMode() ? 'Aucune clé API pour ce tenant dans le demo world.' : 'Les clés API génériques ne sont pas exposées dans cette fiche. Les jetons d’enrôlement des agents se gèrent dans Collection Agents.'}</p>
                     )}
                   </div>
                 </div>
@@ -716,7 +763,7 @@ export default function PlatformClientsPage() {
                     </div>
                   )}
                   {!license && (
-                    <p className="text-xs text-[var(--ic-muted)] py-6 text-center">No license record for this organization.</p>
+                    <p className="text-xs text-[var(--ic-muted)] py-6 text-center">{isDemoMode() ? 'No license record for this organization.' : (selectedOrg.planTier ? 'Plan persisted: ' + selectedOrg.planTier + '. Expiration and renewal status are not exposed by the current backend API.' : 'No persisted plan/license record is available for this tenant.')}</p>
                   )}
                 </div>
                 );
@@ -726,6 +773,7 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">Recent Activity</h3>
                   <div className="space-y-2">
+                    {!isDemoMode() && <p className="text-xs text-[var(--ic-muted)] py-4">Le journal réel est disponible dans <button onClick={() => nav('/admin/audit')} className="text-cyan-400 underline">Platform Audit</button>. Aucun flux d’activité propre au tenant n’est encore connecté ici.</p>}
                     {activityFor(selectedOrg.id).map((log, i) => (
                       <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
