@@ -282,3 +282,62 @@ Still open before PA-01 acceptance:
 6. Finalize a complete permission matrix (capability × HTTP endpoint × resource scope × approval × audit) as the input to PA-02.
 
 **PA-01 remains open.** The green checks on the documentation PR validate the documentation change only; they do not establish that runtime tests or all audit tasks have passed. No product behavior has been changed in this audit branch.
+
+
+### PA01-F19 — Platform catalog and lifecycle endpoints are authenticated-only and feature-flagged
+
+Evidence:
+- `backend/app/platform/router.py` routes `/graph`, `/capabilities`, `/actions`, `/lifecycle`, and `/services/{service_id}/first-success`.
+- `backend/app/main.py` mounts platform catalog/jobs/UEBA routers only when `PLATFORM_CATALOG_ENABLED` is true.
+- `backend/app/core/config.py` defaults `PLATFORM_CATALOG_ENABLED=false` and `SERVICE_LIFECYCLE_ENABLED=false`.
+- `backend/tests/test_platform_catalog.py` verifies flag-off 404 behavior, authentication, action guardrails and lifecycle flags.
+
+Findings:
+- The inspected platform catalog endpoints use `get_current_user`, not platform role/capability checks.
+- The catalog router is absent entirely under default configuration; lifecycle writes separately return disabled when `SERVICE_LIFECYCLE_ENABLED=false`.
+- Existing tests cover authentication, feature-flag behavior and dangerous-action guardrails/four-eyes behavior, but do not establish the requested four-role Platform Admin RBAC.
+- **Risk:** authenticated tenant/partner users may reach platform catalog information/actions when the feature flag is enabled unless each handler's internal scope/guard is correct; frontend route presence is not proof of availability.
+- **Required action:** add explicit platform capabilities and tenant/resource scoping to every catalog read/action/lifecycle endpoint, including action approval and audit; test all four platform roles and tenant/partner roles both with flags on and off.
+
+### PA01-F20 — Database startup uses SQLAlchemy create_all; migration strategy must be explicit for RBAC schema changes
+
+Evidence: `backend/app/database.py` `init_db()` calls `Base.metadata.create_all`; `backend/app/models.py` User.role is a string field and no platform permission/profile/session model was found in the inspected model excerpt.
+
+Finding:
+- The application startup creates missing tables but `create_all` does not alter existing tables or safely migrate existing role data.
+- The new RBAC design will likely need permission/profile/assignment/scope/approval records and may need role normalization or account lifecycle changes.
+- **Risk:** shipping new authorization tables/constraints without an explicit production migration and backfill plan can leave deployed databases inconsistent with code.
+- **Required action:** identify the repository's authoritative migration process before PA-02 schema work; add forward migration, safe backfill for existing `platform_admin` accounts, rollback strategy and PostgreSQL migration tests. Do not rely on `create_all` to alter production schema.
+
+### PA01-F21 — Current tests exercise platform catalog guardrails, not the requested four-role authorization matrix
+
+Evidence: `backend/tests/test_platform_catalog.py` and search of backend test sources for platform authorization patterns.
+
+Findings:
+- Platform catalog tests verify authentication required, flag-gated mounting, dangerous action guardrails and distinct approver behavior.
+- Existing test files cover platform-admin cross-tenant access in selected domains (for example org topology, security map and entitlement graph).
+- No dedicated test suite was found for `platform_admin`, `platform_expert`, `platform_analyst`, and `platform_user` capability-by-capability authorization because those platform roles/permissions are not implemented.
+- **Required action:** PA-02 must introduce a role × permission × resource-scope test matrix, including direct API calls, cross-tenant attempts, self-elevation, approval separation, revoked sessions and default-deny behavior.
+
+### PA01-F22 — Global theme default is browser-local despite its platform-wide UI wording
+
+Evidence: `src/pages/platform-admin/InfracentraThemesPage.tsx` and its ThemeContext helper usage.
+
+Finding:
+- The UI copy says the selected default applies to new users/visitors, but the inspected page changes a frontend theme context and helper-managed platform default; it does not call a backend settings API.
+- **Risk:** a browser-local setting cannot reliably establish a global default across devices, users or deployments.
+- **Required action:** persist platform-wide theme default in backend settings with a dedicated permission and audit trail; keep preview/personal preference distinct.
+
+## PA-01 remaining work — precise closure criteria
+
+The source review now covers all currently identified Platform Admin pages and the principal connected backend router families. The audit is still not accepted as complete until these final evidence items are closed:
+
+- [ ] Inspect every handler in the registered backend routers that exposes platform-wide data or mutates global state, including user administration, invitations, channel settings, ticket operations, alerts/notifications, discovery and security-ops actions.
+- [ ] Complete the full action-to-endpoint matrix for every Platform Admin page control, including nested dialogs and secondary tabs.
+- [ ] Inspect the complete model inventory and repository migration mechanism; identify existing account/session invalidation capabilities and audit schema.
+- [ ] Verify all demo-mode route handlers for parity and explicit demo-only behavior; confirm Live Mode cannot silently fall back to fixtures.
+- [ ] Review the existing tests that touch platform-wide access and list the exact missing authorization tests.
+- [ ] Run the project test/build/lint/typecheck commands in a real checkout or wait for authoritative CI checks on the final audit commit; capture exact job names/results.
+- [ ] Publish the final PA-01 matrix and mark each item implemented/partial/missing/blocked with source and test evidence.
+
+**Status: PA-01 is materially advanced but remains open.** This document update does not change product code. PA-02 should not start until the user confirms the PA-01 audit PR is merged and the final audit closure criteria are satisfied, or explicitly authorizes a security-priority implementation ahead of audit closure.
