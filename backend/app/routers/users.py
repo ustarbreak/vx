@@ -185,6 +185,7 @@ async def create_user(
     )
     
     db.add(new_user)
+    await db.flush()  # assign the new user ID before writing the audit reference
 
     # Log audit
     audit_log = AuditLog(
@@ -223,6 +224,10 @@ async def delete_user(
             detail="User not found"
         )
     
+    # The Owner account is immutable and cannot be deleted through this endpoint.
+    if user.role == "platform_admin":
+        raise HTTPException(status_code=403, detail="The Owner account cannot be deleted")
+
     # Prevent self-deletion
     if user.id == current_user.id:
         raise HTTPException(
