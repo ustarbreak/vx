@@ -1318,3 +1318,43 @@ export const dashboardLayoutApi = {
     api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout, added_catalog: addedCatalog ?? [], order: order ?? [] }),
   del: (pageKey: string) => api.del<void>(`/dashboard/layout/${pageKey}`),
 };
+
+
+// ---------------------------------------------------------------------------
+// Platform RBAC — Owner-controlled staff roles and scoped permission grants.
+// Mirrors backend/app/routers/platform_access.py.
+// ---------------------------------------------------------------------------
+export type PlatformStaffRole = 'platform_admin' | 'platform_expert' | 'platform_analyst' | 'platform_user';
+export interface PlatformPermissionDto { key: string; description: string }
+export interface PlatformPermissionAssignmentDto {
+  id: number;
+  user_id: number;
+  permission_key: string;
+  effect: 'allow' | 'deny';
+  scope_type: 'global' | 'tenant' | 'partner';
+  scope_id: number | null;
+  granted_by: number;
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+}
+export interface PlatformStaffDto {
+  id: number; email: string; name: string; role: PlatformStaffRole;
+  status: string; auth_version: number; created_at: string | null;
+}
+export const platformAccessApi = {
+  me: () => api.get<{
+    user_id: number; role: PlatformStaffRole; owner: boolean;
+    permissions: PlatformPermissionDto[]; permission_catalog: PlatformPermissionDto[];
+  }>('/platform/access/me'),
+  staff: () => api.get<PlatformStaffDto[]>('/platform/access/users'),
+  assignments: (userId?: number) =>
+    api.get<PlatformPermissionAssignmentDto[]>(`/platform/access/assignments${userId ? `?user_id=${userId}` : ''}`),
+  createAssignment: (data: {
+    user_id: number; permission_key: string; effect: 'allow' | 'deny';
+    scope_type: 'global' | 'tenant' | 'partner'; scope_id?: number | null; expires_at?: string | null;
+  }) => api.post<PlatformPermissionAssignmentDto>('/platform/access/assignments', data),
+  revokeAssignment: (id: number) => api.del<void>(`/platform/access/assignments/${id}`),
+  updateRole: (userId: number, role: Exclude<PlatformStaffRole, 'platform_admin'>) =>
+    api.patch<{ id: number; role: PlatformStaffRole; auth_version: number }>(`/platform/access/users/${userId}/role`, { role }),
+};
