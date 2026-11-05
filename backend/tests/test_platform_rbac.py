@@ -354,3 +354,38 @@ async def test_platform_alert_and_notification_reads_require_owner_granted_scope
         assert alert_cross.status_code == 403
         assert notification_allowed.status_code == 200, notification_allowed.text
         assert notification_cross.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_security_ops_requests_require_owner_granted_tenant_scope(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.post("/api/security-ops/actions", json={
+            "service": "endpoint-protection", "action_id": "ep-isolate", "org_id": 1
+        })
+        assert denied.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        request_grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.security_ops.request",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        read_grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.security_ops.read",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert request_grant.status_code == 201, request_grant.text
+        assert read_grant.status_code == 201, read_grant.text
+
+    async with client_for(session_factory, 2, version=2) as expert:
+        allowed = await expert.post("/api/security-ops/actions", json={
+            "service": "endpoint-protection", "action_id": "ep-isolate",
+            "org_id": 1, "params": {"label": "Test isolation request"}
+        })
+        denied_cross = await expert.post("/api/security-ops/actions", json={
+            "service": "endpoint-protection", "action_id": "ep-isolate", "org_id": 2
+        })
+        history = await expert.get("/api/security-ops/tasks?org_id=1")
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["task"]["status"] == "manual"
+        assert denied_cross.status_code == 403
+        assert history.status_code == 200, history.text
