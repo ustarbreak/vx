@@ -226,7 +226,7 @@ async def queue_assign(pid: str, body: QueueAssignIn, request: Request,
                        db: AsyncSession = Depends(get_db),
                        current_user: User = Depends(get_current_user)):
     _rate_limit(f"assign:{current_user.id}", 30, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     children = await _children(db, org.id)
     org_ids = {c.id for c in children}
     team = await _team_emails(db, org.id)
@@ -259,7 +259,7 @@ async def add_handover(pid: str, body: HandoverIn, request: Request,
                        db: AsyncSession = Depends(get_db),
                        current_user: User = Depends(get_current_user)):
     _rate_limit(f"handover:{current_user.id}", 20, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     data = await _settings(db, org.id)
     note = {"id": f"HVO-{uuid.uuid4().hex[:8]}", "shift": body.shift, "content": body.content.strip(),
             "author": current_user.name or current_user.email, "created_at": _iso(_now())}
@@ -341,7 +341,7 @@ async def open_client_console(pid: str, body: ImpersonateIn, request: Request,
                               db: AsyncSession = Depends(get_db),
                               current_user: User = Depends(get_current_user)):
     _rate_limit(f"imp:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     children = await _children(db, org.id)
     target = next((c for c in children if c.id == body.client_org_id), None)
     if target is None:
@@ -388,7 +388,7 @@ async def close_client_console(pid: str, request: Request,
                                db: AsyncSession = Depends(get_db),
                                current_user: User = Depends(get_current_user)):
     _rate_limit(f"imp:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     children = await _children(db, org.id)
     ids = [c.id for c in children]
     res = await db.execute(select(TenantServiceGrant).where(
@@ -423,7 +423,7 @@ async def put_template(pid: str, tid: str, body: TemplateDefIn, request: Request
     _rate_limit(f"template:{current_user.id}", 20, 60)
     if not tid.replace("-", "").isalnum() or len(tid) > 40:
         raise HTTPException(422, "identifiant de template invalide")
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     data = await _settings(db, org.id)
     tpl = data.setdefault("templates", {})
     tpl[tid] = {"id": tid, "name": body.name,
@@ -448,7 +448,7 @@ async def apply_template(pid: str, tid: str, body: TemplateApplyIn, request: Req
                          db: AsyncSession = Depends(get_db),
                          current_user: User = Depends(get_current_user)):
     _rate_limit(f"template_apply:{current_user.id}", 5, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     children = await _children(db, org.id)
     child_ids = {c.id for c in children}
     if not set(body.target_client_ids) <= child_ids:
