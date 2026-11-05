@@ -40,6 +40,7 @@ import PlatformPartnersPage from './pages/platform/PlatformPartnersPage';
 import TenantDetailPage from './pages/platform/TenantDetailPage';
 import PlatformSettingsPage from './pages/platform-admin/PlatformSettingsPage';
 import PlatformAccessControlPage from './pages/platform-admin/PlatformAccessControlPage';
+import PlatformSubscriptionsPage from './pages/platform-admin/PlatformSubscriptionsPage';
 import InfracentraThemesPage from './pages/platform-admin/InfracentraThemesPage';
 import PackCustomizerPage from './pages/platform-admin/PackCustomizerPage';
 import ProjectsPage from './pages/projects/ProjectsPage';
@@ -188,6 +189,7 @@ function AppRoutes() {
         <Route path="admin/tenants/:orgId" element={<TenantDetailPage />} />
         <Route path="admin/settings" element={<PlatformSettingsPage />} />
         <Route path="admin/access-control" element={<PlatformAccessControlPage />} />
+        <Route path="admin/subscriptions" element={<PlatformSubscriptionsPage />} />
         <Route path="admin/themes" element={<InfracentraThemesPage />} />
         <Route path="admin/packs" element={<PackCustomizerPage />} />
         <Route path="admin/integrations" element={<PlatformIntegrationsPage />} />

@@ -1383,7 +1383,7 @@ export interface PlatformDashboardOverview {
   commercial: {
     enabled_entitlements: number;
     enabled_services_in_use: number;
-    subscriptions: { available: boolean; reason: string };
+    subscriptions: { available: boolean; current?: number; active?: number; trialing?: number; reason: string | null };
   };
   integrations: { total: number; active: number };
   infrastructure: { collector_probes: number; collector_probes_online: number; discovered_devices: number };
@@ -1393,4 +1393,29 @@ export interface PlatformDashboardOverview {
 }
 export const platformDashboardApi = {
   overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
+};
+
+
+// ---------------------------------------------------------------------------
+// Platform subscription lifecycle — records contract terms, not payments.
+// ---------------------------------------------------------------------------
+export interface PlatformSubscriptionDto {
+  id: number; org_id: number; plan_code: 'starter' | 'pro' | 'souverain' | 'custom' | 'trial';
+  status: string; billing_interval: 'monthly' | 'annual'; currency: 'MAD' | 'EUR' | 'USD';
+  amount: string; starts_at: string; current_period_start: string; current_period_end: string;
+  trial_ends_at: string | null; cancelled_at: string | null; is_current: boolean;
+  provider: string; provider_subscription_id: string | null; change_reason: string | null;
+  created_by: number; created_at: string | null;
+}
+export const platformSubscriptionsApi = {
+  list: (orgId?: number) => api.get<PlatformSubscriptionDto[]>(`/platform/subscriptions${orgId ? `?org_id=${orgId}` : ''}`),
+  catalog: (orgId?: number) => api.get<{ plans: { code: string; services: string[] }[]; source: string }>(`/platform/subscriptions/catalog${orgId ? `?org_id=${orgId}` : ''}`),
+  create: (data: {
+    org_id: number; plan_code: PlatformSubscriptionDto['plan_code'];
+    status: 'active' | 'trialing' | 'past_due' | 'paused';
+    billing_interval: 'monthly' | 'annual'; currency: PlatformSubscriptionDto['currency'];
+    amount: string; starts_at: string; current_period_start: string; current_period_end: string;
+    trial_ends_at?: string | null; provider?: string; change_reason?: string;
+  }) => api.post<PlatformSubscriptionDto>('/platform/subscriptions', data),
+  cancel: (id: number) => api.post<PlatformSubscriptionDto>(`/platform/subscriptions/${id}/cancel`),
 };

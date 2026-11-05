@@ -231,6 +231,39 @@ class PlanEntitlementV2(Base):
     __table_args__ = (UniqueConstraint("plan", "service_id", name="uq_plan_service_v2"),)
 
 
+class PlatformSubscription(Base):
+    """Auditable subscription lifecycle record; no payment is processed here."""
+    __tablename__ = "platform_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    plan_code = Column(String(16), nullable=False, index=True)  # starter|pro|souverain|custom|trial
+    status = Column(String(16), nullable=False, default="active", index=True)
+    billing_interval = Column(String(16), nullable=False, default="monthly")  # monthly|annual
+    currency = Column(String(3), nullable=False, default="MAD")
+    amount = Column(Numeric(12, 2), nullable=False, default=0)
+    starts_at = Column(DateTime(timezone=True), nullable=False)
+    current_period_start = Column(DateTime(timezone=True), nullable=False)
+    current_period_end = Column(DateTime(timezone=True), nullable=False)
+    trial_ends_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    is_current = Column(Boolean, nullable=False, default=True, index=True)
+    provider = Column(String(32), nullable=False, default="manual")
+    provider_subscription_id = Column(String(160), nullable=True)
+    change_reason = Column(String(300), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index(
+            "uq_platform_subscription_current_org", "org_id", unique=True,
+            postgresql_where=text("is_current = true"),
+            sqlite_where=text("is_current = 1"),
+        ),
+    )
+
+
 class UpsellEvent(Base):
     __tablename__ = "upsell_events"
 

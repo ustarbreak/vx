@@ -13,7 +13,7 @@ from app.core.platform_rbac import require_permission
 from app.database import get_db
 from app.models import (
     AgentProbe, Alert, AuditLog, DiscoveredDevice, Entitlement, Integration,
-    Notification, Organization, PlaybookRun, SecurityOpsTask, Ticket, User,
+    Notification, Organization, PlatformSubscription, PlaybookRun, SecurityOpsTask, Ticket, User,
 )
 
 router = APIRouter(prefix="/platform/dashboard", tags=["Platform Dashboard"])
@@ -60,6 +60,9 @@ async def platform_dashboard_overview(
     enabled_services = await _distinct_count(
         db, Entitlement, Entitlement.service_id, Entitlement.enabled.is_(True)
     )
+    subscriptions_current = await _count(db, PlatformSubscription, PlatformSubscription.is_current.is_(True))
+    subscriptions_active = await _count(db, PlatformSubscription, PlatformSubscription.status == 'active')
+    subscriptions_trialing = await _count(db, PlatformSubscription, PlatformSubscription.status == 'trialing')
 
     probes_total = await _count(db, AgentProbe)
     probes_online = await _count(db, AgentProbe, AgentProbe.status == "online")
@@ -89,8 +92,11 @@ async def platform_dashboard_overview(
             "enabled_entitlements": enabled_entitlements,
             "enabled_services_in_use": enabled_services,
             "subscriptions": {
-                "available": False,
-                "reason": "The current schema has no subscription record. Entitlements are not represented as subscriptions."
+                "available": True,
+                "current": subscriptions_current,
+                "active": subscriptions_active,
+                "trialing": subscriptions_trialing,
+                "reason": None
             }
         },
         "integrations": {"total": integrations_total, "active": integrations_active},

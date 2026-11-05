@@ -15,7 +15,7 @@ import {
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
-  MonitorSmartphone
+  MonitorSmartphone, CreditCard
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
 
@@ -242,6 +242,7 @@ export default function Layout() {
         { to: '/reports', icon: FileBarChart2, label: 'Reports' },
         { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
         { to: '/admin/access-control', icon: ShieldCheck, label: 'Access Control' },
+        { to: '/admin/subscriptions', icon: CreditCard, label: 'Subscriptions & Billing' },
       ],
     },
     {

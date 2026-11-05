@@ -5,7 +5,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -20,7 +20,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.core.platform_rbac import has_permission
-from app.models import Organization, User, SnmpCredential
+from app.models import Organization, User, SnmpCredential, PlanEntitlementV2
 from app.main import app
 
 @pytest_asyncio.fixture()
@@ -537,9 +537,76 @@ async def test_platform_dashboard_uses_database_aggregates_and_dashboard_permiss
         assert payload["partners"]["total"] == 1
         assert payload["users"]["total"] == 5
         assert payload["infrastructure"]["collector_probes"] == 0
-        assert payload["commercial"]["subscriptions"]["available"] is False
-        assert "not represented as subscriptions" in payload["commercial"]["subscriptions"]["reason"]
+        assert payload["commercial"]["subscriptions"]["available"] is True
+        assert payload["commercial"]["subscriptions"]["current"] == 0
 
     async with client_for(session_factory, 5) as tenant:
         denied = await tenant.get("/api/platform/dashboard/overview")
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_subscription_lifecycle_is_persisted_and_audited(session_factory):
+    now = datetime.now(timezone.utc)
+    trial_end = now + timedelta(days=14)
+    period_end = now + timedelta(days=30)
+    async with session_factory() as db:
+        db.add_all([
+            PlanEntitlementV2(plan="pro", service_id="analytics", included=True),
+            PlanEntitlementV2(plan="trial", service_id="analytics", included=True),
+        ])
+        await db.commit()
+
+    async with client_for(session_factory, 1) as owner:
+        catalog = await owner.get("/api/platform/subscriptions/catalog")
+        assert catalog.status_code == 200, catalog.text
+        assert any(p["code"] == "pro" for p in catalog.json()["plans"])
+
+        created = await owner.post("/api/platform/subscriptions", json={
+            "org_id": 1, "plan_code": "trial", "status": "trialing",
+            "billing_interval": "monthly", "currency": "MAD", "amount": "0",
+            "starts_at": now.isoformat(), "current_period_start": now.isoformat(),
+            "current_period_end": period_end.isoformat(), "trial_ends_at": trial_end.isoformat(),
+            "provider": "manual", "change_reason": "PA-06 lifecycle test"
+        })
+        assert created.status_code == 201, created.text
+        subscription = created.json()
+        assert subscription["is_current"] is True
+        assert subscription["status"] == "trialing"
+        assert subscription["provider"] == "manual"
+
+        listed = await owner.get("/api/platform/subscriptions?org_id=1")
+        assert listed.status_code == 200
+        assert any(item["id"] == subscription["id"] for item in listed.json())
+
+        cancelled = await owner.post(f"/api/platform/subscriptions/{subscription['id']}/cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["status"] == "cancelled"
+        assert cancelled.json()["is_current"] is False
+
+    from sqlalchemy import select
+    from app.models import AuditLog
+    async with session_factory() as db:
+        org = await db.get(Organization, 1)
+        assert org.plan_tier == "STARTER"
+        assert org.trial is False
+        actions = (await db.execute(
+            select(AuditLog.action).where(AuditLog.org_id == 1)
+        )).scalars().all()
+        assert "subscription.created" in actions
+        assert "subscription.cancelled" in actions
+
+
+@pytest.mark.asyncio
+async def test_platform_user_cannot_read_or_manage_billing_subscriptions(session_factory):
+    async with client_for(session_factory, 4) as staff:
+        read = await staff.get("/api/platform/subscriptions")
+        create = await staff.post("/api/platform/subscriptions", json={
+            "org_id": 1, "plan_code": "starter", "status": "active",
+            "billing_interval": "monthly", "currency": "MAD", "amount": "0",
+            "starts_at": datetime.now(timezone.utc).isoformat(),
+            "current_period_start": datetime.now(timezone.utc).isoformat(),
+            "current_period_end": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+        })
+        assert read.status_code == 403
+        assert create.status_code == 403
