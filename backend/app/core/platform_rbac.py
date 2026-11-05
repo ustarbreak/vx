@@ -78,6 +78,11 @@ async def has_permission(user: User, permission: str, db: AsyncSession,
     ))).scalars().all()
     matching = []
     for row in rows:
+        expires_at = row.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at is not None and expires_at <= now:
+            continue
         if row.scope_type == "global":
             matching.append(row)
         elif row.scope_type == "tenant" and org_id is not None and row.scope_id == org_id:
@@ -89,10 +94,8 @@ async def has_permission(user: User, permission: str, db: AsyncSession,
         return False
     if any(row.effect == "allow" for row in matching):
         return True
-    # Default grants are platform-global only. Resource-scoped access requires
-    # an explicit Owner grant so an analyst cannot inherit arbitrary tenant scope.
-    if org_id is not None or partner_id is not None:
-        return False
+    # Role defaults are platform-wide grants for the explicitly listed actions.
+    # Additional permissions require an Owner grant, optionally scoped to a tenant/partner.
     return permission in ROLE_DEFAULTS.get(user.role, set())
 
 def require_permission(permission: str):
