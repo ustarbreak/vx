@@ -242,6 +242,7 @@ export default function Layout() {
         { to: '/reports', icon: FileBarChart2, label: 'Reports' },
         { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
         { to: '/admin/access-control', icon: ShieldCheck, label: 'Access Control' },
+        { to: '/admin/subscriptions', icon: CreditCard, label: 'Subscriptions & Billing' },
       ],
     },
     {
