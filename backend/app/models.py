@@ -1270,3 +1270,23 @@ class ServiceLifecycleState(Base):
     connected_at = Column(String(40))
     first_success_at = Column(String(40))
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PlatformPermissionAssignment(Base):
+    """Owner-managed, auditable permission override for one platform staff user."""
+    __tablename__ = "platform_permission_assignments"
+    __table_args__ = (
+        Index("ix_platform_perm_user_key", "user_id", "permission_key"),
+        Index("ix_platform_perm_scope", "scope_type", "scope_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission_key = Column(String(120), nullable=False)
+    effect = Column(String(8), nullable=False, default="allow")  # allow|deny
+    scope_type = Column(String(16), nullable=False, default="global")  # global|tenant|partner
+    scope_id = Column(Integer, nullable=True)
+    granted_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
