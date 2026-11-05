@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Wrench, CheckCircle, AlertTriangle, Clock } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const PATCH_GROUPS: ActionGroup[] = [
@@ -65,6 +67,8 @@ interface Patch {
 }
 
 export default function PatchManagementPage() {
+  const navigate = useNavigate();
+  const { patchId } = useParams<{ patchId: string }>();
   const [patches, setPatches] = useState<Patch[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -95,6 +99,24 @@ export default function PatchManagementPage() {
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
+
+
+  const selectedPatch = patchId ? patches.find((patch) => patch.id === patchId) : undefined;
+  if (patchId) return (
+    <SecurityRecordDetail backPath="/client-admin/patch-management" service="patch-management" serviceTitle="Patch Management"
+      recordId={patchId} recordType="Patch deployment" subtitle={selectedPatch ? selectedPatch.name : "Patch"}
+      severity={selectedPatch?.severity} status={selectedPatch?.status} sourceLabel="Tenant patch inventory feed"
+      fields={selectedPatch ? [
+        { label: "Affected device", value: selectedPatch.device }, { label: "Severity", value: selectedPatch.severity },
+        { label: "Status", value: selectedPatch.status }, { label: "Released", value: new Date(selectedPatch.releasedAt).toLocaleString() },
+        { label: "Installed", value: selectedPatch.installedAt ? new Date(selectedPatch.installedAt).toLocaleString() : "Not recorded" },
+      ] : []}
+      groups={PATCH_GROUPS}
+      contextParams={selectedPatch ? { device: selectedPatch.device, patch: selectedPatch.id, reason: "Patch review " + selectedPatch.id + " for " + selectedPatch.device } : {}}
+      recommendations={["Confirm patch applicability and vendor advisory for the affected product version.","Review endpoint health, disk space, dependencies and backup status.","Use a test ring or pilot group before broad deployment.","Schedule installation within the approved maintenance window and confirm reboot impact.","Verify installation from endpoint inventory and re-scan for the original vulnerability."]}
+      notFound={!selectedPatch}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -151,7 +173,7 @@ export default function PatchManagementPage() {
           </thead>
           <tbody>
             {patches.map((patch) => (
-              <tr key={patch.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
+              <tr key={patch.id} onClick={() => navigate('/client-admin/patch-management/' + encodeURIComponent(patch.id))} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] cursor-pointer">
                 <td className="py-3 px-4 text-[var(--ic-heading)]">{patch.name}</td>
                 <td className="py-3 px-4 text-blue-400 cursor-pointer hover:text-blue-300">{patch.device}</td>
                 <td className="py-3 px-4">

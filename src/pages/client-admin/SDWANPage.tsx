@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Network, Activity, CheckCircle, AlertTriangle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const SDWAN_VENDORS = ['fortinet', 'cisco', 'paloalto', 'velocloud', 'watchguard'];
@@ -71,6 +72,7 @@ interface SDWANAlert {
 
 export default function SDWANPage() {
   const navigate = useNavigate();
+  const { alertId } = useParams<{ alertId: string }>();
   const [alerts, setAlerts] = useState<SDWANAlert[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -94,6 +96,26 @@ export default function SDWANPage() {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
 
+
+  const selectedAlert = alertId ? alerts.find((alert) => alert.id === alertId) : undefined;
+  if (alertId) return (
+    <SecurityRecordDetail
+      backPath="/client-admin/sd-wan" service="sd-wan" serviceTitle="SD-WAN"
+      recordId={alertId} recordType="Network event" subtitle={selectedAlert ? selectedAlert.type : "SD-WAN event"}
+      severity={selectedAlert?.severity} status={selectedAlert?.status}
+      sourceLabel="Tenant SD-WAN feed"
+      fields={selectedAlert ? [
+        { label: "Site", value: selectedAlert.site }, { label: "Link / tunnel", value: selectedAlert.link },
+        { label: "Event type", value: selectedAlert.type }, { label: "Detected", value: new Date(selectedAlert.timestamp).toLocaleString() },
+        { label: "Ticket linked", value: selectedAlert.ticketCreated ? "Yes" : "No" },
+      ] : []}
+      groups={SDWAN_GROUPS}
+      contextParams={selectedAlert ? { site: selectedAlert.site, reason: "SD-WAN " + selectedAlert.type + " on " + selectedAlert.site + " / " + selectedAlert.link } : {}}
+      recommendations={["Verify whether the event affects one circuit, one site or the wider overlay.","Compare packet loss, latency and jitter against the configured SLA.","Inspect tunnel health, routing preference and recent edge configuration changes.","Validate failover path and application steering before changing routes.","Record the impact and obtain change approval before disruptive tunnel or rebalance actions."]}
+      notFound={!selectedAlert}
+    />
+  );
+
   return (
     <div className="p-6 space-y-6">
       {/* T7.3 honest-labeling pass: SD-WAN is a scaffold — vendor APIs not wired. */}
@@ -110,28 +132,28 @@ export default function SDWANPage() {
         <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
           <div className="flex items-center justify-between mb-2">
             <Network className="w-6 h-6 text-blue-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">12</span>
+            <span className="text-2xl font-bold text-[var(--ic-heading)]">{new Set(alerts.map((a) => a.site)).size}</span>
           </div>
           <p className="text-gray-400 text-sm">Total Sites</p>
         </div>
         <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
           <div className="flex items-center justify-between mb-2">
             <CheckCircle className="w-6 h-6 text-green-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">10</span>
+            <span className="text-2xl font-bold text-[var(--ic-heading)]">{alerts.filter((a) => a.status === 'resolved').length}</span>
           </div>
           <p className="text-gray-400 text-sm">Healthy</p>
         </div>
         <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
           <div className="flex items-center justify-between mb-2">
             <AlertTriangle className="w-6 h-6 text-yellow-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">1</span>
+            <span className="text-2xl font-bold text-[var(--ic-heading)]">{alerts.filter((a) => a.status === 'investigating').length}</span>
           </div>
           <p className="text-gray-400 text-sm">Degraded</p>
         </div>
         <div className="bg-[var(--ic-surface)] rounded-xl p-6 border border-[var(--ic-border)]">
           <div className="flex items-center justify-between mb-2">
             <AlertTriangle className="w-6 h-6 text-red-400" />
-            <span className="text-2xl font-bold text-[var(--ic-heading)]">1</span>
+            <span className="text-2xl font-bold text-[var(--ic-heading)]">{alerts.filter((a) => a.status === 'active').length}</span>
           </div>
           <p className="text-gray-400 text-sm">Down</p>
         </div>

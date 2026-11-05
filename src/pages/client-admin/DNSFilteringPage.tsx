@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Globe, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const DNS_GROUPS: ActionGroup[] = [
@@ -64,6 +66,8 @@ interface DNSRule {
 }
 
 export default function DNSFilteringPage() {
+  const navigate = useNavigate();
+  const { ruleId } = useParams<{ ruleId: string }>();
   const [rules, setRules] = useState<DNSRule[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -94,6 +98,24 @@ export default function DNSFilteringPage() {
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
+
+
+  const selectedRule = ruleId ? rules.find((rule) => rule.id === ruleId) : undefined;
+  if (ruleId) return (
+    <SecurityRecordDetail backPath="/client-admin/dns-filtering" service="dns-filtering" serviceTitle="DNS Filtering"
+      recordId={ruleId} recordType="DNS policy rule" subtitle={selectedRule ? selectedRule.domain : "DNS rule"}
+      status={selectedRule?.action} sourceLabel="Tenant DNS resolver feed"
+      fields={selectedRule ? [
+        { label: "Domain", value: selectedRule.domain }, { label: "Category", value: selectedRule.category },
+        { label: "Policy action", value: selectedRule.action }, { label: "Query hits", value: selectedRule.hits },
+        { label: "Last hit", value: selectedRule.lastHit ? new Date(selectedRule.lastHit).toLocaleString() : "No recorded hit" },
+      ] : []}
+      groups={DNS_GROUPS}
+      contextParams={selectedRule ? { domain: selectedRule.domain, reason: "Review DNS policy " + selectedRule.id + " for " + selectedRule.domain } : {}}
+      recommendations={["Confirm whether the domain is business-required or malicious.","Inspect DNS query history, resolver and client scope before changing policy.","Check registration, passive DNS and threat-intelligence reputation.","Review false-positive impact and allow-list exceptions.","Record approval and rollback plan before changing tenant-wide filtering."]}
+      notFound={!selectedRule}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -150,7 +172,7 @@ export default function DNSFilteringPage() {
           </thead>
           <tbody>
             {rules.map((rule) => (
-              <tr key={rule.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
+              <tr key={rule.id} onClick={() => navigate('/client-admin/dns-filtering/' + encodeURIComponent(rule.id))} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] cursor-pointer">
                 <td className="py-3 px-4 text-[var(--ic-heading)] font-mono">{rule.domain}</td>
                 <td className="py-3 px-4 text-gray-300">{rule.category}</td>
                 <td className="py-3 px-4">

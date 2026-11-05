@@ -250,11 +250,16 @@ function AppRoutes() {
         <Route path="client-admin/vulnerability-scanning" element={<VulnerabilityScanningPage />} />
         <Route path="client-admin/vulnerability-scanning/:vulnId" element={<VulnerabilityScanningPage />} />
         <Route path="client-admin/patch-management" element={<PatchManagementPage />} />
+        <Route path="client-admin/patch-management/:patchId" element={<PatchManagementPage />} />
         <Route path="client-admin/backup-dr" element={<BackupDRPage />} />
+        <Route path="client-admin/backup-dr/:jobId" element={<BackupDRPage />} />
         <Route path="client-admin/soar" element={<SOARPage />} />
         <Route path="client-admin/dns-filtering" element={<DNSFilteringPage />} />
+        <Route path="client-admin/dns-filtering/:ruleId" element={<DNSFilteringPage />} />
         <Route path="client-admin/firewall-mgmt" element={<FirewallManagementPage />} />
+        <Route path="client-admin/firewall-mgmt/:ruleId" element={<FirewallManagementPage />} />
         <Route path="client-admin/vpn-gateway" element={<VPNGatewayPage />} />
+        <Route path="client-admin/vpn-gateway/:connectionId" element={<VPNGatewayPage />} />
         <Route path="client-admin/architecture" element={<ArchitectureDiagram />} />
         
         {/* Customer Retention Features */}

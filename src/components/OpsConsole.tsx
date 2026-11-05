@@ -3,10 +3,10 @@
 // host, run scan, extract syslog/SNMP/OID, launch playbook…), opens a small
 // parameter modal when an action needs inputs, executes through
 // src/services/securityOps.ts and shows the engine output in a console panel.
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Play, Terminal, Download, X, Loader2, Zap, Shield, Mail, Cloud, Globe, Lock,
+  Play, Terminal, Download, X, Loader2, Zap, Shield, Mail, Cloud, Globe, Lock, Clock,
   Wifi, Network, Scan, Wrench, Database, Search, FileText, Eye, AlertTriangle,
   Ban, RefreshCw, Upload, Radio, Activity, Calendar, History, Link2, BookOpen,
   CheckCircle, ChevronDown, ExternalLink, Cpu, Server, Timer, Layers, ListChecks,
@@ -14,6 +14,8 @@ import {
 import {
   ActionGroup, SecurityActionDef, RunResult, runSecurityAction, downloadActionLog,
 } from '../services/securityOps';
+import { api } from '../services/api';
+import { isDemoMode } from '../services/demoMode';
 
 const ICONS: Record<string, React.ComponentType<any>> = {
   Zap, Shield, Mail, Cloud, Globe, Lock, Wifi, Network, Scan, Wrench, Database,
@@ -32,6 +34,8 @@ interface Props {
   logHeader?: string;
 }
 
+interface SecurityOpsTask { uid: string; service: string; action_id: string; label: string; vendor?: string | null; status: string; reason: string; requested_by: string; created_at: string; }
+
 export default function OpsConsole({ service, title, groups, contextParams, logHeader }: Props) {
   const navigate = useNavigate();
   const [pending, setPending] = useState<{ action: SecurityActionDef; fields: { name: string; label: string; placeholder?: string; options?: string[]; default?: string }[] } | null>(null);
@@ -40,6 +44,17 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
   const [results, setResults] = useState<RunResult[]>([]);
   const [showOutput, setShowOutput] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [taskHistory, setTaskHistory] = useState<SecurityOpsTask[]>([]);
+  const [historyState, setHistoryState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+
+  const refreshTaskHistory = async () => {
+    if (isDemoMode()) { setTaskHistory([]); setHistoryState('ready'); return; }
+    try {
+      const rows = await api.get<SecurityOpsTask[]>('/security-ops/tasks?service=' + encodeURIComponent(service) + '&limit=30');
+      setTaskHistory(Array.isArray(rows) ? rows : []); setHistoryState('ready');
+    } catch { setTaskHistory([]); setHistoryState('unavailable'); }
+  };
+  useEffect(() => { void refreshTaskHistory(); }, [service]);
 
   const lastResult = results[0];
 
@@ -177,6 +192,40 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
           )}
         </div>
       )}
+
+      <div className="border-t border-[var(--ic-border)] px-6 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-[var(--ic-heading)]">Persisted action history</h3>
+            <p className="mt-1 text-xs text-gray-500">Tenant-scoped backend records. Manual means requested and audited, not executed on a device.</p>
+          </div>
+          <button onClick={() => void refreshTaskHistory()} className="text-xs text-cyan-400 hover:text-cyan-300">Refresh</button>
+        </div>
+        {isDemoMode() ? (
+          <p className="mt-3 text-xs text-fuchsia-300">Demo Mode · actions are simulated locally; no live backend task history is queried.</p>
+        ) : historyState === 'loading' ? (
+          <p className="mt-3 text-xs text-gray-500">Loading task history…</p>
+        ) : historyState === 'unavailable' ? (
+          <p className="mt-3 text-xs text-amber-300">Task history is unavailable. Check the backend connection and your tenant permissions.</p>
+        ) : taskHistory.length === 0 ? (
+          <p className="mt-3 text-xs text-gray-500">No recorded actions for this service yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead><tr className="text-gray-500 border-b border-[var(--ic-border)]"><th className="py-2 pr-3">Task</th><th className="py-2 pr-3">Action</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Requested by</th><th className="py-2">Created</th></tr></thead>
+              <tbody>{taskHistory.map((task) => (
+                <tr key={task.uid} className="border-b border-[var(--ic-border)]/60">
+                  <td className="py-2 pr-3 font-mono text-cyan-300">{task.uid}</td>
+                  <td className="py-2 pr-3 text-gray-300">{task.label || task.action_id}</td>
+                  <td className="py-2 pr-3"><span className="rounded bg-amber-500/10 px-2 py-1 text-amber-300">{task.status}</span></td>
+                  <td className="py-2 pr-3 text-gray-400">{task.requested_by}</td>
+                  <td className="py-2 text-gray-400">{new Date(task.created_at).toLocaleString()}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Parameter modal */}
       {pending && (
