@@ -167,17 +167,21 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
           </div>
           {showOutput && (
             <div className="px-6 pb-4 space-y-3 max-h-72 overflow-y-auto">
-              {results.map((r, i) => (
-                <div key={i} className={`rounded-lg border p-3 ${r.ok && r.source === 'live' ? 'border-emerald-500/30 bg-emerald-500/5' : r.ok && r.source === 'demo' ? 'border-fuchsia-500/30 bg-fuchsia-500/5' : 'border-red-500/30 bg-red-500/5'}`}>
+              {results.map((r, i) => {
+                const manual = r.source === 'live' && /status=manual|No device command was sent|technician execution is required/i.test(r.message + ' ' + (r.output || ''));
+                const tone = !r.ok ? 'border-red-500/30 bg-red-500/5' : manual ? 'border-amber-500/30 bg-amber-500/5' : r.source === 'demo' ? 'border-fuchsia-500/30 bg-fuchsia-500/5' : 'border-emerald-500/30 bg-emerald-500/5';
+                const label = !r.ok ? 'failed' : manual ? 'recorded · manual' : r.source === 'demo' ? 'simulated' : 'confirmed';
+                return (
+                <div key={i} className={`rounded-lg border p-3 ${tone}`}>
                   <div className="flex items-center gap-2 text-xs mb-1">
-                    {r.ok && r.source === 'live' ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-red-400" />}
+                    {!r.ok ? <AlertTriangle className="w-4 h-4 text-red-400" /> : manual ? <Clock className="w-4 h-4 text-amber-400" /> : <CheckCircle className={`w-4 h-4 ${r.source === 'demo' ? 'text-fuchsia-400' : 'text-emerald-400'}`} />}
                     <span className="font-semibold text-[var(--ic-heading)]">{r.actionId}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${r.source === 'demo' ? 'bg-fuchsia-500/20 text-fuchsia-300' : r.ok ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>{r.source}</span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${!r.ok ? 'bg-red-500/20 text-red-300' : manual ? 'bg-amber-500/20 text-amber-300' : r.source === 'demo' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-emerald-500/20 text-emerald-300'}`}>{label}</span>
                   </div>
                   <p className="text-xs text-gray-300 mb-1">{r.message}</p>
                   {r.output && <pre className="text-[11px] leading-relaxed font-mono text-gray-400 whitespace-pre-wrap">{r.output}</pre>}
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>
