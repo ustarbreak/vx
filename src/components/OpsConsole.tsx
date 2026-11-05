@@ -77,12 +77,13 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
       setResults((prev) => [res, ...prev].slice(0, 12));
       setPending(null);
     } catch (error) {
-      setResults((prev) => [{
+      const failedResult: RunResult = {
         ok: false,
         actionId: a.id,
         source: 'live',
         message: `Action failed before confirmation. Nothing should be assumed to have executed. ${error instanceof Error ? error.message : 'Unknown error'}`,
-      }, ...prev].slice(0, 12));
+      };
+      setResults((prev) => [failedResult, ...prev].slice(0, 12));
     } finally {
       setRunning(false);
     }
