@@ -136,7 +136,7 @@ export default function NetworkStatistics() {
   if (!demo) {
     if (loading) return <div className="p-8 text-sm text-[var(--ic-muted)]">Loading discovered network devices…</div>;
     const networkDevices = liveDevices.filter(device =>
-      ['router', 'switch', 'firewall', 'ap', 'gateway'].includes(String(device.device_type ?? '').toLowerCase()),
+      ['router', 'switch', 'firewall', 'ap', 'access_point', 'wireless_ap', 'gateway', 'sd-wan', 'sdwan', 'vpn'].includes(String(device.device_type ?? '').toLowerCase()),
     );
     const online = networkDevices.filter(device => ['online', 'active'].includes(String(device.status).toLowerCase())).length;
     const offline = networkDevices.filter(device => String(device.status).toLowerCase() === 'offline').length;
