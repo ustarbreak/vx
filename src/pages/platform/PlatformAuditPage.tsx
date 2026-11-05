@@ -154,8 +154,8 @@ export default function PlatformAuditPage() {
     const cell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
     const columns = ['timestamp', 'actor_name', 'actor_role', 'org_id', 'action', 'resource', 'resource_id', 'outcome', 'ip_address', 'details'];
     const csv = [columns, ...rows2.map(row => columns.map(key => (row as any)[key]))]
-      .map(row => row.map(cell).join(',')).join('\\r\\n');
-    const blob = new Blob(['\\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
+      .map(row => row.map(cell).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
