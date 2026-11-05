@@ -92,8 +92,8 @@ export default function PlatformServiceCatalogPage() {
       service.included_in_plans.join(';'),
       JSON.stringify(service.lifecycle), JSON.stringify(service.integrations),
     ])];
-    const csv = rows.map(row => row.map(cell).join(',')).join('\\r\\n');
-    const url = URL.createObjectURL(new Blob(['\\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+    const csv = rows.map(row => row.map(cell).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'infracentra-service-catalog.csv'; anchor.click();
     URL.revokeObjectURL(url);
