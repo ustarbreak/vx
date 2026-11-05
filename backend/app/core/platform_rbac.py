@@ -38,7 +38,6 @@ PERMISSION_CATALOG = {
     "platform.tenants.read": "View global tenant directory and tenant details",
     "platform.tenants.manage": "Create, update, suspend and delete tenants",
     "platform.users.read": "View platform staff directory",
-    "platform.users.manage": "Create, update and deactivate platform staff",
     "platform.access.manage": "Manage platform roles, profiles and permission grants",
     "platform.audit.read": "View global platform audit records",
     "platform.partners.read": "View partner program and partner records",
