@@ -14,13 +14,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.platform_rbac import has_permission
 from app.database import get_db
-from app.models import AuditLog, Organization, PlatformSubscription, PlanEntitlementV2, User
+from app.models import AuditLog, Organization, PlatformSubscription, PlanEntitlementV2, PlatformSetting, User
 from app.core.security import get_current_user
 
 router = APIRouter(prefix="/platform/subscriptions", tags=["Platform Subscriptions"])
 
 PLAN_CODES = {"starter", "pro", "souverain", "custom", "trial"}
 STATUSES = {"active", "trialing", "past_due", "paused"}
+
+
+async def _active_service_ids(db: AsyncSession) -> set[str] | None:
+    setting = await db.get(PlatformSetting, "platform.service_catalog")
+    if setting is None or not isinstance(setting.value_json, dict):
+        return None
+    return {service_id for service_id, config in setting.value_json.items()
+            if not isinstance(config, dict) or config.get("active", True) is True}
 
 
 class SubscriptionCreate(BaseModel):
@@ -89,9 +97,10 @@ async def subscription_catalog(
     rows = (await db.execute(
         select(PlanEntitlementV2).order_by(PlanEntitlementV2.plan, PlanEntitlementV2.service_id)
     )).scalars().all()
+    active_ids = await _active_service_ids(db)
     catalog: dict[str, list[str]] = {}
     for row in rows:
-        if row.included:
+        if row.included and (active_ids is None or row.service_id in active_ids):
             catalog.setdefault(row.plan, []).append(row.service_id)
     return {"plans": [{"code": code, "services": services} for code, services in sorted(catalog.items())],
             "source": "plan_entitlements_v2"}
@@ -114,8 +123,11 @@ async def create_subscription(
             PlanEntitlementV2.included.is_(True),
         )
     )).scalars().all()
+    active_ids = await _active_service_ids(db)
+    if active_ids is not None:
+        plan_rows = [row for row in plan_rows if row.service_id in active_ids]
     if not plan_rows:
-        raise HTTPException(422, "The selected plan has no persisted service catalog entries")
+        raise HTTPException(422, "The selected plan has no active persisted service catalog entries")
 
     starts = _utc(body.starts_at)
     period_start = _utc(body.current_period_start)
