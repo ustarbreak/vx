@@ -15,6 +15,8 @@ export default function PlatformServiceCatalogPage() {
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [health, setHealth] = useState<Record<string, { configured: boolean; reachable: boolean; reason?: string; engine?: string }>>({});
+  const [testing, setTesting] = useState('');
   const [search, setSearch] = useState('');
   const [availability, setAvailability] = useState<'all' | 'active' | 'inactive'>('all');
 
@@ -70,6 +72,33 @@ export default function PlatformServiceCatalogPage() {
     });
   };
 
+  const testConnection = async (service: PlatformServiceCatalogItem) => {
+    setTesting(service.service_id); setError(''); setNotice('');
+    try {
+      const result = await platformServiceCatalogApi.status(service.service_id);
+      setHealth(current => ({ ...current, [service.service_id]: result }));
+      setNotice(result.reachable ? `${service.label} : connexion confirmée.` : `${service.label} : ${result.reason ?? 'service non joignable'}`);
+    } catch (e) {
+      setHealth(current => ({ ...current, [service.service_id]: { configured: false, reachable: false, reason: e instanceof Error ? e.message : 'Échec du test' } }));
+      setError(e instanceof Error ? e.message : 'Le test de connexion a échoué.');
+    } finally { setTesting(''); }
+  };
+
+  const exportCsv = () => {
+    const columns = ['service_id','label','engine','active','included_in_plans','lifecycle','integrations'];
+    const cell = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+    const rows = [columns, ...filteredServices.map(service => [
+      service.service_id, service.label, service.engine, service.active,
+      service.included_in_plans.join(';'),
+      JSON.stringify(service.lifecycle), JSON.stringify(service.integrations),
+    ])];
+    const csv = rows.map(row => row.map(cell).join(',')).join('\\r\\n');
+    const url = URL.createObjectURL(new Blob(['\\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = 'infracentra-service-catalog.csv'; anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   const planRows = useMemo(() => (data?.plans ?? []).map(p => ({ ...p, label: PLAN_LABELS[p.code] ?? p.code })), [data]);
 
   if (isDemoMode()) return <main className="p-6"><div className="max-w-3xl rounded-xl border border-amber-500/30 bg-amber-500/5 p-5"><ShieldAlert className="mb-2 h-6 w-6 text-amber-400" /><h1 className="text-xl font-semibold text-[var(--ic-heading)]">Catalogue de services — PA-10</h1><p className="mt-2 text-sm text-[var(--ic-muted)]">{error}</p></div></main>;
@@ -78,7 +107,7 @@ export default function PlatformServiceCatalogPage() {
     <main className="space-y-6 p-4 lg:p-6">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div><h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--ic-heading)]"><Layers3 className="h-6 w-6 text-cyan-400" /> Catalogue des services & entitlements</h1><p className="mt-1 text-sm text-[var(--ic-muted)]">Configuration persistée, matrice des plans et état opérationnel issu des intégrations et du cycle de vie.</p></div>
-        <button onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)]"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Actualiser</button>
+        <div className="flex gap-2"><button onClick={exportCsv} disabled={filteredServices.length === 0} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)] disabled:opacity-50">Exporter CSV</button><button onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)]"><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Actualiser</button></div>
       </header>
 
       {error && <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm text-rose-300">{error}</div>}
@@ -108,7 +137,8 @@ export default function PlatformServiceCatalogPage() {
             <div><p className="mb-1 text-xs font-medium text-[var(--ic-muted)]">Intégrations enregistrées</p><div className="flex flex-wrap gap-2">{Object.entries(selectedService.integrations).length ? Object.entries(selectedService.integrations).map(([key,value]) => <span key={key} className="rounded bg-[var(--ic-surface-2)] px-2 py-1 text-xs text-[var(--ic-text)]">{key}: {value}</span>) : <span className="text-xs text-[var(--ic-muted)]">Aucune intégration enregistrée</span>}</div></div>
             <div><p className="mb-1 text-xs font-medium text-[var(--ic-muted)]">Plans incluant ce service</p><p className="text-sm text-[var(--ic-text)]">{selectedService.included_in_plans.map(p => PLAN_LABELS[p] ?? p).join(', ') || 'Aucun plan'}</p></div>
             <p className="text-xs text-[var(--ic-muted)]">Endpoints exposés : {selectedService.endpoints.join(', ') || 'aucun'}</p>
-            <div className="flex flex-wrap gap-2"><button disabled={saving === selectedService.service_id} onClick={() => void updateService(selectedService,{active:!selectedService.active})} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)] disabled:opacity-50">{saving === selectedService.service_id ? 'Enregistrement…' : selectedService.active ? 'Désactiver le service' : 'Réactiver le service'}</button>{selectedService.docs && <a href={selectedService.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-cyan-300">Documentation <ExternalLink className="h-3 w-3" /></a>}</div>
+            {health[selectedService.service_id] && <div className={`rounded-lg border p-3 text-xs ${health[selectedService.service_id].reachable ? 'border-emerald-500/30 text-emerald-300' : 'border-amber-500/30 text-amber-300'}`}>{health[selectedService.service_id].reachable ? 'Connecteur joignable' : health[selectedService.service_id].configured ? 'Connecteur configuré mais non joignable' : 'Connecteur non configuré'}{health[selectedService.service_id].reason ? ` — ${health[selectedService.service_id].reason}` : ''}</div>}
+            <div className="flex flex-wrap gap-2"><button disabled={testing === selectedService.service_id} onClick={() => void testConnection(selectedService)} className="rounded-lg border border-cyan-500/30 px-3 py-2 text-sm text-cyan-300 disabled:opacity-50">{testing === selectedService.service_id ? 'Test en cours…' : 'Tester la connexion'}</button><button disabled={saving === selectedService.service_id} onClick={() => void updateService(selectedService,{active:!selectedService.active})} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)] disabled:opacity-50">{saving === selectedService.service_id ? 'Enregistrement…' : selectedService.active ? 'Désactiver le service' : 'Réactiver le service'}</button>{selectedService.docs && <a href={selectedService.docs} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-cyan-300">Documentation <ExternalLink className="h-3 w-3" /></a>}</div>
           </div>}
         </div>
       </section>
