@@ -36,6 +36,7 @@ router = APIRouter(prefix="/security-ops", tags=["Security Ops"])
 SERVICE_PREFIXES: dict[str, str] = {
     "ep": "endpoint-protection",
     "mail": "email-security",
+    "em": "email-security",
     "cloud": "cloud-security",
     "dns": "dns-filtering",
     "fw": "firewall-mgmt",
@@ -47,6 +48,90 @@ SERVICE_PREFIXES: dict[str, str] = {
 }
 
 VALID_SERVICES = set(SERVICE_PREFIXES.values())
+
+# Exact dispatch allow-list mirrored from the ten Client Admin service pages.
+# Prefix validation alone is insufficient: arbitrary action IDs must be rejected.
+VALID_ACTIONS: dict[str, set[str]] = {
+    "endpoint-protection": {
+        "ep-isolate", "ep-release", "ep-agent-live-response", "ep-kill-process",
+        "ep-quarantine-file", "ep-snapshot", "ep-ioc-sweep", "ep-full-scan",
+        "ep-memory-scan", "ep-timeline", "ep-xdr-correlate", "ep-threat-intel",
+        "ep-push-policy", "ep-enable-arm", "ep-disable-macro", "ep-usb-control",
+        "ep-update-agents", "ep-pb-ransomware", "ep-pb-phish-host",
+        "ep-pb-auto-ticket", "ep-pb-reset-creds",
+    },
+    "email-security": {
+        "em-tenant-search", "em-trace-clicks", "em-mailbox-audit", "em-header-analysis",
+        "em-sandbox", "em-user-impact", "em-purge", "em-quarantine-release-review",
+        "em-blocklist", "em-revoke-links", "em-force-oauth-revoke", "em-reset-creds",
+        "em-correlate-endpoints", "em-correlate-dns", "em-correlate-fw", "em-open-tickets",
+        "em-pb-phishing", "em-pb-bec", "em-pb-malware-mail", "em-pb-awareness",
+        "em-push-policy", "em-enable-dmarc-enforce", "em-enable-timeofclick",
+        "em-authenticity-check",
+    },
+    "cloud-security": {
+        "cloud-detail", "cloud-timeline", "cloud-iam-path", "cloud-network-map",
+        "cloud-compliance", "cloud-baseline", "cloud-push-guardrail", "cloud-enable-drift",
+        "cloud-remediate", "cloud-snapshot-protect", "cloud-alerts-correlate",
+        "cloud-open-ticket", "cloud-asset-inventory", "cloud-anomalous-call",
+        "cloud-quarantine-wl", "cloud-revoke-keys", "cloud-close-public",
+        "cloud-pb-breach", "cloud-pb-miner",
+    },
+    "dns-filtering": {
+        "dns-scan-open-resolvers", "dns-scan-amplification", "dns-test-resolution",
+        "dns-trace-dnssec", "dns-zone-transfer", "dns-recursive-check", "dns-lookup-history",
+        "dns-whois-enrich", "dns-threatintel-enrich", "dns-resolve-all", "dns-similar-domains",
+        "dns-top-blocked", "dns-query-log-export", "dns-push-policy", "dns-add-blocklist",
+        "dns-remove-block", "dns-switch-upstream", "dns-enable-cache-locking",
+        "dns-pb-auto-block", "dns-pb-ticket-on-hit", "dns-pb-sinkhole",
+    },
+    "firewall-mgmt": {
+        "fw-critical-shadow", "fw-critical-anyany", "fw-critical-hitcount",
+        "fw-critical-expiring", "fw-critical-risk-score", "fw-trace-host",
+        "fw-denied-report", "fw-threat-match", "fw-config-backup-check",
+        "fw-extract-syslog", "fw-extract-traffic-log", "fw-snmp-poll", "fw-oid-walk",
+        "fw-netflow", "fw-support-log", "fw-push-block-ip", "fw-push-disable-rule",
+        "fw-push-harden-vpn", "fw-push-full-config", "fw-rollback",
+        "fw-pb-auto-block", "fw-pb-ticket-on-deny-burst", "fw-pb-nightly-audit",
+    },
+    "vpn-gateway": {
+        "vpn-list-sessions", "vpn-user-history", "vpn-split-tunnel-audit", "vpn-geo-anomaly",
+        "vpn-negotiation-log", "vpn-throughput", "vpn-terminate-session", "vpn-terminate-all",
+        "vpn-block-user", "vpn-force-rekey", "vpn-reset-cert", "vpn-push-policy",
+        "vpn-enable-mfa", "vpn-harden-crypto", "vpn-limit-sessions", "vpn-pb-bruteforce",
+        "vpn-pb-impossible-travel", "vpn-pb-down-alert",
+    },
+    "sd-wan": {
+        "sdwan-ts-packet-loss", "sdwan-ts-tunnel-down", "sdwan-ts-failover",
+        "sdwan-ts-app-routing", "sdwan-ts-zbfw", "sdwan-health-checks", "sdwan-member-stats",
+        "sdwan-tunnel-table", "sdwan-route-table", "sdwan-neighbor-cache",
+        "sdwan-support-bundle", "sdwan-push-sla", "sdwan-push-steering",
+        "sdwan-force-rebalance", "sdwan-clear-tunnels", "sdwan-pb-degrade",
+        "sdwan-pb-down", "sdwan-pb-nightly-quality",
+    },
+    "vuln-scanning": {
+        "vuln-scan-now", "vuln-scan-authenticated", "vuln-scan-external",
+        "vuln-rescan-device", "vuln-verify-fix", "vuln-sched-daily", "vuln-sched-weekly",
+        "vuln-sched-custom", "vuln-sched-list", "vuln-nvd-lookup", "vuln-mitre-map",
+        "vuln-ransomware-link", "vuln-poc-check", "vuln-history-export",
+        "vuln-create-ticket", "vuln-handoff-patch", "vuln-add-exposure-rule",
+        "vuln-ignore-risk",
+    },
+    "patch-management": {
+        "patch-collect-now", "patch-collect-schedule", "patch-outdated-report", "patch-eol-detect",
+        "patch-thirdparty", "patch-sched-daily", "patch-sched-weekly", "patch-sched-monthly",
+        "patch-sched-custom", "patch-deploy-critical", "patch-deploy-selected", "patch-test-ring",
+        "patch-retry-failed", "patch-uninstall", "patch-reboot", "patch-pb-auto",
+        "patch-pb-report", "patch-pb-ticket",
+    },
+    "backup-dr": {
+        "bk-connect-server", "bk-list-repos", "bk-agent-status", "bk-capacity-report",
+        "bk-sched-daily", "bk-sched-weekly", "bk-sched-monthly", "bk-sched-yearly",
+        "bk-run-now", "bk-retry-failed", "bk-verify", "bk-drill", "bk-log-export",
+        "bk-restore-file", "bk-restore-vm", "bk-instant-recovery", "bk-failover",
+    },
+}
+
 
 VENDOR_KEYS = {"fortinet", "cisco", "paloalto", "checkpoint", "opnsense", "velocloud", "watchguard"}
 
@@ -93,6 +178,8 @@ async def dispatch_action(
     if not action_id:
         raise HTTPException(status_code=422, detail="action_id is required.")
     expected = _expected_service(action_id)
+    if action_id not in VALID_ACTIONS.get(service, set()):
+        raise HTTPException(status_code=422, detail=f"Unsupported action '{action_id}' for service '{service}'.")
     if expected and expected != service:
         raise HTTPException(
             status_code=422,
