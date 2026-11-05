@@ -130,7 +130,7 @@ async def test_valid_dispatch_is_tenant_scoped_and_persisted(session_factory):
         assert own.status_code == 200
         assert len(own.json()) == 1
         assert own.json()[0]["org_id"] == 1
-        assert own.json()[0]["status"] == "queued"
+        assert own.json()[0]["status"] == "manual"
     async with client_for(session_factory, 2) as other:
         foreign = await other.get("/api/security-ops/tasks")
         assert foreign.status_code == 200
