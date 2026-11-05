@@ -32,7 +32,7 @@ async def overview(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    org_id = _scope_org(current_user, site_org_id)
+    org_id = await _scope_org(current_user, site_org_id, db, "platform.analytics.read")
     since_c, until_c = analytics.clamp_window(since, until)
 
     events = await analytics._event_stats(db, org_id, since_c, until_c)
