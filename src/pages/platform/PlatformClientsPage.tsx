@@ -570,8 +570,8 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">Monitored Devices ({deviceCountFor(selectedOrg)})</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
-                      Deploy Agent
+                    <button onClick={() => nav('/client-admin/agents')} className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
+                      Open Collection Agents
                     </button>
                   </div>
                   <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
@@ -625,8 +625,8 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">Organization Members</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)]">
-                      Invite Member
+                    <button onClick={() => nav('/admin/tenants/' + String((selectedOrg as any).dbId ?? ''))} disabled={(selectedOrg as any).dbId == null} className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)] disabled:opacity-40">
+                      Open Tenant Detail
                     </button>
                   </div>
                   <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
@@ -657,7 +657,7 @@ export default function PlatformClientsPage() {
                           </tr>
                         ))}
                         {membersFor(selectedOrg.id).length === 0 && (
-                          <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">Aucun membre dans le demo world pour ce tenant — créez des utilisateurs depuis le backend.</td></tr>
+                          <tr><td colSpan={5} className="px-4 py-6 text-center text-xs text-[var(--ic-muted)]">{isDemoMode() ? 'Aucun membre dans le demo world pour ce tenant.' : 'La liste des membres en production n’est pas encore connectée à cette fiche. Consultez le module Team & Roles.'}</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -669,10 +669,7 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-[var(--ic-text)]">API Keys</h3>
-                    <button className="px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-medium border border-[var(--ic-border)] flex items-center gap-2">
-                      <Key className="w-3.5 h-3.5" />
-                      Generate New Key
-                    </button>
+                    {isDemoMode() && <span className="text-xs text-[var(--ic-muted)]">Demo credentials are simulated</span>}
                   </div>
                   <div className="space-y-3">
                     {apiKeysFor(selectedOrg.id).map((apiKey, idx) => (
@@ -706,7 +703,7 @@ export default function PlatformClientsPage() {
                       </div>
                     ))}
                     {apiKeysFor(selectedOrg.id).length === 0 && (
-                      <p className="text-xs text-[var(--ic-muted)] py-6 text-center">Aucune clé API pour ce tenant dans le demo world.</p>
+                      <p className="text-xs text-[var(--ic-muted)] py-6 text-center">{isDemoMode() ? 'Aucune clé API pour ce tenant dans le demo world.' : 'Les clés API génériques ne sont pas exposées dans cette fiche. Les jetons d’enrôlement des agents se gèrent dans Collection Agents.'}</p>
                     )}
                   </div>
                 </div>
@@ -763,7 +760,7 @@ export default function PlatformClientsPage() {
                     </div>
                   )}
                   {!license && (
-                    <p className="text-xs text-[var(--ic-muted)] py-6 text-center">No license record for this organization.</p>
+                    <p className="text-xs text-[var(--ic-muted)] py-6 text-center">{isDemoMode() ? 'No license record for this organization.' : (selectedOrg.planTier ? 'Plan persisted: ' + selectedOrg.planTier + '. Expiration and renewal status are not exposed by the current backend API.' : 'No persisted plan/license record is available for this tenant.')}</p>
                   )}
                 </div>
                 );
@@ -773,6 +770,7 @@ export default function PlatformClientsPage() {
                 <div className="space-y-4">
                   <h3 className="text-sm font-semibold text-[var(--ic-text)]">Recent Activity</h3>
                   <div className="space-y-2">
+                    {!isDemoMode() && <p className="text-xs text-[var(--ic-muted)] py-4">Le journal réel est disponible dans <button onClick={() => nav('/admin/audit')} className="text-cyan-400 underline">Platform Audit</button>. Aucun flux d’activité propre au tenant n’est encore connecté ici.</p>}
                     {activityFor(selectedOrg.id).map((log, i) => (
                       <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
                         <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
