@@ -20,9 +20,8 @@ ROLE_DEFAULTS = {
     "platform_admin": {"*"},
     "platform_expert": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
-        "platform.audit.read", "platform.integrations.read", "platform.integrations.configure",
-        "platform.infrastructure.read", "platform.infrastructure.scan",
-        "platform.security_ops.request", "platform.services.read",
+        "platform.audit.read", "platform.integrations.read",
+        "platform.infrastructure.read", "platform.services.read",
     },
     "platform_analyst": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
