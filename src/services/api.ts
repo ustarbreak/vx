@@ -1349,6 +1349,10 @@ export const platformAccessApi = {
     assignments: PlatformPermissionAssignmentDto[];
   }>('/platform/access/me'),
   staff: () => api.get<PlatformStaffDto[]>('/platform/access/users'),
+  createStaff: (data: {
+    email: string; name: string; password: string;
+    role: Exclude<PlatformStaffRole, 'platform_admin'>;
+  }) => api.post<{ id: number; email: string; name: string; role: PlatformStaffRole; status: string; auth_version: number }>('/platform/access/users', data),
   assignments: (userId?: number) =>
     api.get<PlatformPermissionAssignmentDto[]>(`/platform/access/assignments${userId ? `?user_id=${userId}` : ''}`),
   createAssignment: (data: {
