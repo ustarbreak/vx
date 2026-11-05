@@ -213,10 +213,10 @@ async def dispatch_action(
         action_id=action_id,
         label=safe_params.get("label", "") or action_id,
         vendor=vendor,
-        status="queued",
-        reason=("Queued for the tenant's enrolled goinfra collector / device integration "
-                "on its next policy poll. If no channel covers this target, a technician "
-                "executes it manually (status flips to 'manual')."),
+        status="manual",
+        reason=("No security-ops task pickup/acknowledgement endpoint is currently wired "
+                "to consume this task. A technician must execute it with the vendor tool; "
+                "no command was sent to an endpoint."),
         params=safe_params,
         requested_by=current_user.email,
     )
@@ -240,12 +240,12 @@ async def dispatch_action(
     rendered = [f"[{ts}] task={uid} service={service} action={action_id}"]
     if vendor:
         rendered.append(f"vendor={vendor} — command batch rendered from the vendor catalog (dry-run diff staged)")
-    rendered.append("status=queued: awaiting collector/integration acknowledgement (no optimistic success shown)")
+    rendered.append("status=manual: no command was sent to a device; technician execution is required")
     return {
         "ok": True,
         "actionId": action_id,
         "source": "live",
-        "message": f"Dispatched \"{action_id}\" on {service} — recorded as {uid} in the audit trail.",
+        "message": f"Recorded \"{action_id}\" as manual task {uid} — no device command was sent.",
         "output": "\n".join(rendered),
         "task": {"uid": uid, "status": task.status},
     }

@@ -37,6 +37,7 @@ export interface RunResult {
   message: string;
   output?: string;
   source: 'demo' | 'live';
+  status?: 'queued' | 'manual' | 'failed' | 'simulated';
 }
 
 const SECURITY_ACTION_PATH = '/security-ops/actions';
@@ -88,7 +89,7 @@ export async function runSecurityAction(
   const payload = { service, action_id: action.id, vendor: action.vendor ?? null, params };
   const validationError = validateAction(service, action);
   if (validationError) {
-    return { ok: false, actionId: action.id, source: 'live', message: `Rejected: ${validationError}` };
+    return { ok: false, actionId: action.id, source: 'live', status: 'failed', message: `Rejected: ${validationError}` };
   }
   try {
     if (isDemoMode()) {
@@ -98,6 +99,7 @@ export async function runSecurityAction(
         ok: true,
         actionId: action.id,
         source: 'demo',
+        status: 'simulated',
         message: `Queued "${action.label}" on ${service} (simulated — Demo Mode). Task recorded in the platform audit trail.`,
         output: buildDemoOutput(service, action, params),
       };
@@ -107,6 +109,7 @@ export async function runSecurityAction(
       ok: res?.ok !== false,
       actionId: action.id,
       source: 'live',
+      status: res?.task?.status === 'queued' || res?.task?.status === 'manual' ? res.task.status : (res?.ok === false ? 'failed' : undefined),
       message: res?.message ?? `Dispatched "${action.label}" to the ${service} engine.`,
       output: typeof res?.output === 'string' ? res.output : JSON.stringify(res?.output ?? {}, null, 2),
     };
@@ -118,6 +121,7 @@ export async function runSecurityAction(
       ok: false,
       actionId: action.id,
       source: 'live',
+      status: 'failed',
       message: `Live dispatch failed — nothing was sent to any device. ${detail}`,
       output: '[live-error] No task confirmation was received from the backend.',
     };
