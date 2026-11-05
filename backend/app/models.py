@@ -642,6 +642,22 @@ class ProjectMilestone(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class ProjectRunbook(Base):
+    """Tenant-scoped project procedure checklist, distinct from executable SOAR playbooks."""
+    __tablename__ = "project_runbooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    phase = Column(String(80), default="Operations")
+    est_minutes = Column(Integer, default=0)
+    steps = Column(JSON, default=list)
+    created_by = Column(String(255), default="")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class ProjectAttachment(Base):
     """Documents that describe a project further: scope PDFs, diagrams,
     config files, images, text notes… Same storage model as ticket evidence
