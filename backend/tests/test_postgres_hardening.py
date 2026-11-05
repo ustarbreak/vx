@@ -21,7 +21,7 @@ Covers the previously SQLite-only evidence gaps:
       semantics on Postgres)
 
 STAGE 6A additions (outcome labeling):
-  M1 now asserts a single reachable head == d4e6f8a0b2c4 across the full migration DAG;
+  M1 now asserts a single reachable head == f8a0c2e4g6i8 across the full migration DAG;
   M3 executes the Stage 6A revision's real op.* code paths on Postgres and
      verifies its downgrade() removes ONLY outcome_labels.
 """
@@ -152,7 +152,7 @@ def test_m1_migration_graph_has_one_reachable_head():
 
     all_parents = {parent for revision in mods for parent in parents(revision)}
     heads = sorted(revision for revision in mods if revision not in all_parents)
-    assert heads == ["d4e6f8a0b2c4"], f"expected one migration head, got {heads}"
+    assert heads == ["f8a0c2e4g6i8"], f"expected one migration head, got {heads}"
 
     reachable = set()
     def visit(revision):
@@ -450,3 +450,42 @@ async def test_m3_stage6a_revision_ops_execute_on_postgres(engine):
                 "ix_outcome_labels_created_at"} <= idxs, idxs
         assert dropped == 0, "downgrade must remove outcome_labels"
         assert neighbor == 1, "downgrade must NOT touch historical tables"
+
+
+async def test_m5_platform_subscription_migration_upgrade_and_downgrade_postgres(engine):
+    """Exercise the PA-06 migration and its current-subscription uniqueness index."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import importlib.util
+
+    async with engine.connect() as conn:
+        tx = await conn.begin()
+
+        def exercise(sync_conn):
+            sync_conn.execute(sa.text("CREATE TABLE users (id SERIAL PRIMARY KEY)"))
+            sync_conn.execute(sa.text("CREATE TABLE organizations (id SERIAL PRIMARY KEY)"))
+            mc = MigrationContext.configure(connection=sync_conn, opts={"target_metadata": None})
+            spec = importlib.util.spec_from_file_location(
+                "rev_f8a0", os.path.join(os.path.dirname(__file__), "..",
+                "migrations", "versions", "f8a0c2e4g6i8_platform_subscriptions.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            with Operations.context(mc):
+                mod.upgrade()
+            tables = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "platform_subscriptions" in tables
+            cols = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='platform_subscriptions'"))}
+            assert {"org_id", "plan_code", "status", "current_period_end", "is_current"} <= cols
+            indexes = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT indexname FROM pg_indexes WHERE tablename='platform_subscriptions'"))}
+            assert "uq_platform_subscription_current_org" in indexes
+            with Operations.context(mc):
+                mod.downgrade()
+            tables_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "platform_subscriptions" not in tables_after
+
+        await conn.run_sync(exercise)
+        await tx.rollback()
