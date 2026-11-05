@@ -4,7 +4,7 @@ import {
   Shield, AlertTriangle, CheckCircle, XCircle, 
   Filter, Search, Clock, Server, Activity
 } from 'lucide-react';
-import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { fetchServiceLive } from '../../services/serviceData';
 import { useAuth } from '../../context/AuthContext';
 import { demoEndpointAlerts } from '../../data/demoWorld';
 import OpsConsole from '../../components/OpsConsole';
@@ -101,9 +101,14 @@ export default function EndpointProtectionPage() {
             : demoEndpointAlerts);
           setFeedState('demo');
         } else {
-          const live = await tryLiveFeed<EndpointAlert>('endpoint-protection');
-          setAlerts(live ?? []);
-          setFeedState(live ? 'live' : 'unavailable');
+          const result = await fetchServiceLive<EndpointAlert>('endpoint-protection');
+          if (result.source === 'live' && Array.isArray(result.records)) {
+            setAlerts(result.records);
+            setFeedState('live');
+          } else {
+            setAlerts([]);
+            setFeedState('unavailable');
+          }
         }
         setLoading(false);
       } catch (error) {
