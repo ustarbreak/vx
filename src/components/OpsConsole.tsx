@@ -75,11 +75,17 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
     try {
       const res = await runSecurityAction(service, a, params);
       setResults((prev) => [res, ...prev].slice(0, 12));
-      if (res.ok && res.source === 'live') await refreshTaskHistory();
       setPending(null);
     } catch (error) {
-      setResults((prev) => [{ ok: false, actionId: a.id, source: 'live', message: 'Action failed before confirmation. Nothing should be assumed to have executed. ' + (error instanceof Error ? error.message : 'Unknown error') }, ...prev].slice(0, 12));
-    } finally { setRunning(false); }
+      setResults((prev) => [{
+        ok: false,
+        actionId: a.id,
+        source: 'live',
+        message: `Action failed before confirmation. Nothing should be assumed to have executed. ${error instanceof Error ? error.message : 'Unknown error'}`,
+      }, ...prev].slice(0, 12));
+    } finally {
+      setRunning(false);
+    }
   };
 
   const toggleGroup = (t: string) => setExpanded((e) => ({ ...e, [t]: !e[t] }));
@@ -174,7 +180,7 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
                 return (
                 <div key={i} className={`rounded-lg border p-3 ${tone}`}>
                   <div className="flex items-center gap-2 text-xs mb-1">
-                    {!r.ok ? <AlertTriangle className="w-4 h-4 text-red-400" /> : manual ? <Clock className="w-4 h-4 text-amber-400" /> : <CheckCircle className={`w-4 h-4 ${r.source === 'demo' ? 'text-fuchsia-400' : 'text-emerald-400'}`} />}
+                    {!r.ok ? <AlertTriangle className="w-4 h-4 text-red-400" /> : manual ? <AlertTriangle className="w-4 h-4 text-amber-400" /> : <CheckCircle className={`w-4 h-4 ${r.source === 'demo' ? 'text-fuchsia-400' : 'text-emerald-400'}`} />}
                     <span className="font-semibold text-[var(--ic-heading)]">{r.actionId}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${!r.ok ? 'bg-red-500/20 text-red-300' : manual ? 'bg-amber-500/20 text-amber-300' : r.source === 'demo' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'bg-emerald-500/20 text-emerald-300'}`}>{label}</span>
                   </div>
