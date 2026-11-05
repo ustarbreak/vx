@@ -6,6 +6,8 @@ import {
   PieChart, Pie, Cell
 } from 'recharts';
 import { demoDevices, demoHash } from '../../data/demoWorld';
+import { isDemoMode } from '../../services/demoMode';
+import { discoveryApi } from '../../services/api';
 
 interface Device {
   id: string;
@@ -25,12 +27,16 @@ interface Device {
 
 export default function DeviceStatistics() {
   const navigate = useNavigate();
+  const demo = isDemoMode();
+  const [liveDevices, setLiveDevices] = useState<any[]>([]);
+  const [liveError, setLiveError] = useState('');
   const [timeRange, setTimeRange] = useState('24h');
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState<string>('all');
 
   useEffect(() => {
+    if (!demo) { setDevices([]); setLoading(false); return; }
     // Simulate API call to fetch devices
     const fetchDevices = async () => {
       try {
@@ -73,7 +79,19 @@ export default function DeviceStatistics() {
     }, 3000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [demo]);
+
+  useEffect(() => {
+    if (demo) return;
+    let active = true;
+    setLoading(true);
+    setLiveError('');
+    discoveryApi.devices()
+      .then(rows => { if (active) setLiveDevices(Array.isArray(rows) ? rows : []); })
+      .catch(error => { if (active) setLiveError(error instanceof Error ? error.message : 'Device inventory unavailable'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [demo]);
 
   const filteredDevices = filterType === 'all' 
     ? devices 
@@ -131,6 +149,59 @@ export default function DeviceStatistics() {
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
           <p className="mt-4 text-gray-400">Loading device statistics...</p>
         </div>
+      </div>
+    );
+  }
+
+  if (!demo) {
+    const liveFiltered = filterType === 'all'
+      ? liveDevices
+      : liveDevices.filter(device => String(device.device_type ?? '').toLowerCase() === filterType);
+    const online = liveDevices.filter(device => ['online', 'active'].includes(String(device.status).toLowerCase())).length;
+    const offline = liveDevices.filter(device => String(device.status).toLowerCase() === 'offline').length;
+    const other = liveDevices.length - online - offline;
+    return (
+      <div className="p-4 lg:p-6 space-y-6">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Device Inventory Statistics</h1>
+            <p className="text-sm text-[var(--ic-muted)] mt-1">Live discovered-device inventory. CPU, memory, disk and uptime telemetry are not exposed by the current discovery API.</p>
+          </div>
+          <select value={filterType} onChange={e => setFilterType(e.target.value)}
+            className="rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface)] px-3 py-2 text-sm text-[var(--ic-heading)]">
+            <option value="all">All device types</option>
+            {['server','endpoint','router','switch','firewall','printer','ap'].map(type => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </header>
+        {liveError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{liveError}</div>}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[['Discovered devices', liveDevices.length], ['Online', online], ['Offline', offline], ['Other / stale', other]].map(([label, value]) =>
+            <div key={label} className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+              <p className="text-xs text-[var(--ic-muted)]">{label}</p><p className="text-2xl font-bold text-[var(--ic-heading)] mt-1">{loading ? '…' : value}</p>
+            </div>)}
+        </div>
+        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-[var(--ic-muted)]">
+          Telemetry charts are intentionally omitted in Live Mode until collector CPU/memory/disk samples and timestamps are available. Inventory counts below are real backend records.
+        </div>
+        <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden">
+          <div className="p-4 border-b border-[var(--ic-border)] font-semibold text-[var(--ic-heading)]">Discovered devices ({liveFiltered.length})</div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
+              <thead><tr className="border-b border-[var(--ic-border)] text-xs text-[var(--ic-muted)] uppercase">
+                <th className="text-left p-3">Hostname</th><th className="text-left p-3">IP address</th><th className="text-left p-3">Type</th><th className="text-left p-3">Status</th><th className="text-left p-3">Last seen</th>
+              </tr></thead>
+              <tbody>{liveFiltered.map(device => <tr key={device.id} onClick={() => navigate('/client-admin/infrastructure/device/' + device.id)}
+                className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)] cursor-pointer">
+                <td className="p-3 text-[var(--ic-heading)]">{device.hostname || 'Unknown host'}</td>
+                <td className="p-3 font-mono text-xs text-[var(--ic-text)]">{device.ip || '—'}</td>
+                <td className="p-3 text-[var(--ic-text)] capitalize">{device.device_type || 'Unknown'}</td>
+                <td className="p-3 text-[var(--ic-text)]">{device.status || 'Unknown'}</td>
+                <td className="p-3 text-xs text-[var(--ic-muted)]">{device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Not reported'}</td>
+              </tr>)}
+              {!loading && !liveFiltered.length && <tr><td colSpan={5} className="p-8 text-center text-sm text-[var(--ic-muted)]">No discovered devices returned for this tenant.</td></tr>}
+            </tbody></table>
+          </div>
+        </section>
       </div>
     );
   }
