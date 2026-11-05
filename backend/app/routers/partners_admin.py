@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import PartnerUpdateIn, PartnerMigrateIn
-from app.core.security import require_role
+from app.core.platform_rbac import require_permission
 from app.services.pricing_engine import PRICING_CONFIG
 
 router = APIRouter(prefix="/partners", tags=["Partner Admin"])
@@ -57,7 +57,7 @@ async def _get_partner(pid: str, db: AsyncSession) -> Organization:
 async def update_partner(
     pid: str, body: PartnerUpdateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_permission("platform.partners.manage")),
 ):
     org = await _get_partner(pid, db)
     patch = body.model_dump(exclude_none=True)
@@ -89,7 +89,7 @@ async def update_partner(
 async def suspend_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_permission("platform.partners.manage")),
 ):
     org = await _get_partner(pid, db)
     org.status = "suspended" if org.status != "suspended" else "active"
@@ -103,7 +103,7 @@ async def suspend_partner(
 async def migrate_partner(
     pid: str, body: PartnerMigrateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_permission("platform.partners.manage")),
 ):
     """Repurposed (Phase 1): force a pricing_config partner tier instead of the
     old EUR Starter/Business/Scale plans. The override pins the license tier in
@@ -126,7 +126,7 @@ async def migrate_partner(
 async def delete_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_permission("platform.partners.manage")),
 ):
     org = await _get_partner(pid, db)
     children = (await db.execute(select(Organization).where(Organization.parent_org_id == org.id))).scalars().all()
