@@ -39,8 +39,12 @@ async def get_service_graph(
         target_org = org_id or current_user.org_id
         if not target_org:
             raise HTTPException(status_code=400, detail="org_id required for platform admins without an organization")
+    elif is_platform_role(current_user.role):
+        if org_id is None or not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(status_code=403, detail="Billing read permission required for this tenant scope")
+        target_org = org_id
     else:
-        if org_id and org_id != current_user.org_id:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
             raise HTTPException(status_code=403, detail="Cannot read another organization's graph")
         target_org = current_user.org_id
 
@@ -53,6 +57,7 @@ async def get_service_graph(
 @router.get("/chain/{service_id}")
 async def get_service_chain(
     service_id: str,
+    org_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -61,9 +66,17 @@ async def get_service_chain(
     it — computed on the tenant's real entitlement rows."""
     from app.services.service_graph import SERVICE_DEPENDENCY_RULES
 
-    org_id = current_user.org_id
-    if current_user.role == "platform_admin" and not org_id:
-        raise HTTPException(status_code=400, detail="Platform admin must query via /graph?org_id=")
+    if current_user.role == "platform_admin":
+        org_id = org_id or current_user.org_id
+    elif is_platform_role(current_user.role):
+        if org_id is None or not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(status_code=403, detail="Billing read permission required for this tenant scope")
+    else:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
+            raise HTTPException(status_code=403, detail="Cannot read another organization's service chain")
+        org_id = current_user.org_id
+    if org_id is None:
+        raise HTTPException(status_code=400, detail="org_id is required for platform staff without a tenant")
 
     rows = (await db.execute(
         select(Entitlement).where(Entitlement.org_id == org_id)
