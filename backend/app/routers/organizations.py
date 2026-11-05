@@ -96,7 +96,7 @@ async def update_organization(
     org_data: OrganizationUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.tenants.manage"))
 ):
     """Update organization (platform admin only)"""
     result = await db.execute(select(Organization).where(Organization.id == org_id))
@@ -139,7 +139,7 @@ async def delete_organization(
     org_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.tenants.manage"))
 ):
     """Delete organization (platform admin only)"""
     result = await db.execute(select(Organization).where(Organization.id == org_id))
