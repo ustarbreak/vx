@@ -119,7 +119,7 @@ async def test_project_runbooks_are_tenant_isolated(session_factory):
         })
         assert created.status_code == 201
         runbook_id = created.json()["id"]
-        assert (await client.get(f"/api/projects/20/runbooks/{runbook_id}")).status_code == 404
+        assert (await client.patch(f"/api/projects/20/runbooks/{runbook_id}", json={"title": "Unauthorized edit"})).status_code == 403
     async with client_for(session_factory, 2) as foreign:
         assert (await foreign.get("/api/projects/20/runbooks")).json() == []
 
