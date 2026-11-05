@@ -27,6 +27,7 @@ from sqlalchemy.sql.expression import case as sql_case
 
 from app.database import get_db
 from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from fastapi import Request
 from app.models import (
     User, Alert, AlertNote, AlertEvent, NotificationRule, Notification,
@@ -49,12 +50,32 @@ from app.services.ticketing import now_utc
 router = APIRouter(tags=["Notification Engine"])
 
 
-def _scope_org(user: User, requested_org: int | None) -> int | None:
+async def _scope_org(user: User, requested_org: int | None, db: AsyncSession,
+                     permission: str = "platform.alerts.read") -> int | None:
+    """Resolve tenant scope; platform staff need an explicit scoped/global grant."""
     if user.role == "platform_admin":
         return requested_org
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, org_id=requested_org):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform permission required for this scope")
+        return requested_org
+    if user.org_id is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "User has no tenant scope")
     if requested_org is not None and requested_org != user.org_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
     return user.org_id
+
+
+async def _ensure_resource_scope(user: User, org_id: int, db: AsyncSession,
+                                 permission: str = "platform.alerts.read") -> None:
+    if user.role == "platform_admin":
+        return
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, org_id=org_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform permission required for this tenant")
+        return
+    if user.org_id != org_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
 
 
 WRITE_ROLES = {"platform_admin", "client_admin", "analyst", "technician"}
@@ -62,6 +83,8 @@ WRITE_ROLES = {"platform_admin", "client_admin", "analyst", "technician"}
 
 def _require_write_role(user: User) -> None:
     """Read-only roles (viewer/client_user) cannot mutate alert state."""
+    if is_platform_role(user.role):
+        return  # platform scope/capability is checked against the target resource
     if user.role not in WRITE_ROLES:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             f"Role '{user.role}' cannot modify alerts")
@@ -87,7 +110,7 @@ async def ingest_alert(
     is discarded by the (unchanged) grouping logic. Payloads over the hard
     size ceiling are rejected with 413 before anything is persisted.
     """
-    org = _scope_org(current_user, body.org_id)
+    org = await _scope_org(current_user, body.org_id, db, "platform.alerts.ingest")
     if org is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "org_id required for platform-admin ingest")
     # --- Tx A: durable per-event evidence (committed before processing) -----
@@ -181,7 +204,7 @@ async def list_alerts(
     page_size: int = Query(25, ge=1, le=200),
 ):
     """Server-side search/filter/sort/pagination over persisted alerts."""
-    eff = _scope_org(current_user, org_id)
+    eff = await _scope_org(current_user, org_id, db, "platform.alerts.read")
     if sort not in _SORTABLE:
         raise HTTPException(422, f"Unknown sort field '{sort}'")
     base = _alert_filters(select(Alert), org=eff, severity=severity, a_status=status_f,
@@ -232,12 +255,12 @@ async def alerts_summary(
         unassigned_active=int((await db.execute(un_q)).scalar() or 0))
 
 
-async def _get_alert_or_40x(db: AsyncSession, alert_id: int, user: User) -> Alert:
+async def _get_alert_or_40x(db: AsyncSession, alert_id: int, user: User,
+                            permission: str = "platform.alerts.read") -> Alert:
     alert = (await db.execute(select(Alert).where(Alert.id == alert_id))).scalars().first()
     if not alert:
         raise HTTPException(404, "Alert not found")
-    if user.role != "platform_admin" and alert.org_id != user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_resource_scope(user, alert.org_id, db, permission)
     return alert
 
 
@@ -356,7 +379,7 @@ async def update_alert(alert_id: int, body: AlertUpdateIn,
                        db: AsyncSession = Depends(get_db)):
     """Validated transition + assignment + optional atomic note. 409 on stale version."""
     _require_write_role(current_user)
-    alert = await _get_alert_or_40x(db, alert_id, current_user)
+    alert = await _get_alert_or_40x(db, alert_id, current_user, "platform.alerts.manage")
     assignee_sent = ... if (body.assignee is None and not body.clear_assignee) else (
         None if body.clear_assignee else body.assignee)
     updated, changed = await nv.transition_alert(
@@ -371,7 +394,7 @@ async def ack_alert(alert_id: int, current_user: User = Depends(get_current_user
     """Legacy ack endpoint — now routed through the validated transition so the
     lifecycle status, history and version token stay consistent (idempotent)."""
     _require_write_role(current_user)
-    alert = await _get_alert_or_40x(db, alert_id, current_user)
+    alert = await _get_alert_or_40x(db, alert_id, current_user, "platform.alerts.manage")
     if alert.status == "acked":
         return {"ok": True, "changed": False, "alert": AlertResponse.model_validate(alert).model_dump()}
     updated, changed = await nv.transition_alert(db, alert, actor=current_user.email,
@@ -421,7 +444,7 @@ async def add_note(alert_id: int, body: AlertNoteIn,
                    current_user: User = Depends(get_current_user),
                    db: AsyncSession = Depends(get_db)):
     _require_write_role(current_user)
-    alert = await _get_alert_or_40x(db, alert_id, current_user)
+    alert = await _get_alert_or_40x(db, alert_id, current_user, "platform.alerts.manage")
     note = AlertNote(org_id=alert.org_id, alert_id=alert.id, author=current_user.email,
                      body=body.body.strip(), created_at=now_utc())
     db.add(note)
@@ -470,7 +493,7 @@ async def get_event_evidence(event_uid: str,
     # the query level. platform_admin may pass ?org_id= to narrow; without it,
     # lookup spans tenants by design (same convention as other admin surfaces).
     if current_user.role == "platform_admin":
-        org = _scope_org(current_user, org_id)
+        org = await _scope_org(current_user, org_id, db, "platform.alerts.evidence.read")
     else:
         org = _scope_org(current_user, org_id)   # 403 if org_id != user.org_id
         org = org if org is not None else current_user.org_id
@@ -499,7 +522,7 @@ async def list_rules(current_user: User = Depends(get_current_user),
 @router.post("/notification-rules", response_model=RuleResponse, status_code=201)
 async def create_rule(body: RuleCreate, current_user: User = Depends(get_current_user),
                       db: AsyncSession = Depends(get_db)):
-    org = _scope_org(current_user, body.org_id)
+    org = await _scope_org(current_user, body.org_id, db, "platform.notification_rules.manage")
     if current_user.role != "platform_admin":
         org = current_user.org_id  # clients can only build tenant-scoped rules
     rule = NotificationRule(
@@ -635,5 +658,5 @@ async def retry_dlq(current_user: User = Depends(get_current_user),
 @router.get("/notifications/analytics")
 async def notif_analytics(current_user: User = Depends(get_current_user),
                           db: AsyncSession = Depends(get_db)):
-    eff = _scope_org(current_user, None)
+    eff = await _scope_org(current_user, None, db, "platform.notifications.read")
     return await nv.analytics(db, org_id=eff)
