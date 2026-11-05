@@ -13,6 +13,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
+    op.add_column("users", sa.Column("auth_version", sa.Integer(), nullable=False, server_default="0"))
     op.create_table(
         "platform_permission_assignments",
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -37,3 +38,4 @@ def downgrade() -> None:
     op.drop_index("ix_platform_perm_user_key", table_name="platform_permission_assignments")
     op.drop_index("ix_platform_permission_assignments_user_id", table_name="platform_permission_assignments")
     op.drop_table("platform_permission_assignments")
+    op.drop_column("users", "auth_version")
