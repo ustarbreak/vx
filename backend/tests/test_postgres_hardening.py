@@ -21,7 +21,7 @@ Covers the previously SQLite-only evidence gaps:
       semantics on Postgres)
 
 STAGE 6A additions (outcome labeling):
-  M1 now asserts single head == c3d9e1f7a2b4 across 9 revisions;
+  M1 now asserts single head == d4e6f8a0b2c4 across 10 revisions;
   M3 executes the Stage 6A revision's real op.* code paths on Postgres and
      verifies its downgrade() removes ONLY outcome_labels.
 """
@@ -145,7 +145,7 @@ def test_m1_migration_chain_is_linear_single_head():
         mods[m.revision] = m.down_revision
     downs = set(mods.values())
     heads = [r for r in mods if r not in downs]
-    assert heads == ["c3d9e1f7a2b4"], f"expected single head, got {heads}"
+    assert heads == ["d4e6f8a0b2c4"], f"expected single head, got {heads}"
     # walk from head to base
     order, cur = [], heads[0]
     while cur is not None:
@@ -153,8 +153,9 @@ def test_m1_migration_chain_is_linear_single_head():
         order.append(cur)
         cur = mods[cur]
     order.reverse()
-    assert len(order) == len(mods) == 9
-    assert order[-2] == "b7d2f4a1c8e3" and order[-1] == "c3d9e1f7a2b4"
+    assert len(order) == len(mods) == 10
+    assert order[-3] == "b7d2f4a1c8e3" and order[-2] == "c3d9e1f7a2b4"
+    assert order[-1] == "d4e6f8a0b2c4"
     assert order[-3] == "a3c5e7f9b1d2"
     assert "f1b3d5e7a9c2" == order[order.index("a3c5e7f9b1d2") - 1]
 
