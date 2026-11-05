@@ -145,7 +145,7 @@ async def platform_service_catalog(
         })
     return {
         "services": items,
-        "plans": [{"code": code, "service_ids": sorted(ids)} for code, ids in sorted(plan_map.items())],
+        "plans": [{"code": code, "service_ids": sorted(plan_map.get(code, []))} for code in sorted(PLAN_CODES)],
         "source": "connectors + platform_settings + plan_entitlements_v2 + service_lifecycle_states + integrations",
     }
 
