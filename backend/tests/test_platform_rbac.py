@@ -108,3 +108,42 @@ async def test_non_platform_user_cannot_read_platform_access(session_factory):
     async with client_for(session_factory, 5) as c:
         response=await c.get("/api/platform/access/me")
         assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_permission_change_revokes_existing_bearer_token(session_factory):
+    from app.models import PlatformPermissionAssignment
+    old_token=create_access_token({"sub": "3", "ver": 0})
+    async with client_for(session_factory, 1) as owner:
+        response=await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.billing.read",
+            "effect": "allow", "scope_type": "global"
+        })
+        assert response.status_code == 201, response.text
+    async def override_db():
+        async with session_factory() as db:
+            yield db
+    app.dependency_overrides[get_db]=override_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
+        headers={"Authorization": f"Bearer {old_token}"}) as analyst:
+        response=await analyst.get("/api/platform/access/me")
+        assert response.status_code == 401
+
+@pytest.mark.asyncio
+async def test_owner_cannot_create_second_owner_and_platform_staff_must_be_global(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        invalid=await owner.post("/api/users/", json={
+            "email": "second-owner@example.com", "name": "Second Owner",
+            "password": "long-enough-password", "role": "platform_admin", "org_id": None
+        })
+        assert invalid.status_code == 403
+        scoped=await owner.post("/api/users/", json={
+            "email": "bad-expert@example.com", "name": "Bad Expert",
+            "password": "long-enough-password", "role": "platform_expert", "org_id": 1
+        })
+        assert scoped.status_code == 422
+        valid=await owner.post("/api/users/", json={
+            "email": "new-expert@example.com", "name": "New Expert",
+            "password": "long-enough-password", "role": "platform_expert", "org_id": None
+        })
+        assert valid.status_code == 201, valid.text
