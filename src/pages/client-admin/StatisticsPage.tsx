@@ -132,7 +132,7 @@ export default function StatisticsPage() {
       { title: 'Online Devices', value: liveStats?.online ?? null, link: '/client-admin/statistics/devices' },
       { title: 'Open Alerts', value: liveStats?.alerts ?? null, link: '/client-admin/alerts' },
       { title: 'Threat Feed Records', value: liveStats?.threats ?? null, link: '/threats' },
-      { title: 'Completed SOAR Runs', value: liveStats?.completedRuns ?? null, link: '/client-admin/automation/runbooks' },
+      { title: 'Completed SOAR Runs', value: liveStats?.completedRuns ?? null, link: '/client-admin/soar' },
     ];
     return (
       <div className="p-4 lg:p-6 space-y-6">
