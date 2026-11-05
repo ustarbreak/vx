@@ -21,12 +21,12 @@ ROLE_DEFAULTS = {
     "platform_expert": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.integrations.read",
-        "platform.infrastructure.read", "platform.services.read",
+        "platform.infrastructure.read", "platform.services.read", "platform.alerts.read", "platform.alerts.manage", "platform.notifications.read",
     },
     "platform_analyst": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.infrastructure.read", "platform.services.read",
-        "platform.reports.read",
+        "platform.reports.read", "platform.alerts.read", "platform.notifications.read",
     },
     "platform_user": {"platform.dashboard.read"},
 }
@@ -59,6 +59,13 @@ PERMISSION_CATALOG = {
     "platform.services.read": "View platform service catalog and lifecycle",
     "platform.services.manage": "Change service catalog and lifecycle",
     "platform.reports.read": "View and export platform reports",
+    "platform.alerts.read": "Read tenant alert records and summaries",
+    "platform.alerts.manage": "Acknowledge, assign, resolve and annotate tenant alerts",
+    "platform.alerts.ingest": "Ingest events into a tenant alert pipeline",
+    "platform.alerts.evidence.read": "Read raw event evidence and provenance",
+    "platform.notifications.read": "Read tenant notification delivery logs and analytics",
+    "platform.notifications.manage": "Acknowledge or retry tenant notification deliveries",
+    "platform.notification_rules.manage": "Create, update and delete tenant notification rules",
 }
 
 def is_platform_role(role: str | None) -> bool:
