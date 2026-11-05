@@ -5,7 +5,8 @@ from typing import List
 from app.database import get_db
 from app.models import Organization, User, AuditLog
 from app.schemas import OrganizationCreate, OrganizationUpdate, OrganizationResponse
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, require_permission, is_platform_role
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 
@@ -15,7 +16,7 @@ async def get_organizations(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.tenants.read"))
 ):
     """Get all organizations (platform admin only)"""
     result = await db.execute(
@@ -31,13 +32,6 @@ async def get_organization(
     current_user: User = Depends(get_current_user)
 ):
     """Get organization by ID"""
-    # Platform admins can see all, client users can only see their own
-    if current_user.role != "platform_admin" and current_user.org_id != org_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view this organization"
-        )
-    
     result = await db.execute(select(Organization).where(Organization.id == org_id))
     org = result.scalar_one_or_none()
     
@@ -46,7 +40,14 @@ async def get_organization(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
-    
+    if current_user.role == "platform_admin":
+        return org
+    if is_platform_role(current_user.role):
+        if not await has_permission(current_user, "platform.tenants.read", db, org_id=org.id):
+            raise HTTPException(status_code=403, detail="Tenant read permission required for this scope")
+        return org
+    if current_user.org_id != org_id:
+        raise HTTPException(status_code=403, detail="Not authorized to view this organization")
     return org
 
 
@@ -55,7 +56,7 @@ async def create_organization(
     org_data: OrganizationCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.tenants.manage"))
 ):
     """Create a new organization (platform admin only)"""
     # Check if name already exists
