@@ -6,6 +6,8 @@ import {
   LineChart, Line
 } from 'recharts';
 import { demoNetInterfaces, demoHash } from '../../data/demoWorld';
+import { isDemoMode } from '../../services/demoMode';
+import { discoveryApi } from '../../services/api';
 
 interface NetworkDevice {
   id: string;
@@ -27,6 +29,9 @@ const jitter = (time: string, salt: string, slot: number, span: number, offset: 
 
 export default function NetworkStatistics() {
   const navigate = useNavigate();
+  const demo = isDemoMode();
+  const [liveDevices, setLiveDevices] = useState<any[]>([]);
+  const [liveError, setLiveError] = useState('');
   const [timeRange, setTimeRange] = useState('24h');
   const [devices, setDevices] = useState<NetworkDevice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +48,7 @@ export default function NetworkStatistics() {
   ]);
 
   useEffect(() => {
+    if (!demo) { setDevices([]); setLoading(false); return; }
     // Simulate API call to fetch network devices
     const fetchDevices = async () => {
       try {
@@ -87,7 +93,18 @@ export default function NetworkStatistics() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [demo]);
+
+  useEffect(() => {
+    if (demo) return;
+    let active = true;
+    setLoading(true);
+    discoveryApi.devices()
+      .then(rows => { if (active) setLiveDevices(Array.isArray(rows) ? rows : []); })
+      .catch(error => { if (active) setLiveError(error instanceof Error ? error.message : 'Network device inventory unavailable'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [demo]);
 
   const stats = {
     totalBandwidth: devices.reduce((sum, d) => sum + d.bandwidth, 0),
@@ -115,6 +132,51 @@ export default function NetworkStatistics() {
       default: return null;
     }
   };
+
+  if (!demo) {
+    if (loading) return <div className="p-8 text-sm text-[var(--ic-muted)]">Loading discovered network devices…</div>;
+    const networkDevices = liveDevices.filter(device =>
+      ['router', 'switch', 'firewall', 'ap', 'access_point', 'wireless_ap', 'gateway', 'sd-wan', 'sdwan', 'vpn'].includes(String(device.device_type ?? '').toLowerCase()),
+    );
+    const online = networkDevices.filter(device => ['online', 'active'].includes(String(device.status).toLowerCase())).length;
+    const offline = networkDevices.filter(device => String(device.status).toLowerCase() === 'offline').length;
+    return (
+      <div className="p-4 lg:p-6 space-y-6">
+        <header>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2"><Network className="w-6 h-6 text-cyan-400" /> Network Inventory</h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">Live discovered network devices and recorded status.</p>
+        </header>
+        {liveError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{liveError}</div>}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[['Network devices', networkDevices.length], ['Online', online], ['Offline', offline], ['Other / stale', networkDevices.length - online - offline]].map(([label, value]) =>
+            <div key={label} className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+              <p className="text-xs text-[var(--ic-muted)]">{label}</p><p className="text-2xl font-bold text-[var(--ic-heading)] mt-1">{value}</p>
+            </div>)}
+        </div>
+        <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-[var(--ic-muted)]">
+          Interface throughput, packet counts, error rates and historical traffic are not available from the current discovery endpoint. Live charts and trend percentages are therefore not shown.
+        </div>
+        <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden">
+          <div className="p-4 border-b border-[var(--ic-border)] font-semibold text-[var(--ic-heading)]">Discovered network devices</div>
+          <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-sm">
+            <thead><tr className="border-b border-[var(--ic-border)] text-xs text-[var(--ic-muted)] uppercase">
+              <th className="text-left p-3">Hostname</th><th className="text-left p-3">IP address</th><th className="text-left p-3">Type</th><th className="text-left p-3">Status</th><th className="text-left p-3">Last seen</th>
+            </tr></thead>
+            <tbody>{networkDevices.map(device => <tr key={device.id} onClick={() => navigate('/client-admin/infrastructure/device/' + device.id)}
+              className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)] cursor-pointer">
+              <td className="p-3 text-[var(--ic-heading)]">{device.hostname || 'Unknown host'}</td>
+              <td className="p-3 font-mono text-xs text-[var(--ic-text)]">{device.ip || '—'}</td>
+              <td className="p-3 text-[var(--ic-text)] capitalize">{device.device_type || 'Unknown'}</td>
+              <td className="p-3 text-[var(--ic-text)]">{device.status || 'Unknown'}</td>
+              <td className="p-3 text-xs text-[var(--ic-muted)]">{device.last_seen ? new Date(device.last_seen).toLocaleString() : 'Not reported'}</td>
+            </tr>)}
+            {!networkDevices.length && <tr><td colSpan={5} className="p-8 text-center text-sm text-[var(--ic-muted)]">No discovered network devices returned for this tenant.</td></tr>}
+            </tbody>
+          </table></div>
+        </section>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
