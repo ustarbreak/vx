@@ -1443,3 +1443,24 @@ export const platformIntegrationsApi = {
   test: (id: number) => api.post<{ success: boolean; message: string; details?: Record<string, unknown> }>(`/integrations/${id}/test`),
   remove: (id: number) => api.del<void>(`/integrations/${id}`),
 };
+
+
+// PA-10 — persisted platform service catalog and commercial plan matrix.
+export interface PlatformServiceCatalogItem {
+  service_id: string; engine: string; docs: string; endpoints: string[];
+  active: boolean; label: string; description: string;
+  lifecycle: Record<string, number>; integrations: Record<string, number>;
+  included_in_plans: string[];
+}
+export interface PlatformServiceCatalogDto {
+  services: PlatformServiceCatalogItem[];
+  plans: { code: string; service_ids: string[] }[];
+  source: string;
+}
+export const platformServiceCatalogApi = {
+  get: () => api.get<PlatformServiceCatalogDto>('/services/platform-catalog'),
+  update: (id: string, body: { active?: boolean; label?: string; description?: string }) =>
+    api.patch<PlatformServiceCatalogItem>(`/services/platform-catalog/${encodeURIComponent(id)}`, body),
+  replacePlan: (code: string, service_ids: string[]) =>
+    api.put<{ plan_code: string; service_ids: string[] }>(`/services/platform-catalog/plans/${encodeURIComponent(code)}`, { service_ids }),
+};
