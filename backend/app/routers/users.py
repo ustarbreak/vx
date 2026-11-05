@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import UserCreate, UserResponse
 from app.core.security import get_password_hash, get_current_user, require_role
+from app.core.platform_rbac import has_permission, is_platform_role
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -31,18 +32,23 @@ async def get_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get users (platform admin sees all, client admin sees their org)"""
+    """List users only within an explicitly authorized platform or tenant scope."""
     query = select(User)
-    
-    # Filter by organization
-    if current_user.role != "platform_admin":
-        # Client users can only see their own organization
+    if current_user.role == "platform_admin":
+        if org_id is not None:
+            query = query.where(User.org_id == org_id)
+    elif is_platform_role(current_user.role):
+        if org_id is not None or not await has_permission(current_user, "platform.users.read", db):
+            raise HTTPException(status_code=403, detail="Platform staff directory permission required")
+        query = query.where(User.role.in_(sorted(PLATFORM_STAFF_ROLES | {"platform_admin"})))
+    else:
+        if current_user.org_id is None:
+            raise HTTPException(status_code=403, detail="User directory scope is unavailable")
+        if org_id is not None and org_id != current_user.org_id:
+            raise HTTPException(status_code=403, detail="Cross-tenant user listing denied")
         query = query.where(User.org_id == current_user.org_id)
-    elif org_id:
-        # Platform admin can filter by org
-        query = query.where(User.org_id == org_id)
-    
-    result = await db.execute(query.offset(skip).limit(limit))
+
+    result = await db.execute(query.offset(skip).limit(min(limit, 200)))
     return result.scalars().all()
 
 
@@ -52,26 +58,26 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get user by ID"""
-    # Check permissions
-    if current_user.role != "platform_admin":
-        if current_user.id != user_id and current_user.org_id != (
-            await db.execute(select(User).where(User.id == user_id))
-        ).scalar_one_or_none().org_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this user"
-            )
-    
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+    """Get a user by ID after resolving existence and enforcing directory scope."""
+    user = await db.get(User, user_id)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if current_user.role == "platform_admin":
+        return user
+    if is_platform_role(current_user.role):
+        if user.id == current_user.id:
+            return user
+        if user.role not in PLATFORM_STAFF_ROLES | {"platform_admin"} or not await has_permission(
+            current_user, "platform.users.read", db
+        ):
+            raise HTTPException(status_code=403, detail="Platform staff directory permission required")
+        return user
+
+    if user.id != current_user.id and (
+        current_user.org_id is None or user.org_id != current_user.org_id
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to view this user")
     return user
 
 
