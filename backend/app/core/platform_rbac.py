@@ -22,6 +22,7 @@ ROLE_DEFAULTS = {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.integrations.read",
         "platform.infrastructure.read", "platform.services.read",
+    "platform.analytics.read": "Read tenant-scoped security analytics",
     },
     "platform_analyst": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
