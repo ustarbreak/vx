@@ -1,232 +1,295 @@
-/**
- * AutomationRunbooksPage — "Runbooks" sub-section of the Automation group.
- * Project-linked operational procedures: each runbook belongs to a project
- * (Project Manager) and lists ordered steps with owners, scripts references
- * and checklists. Demo mode = synchronized with demoProjects; real mode =
- * GET/POST /api/projects/{id}/runbooks (backend router projects.py).
- */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { AlertTriangle, BookOpen, CheckCircle2, Circle, ExternalLink, Loader2, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react';
+import { api, ApiError } from '../../services/api';
 import { isDemoMode } from '../../services/demoMode';
 import { demoProjects } from '../../data/demoProjects';
-import { BookOpen, CheckCircle2, Circle, PlayCircle, ExternalLink, Loader2, Plus, Wand2, X } from 'lucide-react';
 
-interface RunbookStep { text: string; owner: string; scriptRef?: string; done: boolean }
-interface Runbook { id: string; projectId: string; title: string; phase: string; steps: RunbookStep[]; estMinutes: number }
-
-/** Convert pasted IT documentation into ordered runbook steps (demo + real). */
-function docToSteps(doc: string): RunbookStep[] {
-  const lines = doc.split(/\r?\n/).map(l => l.trim().replace(/^([-*#]|\d+[.)])\s*/, '')).filter(Boolean);
-  const steps = (lines.length ? lines : ['Preparation', 'Execution', 'Validation & closure'])
-    .slice(0, 10)
-    .map(text => ({ text: text.slice(0, 140), owner: 'Unassigned', done: false }));
-  return steps;
-}
+type RunbookStep = { text: string; owner: string; scriptRef?: string; done: boolean };
+type Runbook = {
+  id: number | string;
+  projectId: string;
+  title: string;
+  phase: string;
+  steps: RunbookStep[];
+  estMinutes: number;
+};
+type ProjectOption = { id: string; name: string };
 
 const SEED_RUNBOOKS: Runbook[] = [
   {
     id: 'RB-001', projectId: 'PRJ-101', title: 'Go-Live SOC Damanecash — Week 1', phase: 'Deployment', estMinutes: 240,
     steps: [
       { text: 'Verify collector connectivity on fw-edge-01 & core-sw-01', owner: 'Y. El Amrani', done: true },
-      { text: 'Import asset inventory (12 devices) into Monitored Devices', owner: 'S. Bennani', done: true },
-      { text: 'Activate playbooks: auto-phish-containment, auto-host-isolation', owner: 'Y. El Amrani', scriptRef: 'auto-phish-containment', done: false },
-      { text: 'Configure notification channels (email CTO + SMS L1)', owner: 'N. Benali', done: false },
-      { text: 'Dry-run: simulate P1 alert ALR-0003 and validate full chain', owner: 'K. Chraibi', done: false },
+      { text: 'Import asset inventory into Monitored Devices', owner: 'S. Bennani', done: true },
+      { text: 'Activate approved incident playbooks', owner: 'Y. El Amrani', scriptRef: 'auto-phish-containment', done: false },
+      { text: 'Configure notification channels', owner: 'N. Benali', done: false },
+      { text: 'Dry-run a P1 alert and validate the response chain', owner: 'K. Chraibi', done: false },
     ],
   },
   {
     id: 'RB-002', projectId: 'PRJ-102', title: 'Zero-Trust rollout Valoris — Segment DMZ', phase: 'Hardening', estMinutes: 180,
     steps: [
-      { text: 'Snapshot current ACLs on fw-dmz-01 (rollback plan)', owner: 'K. Chraibi', done: true },
-      { text: 'Deploy deny-by-default ruleset stage 1 (log-only)', owner: 'A. Fassi', scriptRef: 'auto-network-block', done: true },
-      { text: 'Review 72h of denied traffic report with client IT', owner: 'K. Chraibi', done: false },
-      { text: 'Enforce block stage 2 + update SD-WAN policies', owner: 'A. Fassi', done: false },
+      { text: 'Snapshot current ACLs and verify rollback plan', owner: 'K. Chraibi', done: true },
+      { text: 'Deploy deny-by-default ruleset in log-only mode', owner: 'A. Fassi', scriptRef: 'auto-network-block', done: true },
+      { text: 'Review denied traffic with client IT', owner: 'K. Chraibi', done: false },
+      { text: 'Approve enforcement and update SD-WAN policies', owner: 'A. Fassi', done: false },
     ],
   },
   {
     id: 'RB-003', projectId: 'PRJ-103', title: 'Backup validation drill Vivalis Salaf', phase: 'Resilience', estMinutes: 90,
     steps: [
-      { text: 'Run integrity check on nas-backup-01 repository', owner: 'H. Tazi', done: false },
-      { text: 'Restore test: finance-db snapshot → isolated host', owner: 'H. Tazi', done: false },
-      { text: 'Record RTO/RPO measured vs contractual SLA in project notes', owner: 'Soc Analyst', done: false },
+      { text: 'Run integrity check on backup repository', owner: 'H. Tazi', done: false },
+      { text: 'Perform restore test on an isolated host', owner: 'H. Tazi', done: false },
+      { text: 'Record measured RTO/RPO in project notes', owner: 'SOC Analyst', done: false },
     ],
   },
 ];
 
+function docToSteps(doc: string): RunbookStep[] {
+  const lines = doc.split(/\r?\n/).map(line => line.trim().replace(/^([-*#]|\d+[.)])\s*/, '')).filter(Boolean);
+  return (lines.length ? lines : ['Preparation', 'Execution', 'Validation & closure'])
+    .slice(0, 50)
+    .map(text => ({ text: text.slice(0, 140), owner: 'Unassigned', done: false }));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof ApiError ? error.message : error instanceof Error ? error.message : 'Unexpected request error';
+}
+
 export default function AutomationRunbooksPage() {
   const demo = isDemoMode();
-  const [loading, setLoading] = useState(!demo);
-  const [live, setLive] = useState<Runbook[] | null>(null);
-  const [extra, setExtra] = useState<Runbook[]>([]);
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
-  // Create / auto-generate modal state
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [runbooks, setRunbooks] = useState<Runbook[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [fTitle, setFTitle] = useState('');
-  const [fProject, setFProject] = useState('PRJ-101');
-  const [fPhase, setFPhase] = useState('Operations');
-  const [fDoc, setFDoc] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [projectId, setProjectId] = useState('PRJ-101');
+  const [phase, setPhase] = useState('Operations');
+  const [doc, setDoc] = useState('');
 
-  async function createRunbook(auto: boolean) {
-    if (!fTitle.trim() || saving) return;
-    if (!demo) {
-      setError('Runbook persistence is not available in Live Mode yet. No runbook was created.');
-      return;
-    }
-    const steps = auto ? docToSteps(fDoc) : (fDoc.trim() ? docToSteps(fDoc) : [{ text: 'Preparation', owner: 'Unassigned', done: false }, { text: 'Execution', owner: 'Unassigned', done: false }, { text: 'Validation & closure', owner: 'Unassigned', done: false }]);
-    const rb: Runbook = { id: `RB-${Date.now().toString(36).toUpperCase().slice(-4)}`, projectId: fProject, title: fTitle.trim(), phase: fPhase, steps, estMinutes: steps.length * 20 };
-    setSaving(true);
-    setError(null);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
     try {
-      setExtra(prev => [rb, ...prev]);
-      setShowCreate(false);
-      setFTitle('');
-      setFDoc('');
+      if (demo) {
+        const options = demoProjects.map(p => ({
+          id: 'PRJ-' + String(p.id).padStart(3, '0'),
+          name: p.name,
+        }));
+        setProjects(options);
+        setProjectId(current => options.some(p => p.id === current) ? current : (options[0]?.id ?? ''));
+        setRunbooks(SEED_RUNBOOKS);
+        return;
+      }
+      const rows = await api.get<any[]>('/projects/');
+      const options = (Array.isArray(rows) ? rows : []).map(p => ({ id: String(p.id), name: p.name }));
+      setProjects(options);
+      setProjectId(current => options.some(p => p.id === current) ? current : (options[0]?.id ?? ''));
+      const all = await Promise.all(options.map(async project => {
+        const items = await api.get<Runbook[]>(`/projects/${project.id}/runbooks`);
+        return Array.isArray(items) ? items : [];
+      }));
+      setRunbooks(all.flat());
+    } catch (e) {
+      setError(errorMessage(e));
+      setProjects([]);
+      setRunbooks([]);
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
-  }
-
-  // No runbook API is currently implemented. Live mode must not call
-  // guessed endpoints or render local state as persisted server data.
-  useEffect(() => {
-    if (demo) return;
-    setLive([]);
-    setLoading(false);
   }, [demo]);
 
-  const runbooks = useMemo(() => {
-    const base = [...extra, ...(demo ? SEED_RUNBOOKS : (live ?? []))];
-    return base.map(rb => ({ ...rb, steps: rb.steps.map(s => checked[rb.id + s.text] !== undefined ? { ...s, done: checked[rb.id + s.text] } : s) }));
-  }, [demo, live, extra, checked]);
+  useEffect(() => { void load(); }, [load]);
 
-  const toggle = (rbId: string, step: RunbookStep) => {
-    if (!demo) return;
-    setChecked(c => ({ ...c, [rbId + step.text]: !step.done }));
+  const createRunbook = async () => {
+    if (!title.trim() || !projectId || working) return;
+    setWorking('create');
+    setError('');
+    setNotice('');
+    const steps = docToSteps(doc);
+    try {
+      if (demo) {
+        const item: Runbook = {
+          id: 'RB-DEMO-' + Date.now().toString(36).toUpperCase(),
+          projectId, title: title.trim(), phase: phase.trim() || 'Operations',
+          steps, estMinutes: steps.length * 20,
+        };
+        setRunbooks(prev => [item, ...prev]);
+        setNotice('Demo runbook created locally. It is not stored on the backend.');
+      } else {
+        const saved = await api.post<Runbook>(`/projects/${projectId}/runbooks`, {
+          title: title.trim(), phase: phase.trim() || 'Operations',
+          est_minutes: steps.length * 20, steps,
+        });
+        setRunbooks(prev => [saved, ...prev]);
+        setNotice('Runbook saved to the selected project.');
+      }
+      setShowCreate(false);
+      setTitle('');
+      setDoc('');
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
   };
 
-  const progress = (rb: Runbook) => Math.round((rb.steps.filter(s => s.done).length / Math.max(1, rb.steps.length)) * 100);
+  const toggleStep = async (runbook: Runbook, stepIndex: number) => {
+    const steps = runbook.steps.map((step, index) => index === stepIndex ? { ...step, done: !step.done } : step);
+    setWorking(String(runbook.id));
+    setError('');
+    setNotice('');
+    try {
+      if (!demo) {
+        const saved = await api.patch<Runbook>(
+          `/projects/${runbook.projectId}/runbooks/${runbook.id}`, { steps },
+        );
+        setRunbooks(prev => prev.map(item => item.id === runbook.id ? saved : item));
+      } else {
+        setRunbooks(prev => prev.map(item => item.id === runbook.id ? { ...item, steps } : item));
+        setNotice('Demo checklist updated locally; no server record changed.');
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
+  };
 
-  if (loading) return <div className="p-10 flex items-center gap-3 text-[var(--ic-muted)]"><Loader2 className="w-5 h-5 animate-spin" /> Loading runbooks…</div>;
+  const removeRunbook = async (runbook: Runbook) => {
+    if (!window.confirm(`Delete runbook "${runbook.title}"?`)) return;
+    setWorking(String(runbook.id));
+    setError('');
+    setNotice('');
+    try {
+      if (!demo) await api.del<void>(`/projects/${runbook.projectId}/runbooks/${runbook.id}`);
+      setRunbooks(prev => prev.filter(item => item.id !== runbook.id));
+      setNotice(demo ? 'Demo runbook removed locally.' : 'Runbook deleted.');
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const progress = (runbook: Runbook) =>
+    Math.round(runbook.steps.filter(step => step.done).length / Math.max(1, runbook.steps.length) * 100);
 
   return (
-    <div className="p-6 space-y-6">
-      <header className="flex items-start justify-between gap-4">
+    <div className="p-4 lg:p-6 space-y-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-[var(--ic-heading)] flex items-center gap-2"><BookOpen className="w-5 h-5 text-violet-400" /> Automation · Runbooks <span className="text-xs font-normal text-[var(--ic-muted)]">(project procedures)</span></h1>
-          <p className="text-sm text-[var(--ic-muted)] mt-1">Operational checklists linked to your projects. Demo Mode supports local rehearsal; Live Mode remains read-only until runbook persistence and execution APIs are implemented.</p>
+          <h1 className="text-xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
+            <BookOpen className="w-5 h-5 text-violet-400" /> Automation · Project Runbooks
+          </h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">
+            Persisted project procedures and checklists. These are operational checklists, not executable SOAR playbooks.
+          </p>
         </div>
-        <button onClick={() => { setError(null); setShowCreate(true); }} disabled={!demo}
-          title={demo ? 'Create a simulated demo runbook' : 'Runbook persistence is not yet available in Live Mode'}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-[var(--ic-heading)] text-sm font-semibold shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
-          <Plus className="w-4 h-4" /> New Runbook
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => void load()} disabled={loading}
+            className="p-2 rounded-lg border border-[var(--ic-border)] text-[var(--ic-muted)]">
+            <RefreshCw className={'w-4 h-4 ' + (loading ? 'animate-spin' : '')} />
+          </button>
+          <button onClick={() => setShowCreate(true)} disabled={!projects.length || loading}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold disabled:opacity-50">
+            <Plus className="w-4 h-4" /> New Runbook
+          </button>
+        </div>
       </header>
 
-      {error && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{error}</div>}
+      {demo && <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-300">
+        Demo Mode: checklist edits and new runbooks are local simulations only; no backend data is changed.
+      </div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-300 flex items-center gap-2">
+        <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
+      </div>}
+      {notice && <div role="status" className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-sm text-cyan-300">{notice}</div>}
 
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowCreate(false)}>
-          <div className="w-full max-w-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-2xl p-5 space-y-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-bold text-[var(--ic-heading)] flex items-center gap-2"><Wand2 className="w-4 h-4 text-violet-400" /> Create / auto-generate a runbook</h2>
-              <button onClick={() => setShowCreate(false)} className="text-[var(--ic-muted)] hover:text-[var(--ic-heading)]"><X className="w-5 h-5" /></button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="col-span-2 text-xs text-[var(--ic-muted)] space-y-1">
-                Title
-                <input value={fTitle} onChange={e => setFTitle(e.target.value)} placeholder="e.g. Quarterly DR drill — Damanecash"
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)]" />
-              </label>
-              <label className="text-xs text-[var(--ic-muted)] space-y-1">Linked project
-                <select value={fProject} onChange={e => setFProject(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)]">
-                  {(demo ? demoProjects.map(p => ({ id: `PRJ-${String(p.id).padStart(3, '0')}`, name: p.name })) : [{ id: fProject, name: fProject }]).map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-xs text-[var(--ic-muted)] space-y-1">Phase
-                <input value={fPhase} onChange={e => setFPhase(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)]" />
-              </label>
-              <label className="col-span-2 text-xs text-[var(--ic-muted)] space-y-1">
-                Paste IT documentation (procedure, checklist, export PDF/Word text…) — each line becomes a step
-                <textarea value={fDoc} onChange={e => setFDoc(e.target.value)} rows={6}
-                  placeholder={'1. Snapshot current ACLs on fw-edge-01\n2. Deploy deny-by-default ruleset (log-only)\n3. Review 72h denied traffic with client IT'}
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--ic-surface)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] font-mono" />
-              </label>
-            </div>
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <button onClick={() => createRunbook(false)} disabled={saving || !fTitle.trim()}
-                className="px-3.5 py-2 rounded-lg bg-[var(--ic-surface)] hover:bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] disabled:opacity-50">
-                Create blank
-              </button>
-              <button onClick={() => createRunbook(true)} disabled={saving || !fTitle.trim()}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-[var(--ic-heading)] text-sm font-semibold disabled:opacity-50">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />} Auto-generate from doc
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {!runbooks.length && (
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-8 text-center text-[var(--ic-muted)] text-sm">
-          No runbook yet. Create one from a project page, or push the demo dataset to see sample procedures.
-        </div>
-      )}
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        {runbooks.map(rb => {
-          const proj = demo ? demoProjects.find(p => String(p.id) === rb.projectId.replace('PRJ-', '')) : undefined;
-          const pct = progress(rb);
-          return (
-            <article key={rb.id} className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 space-y-3">
+      {loading ? <div className="p-10 flex items-center gap-3 text-[var(--ic-muted)]"><Loader2 className="w-5 h-5 animate-spin" /> Loading project runbooks…</div> :
+        <div className="grid xl:grid-cols-2 gap-4">
+          {runbooks.map(runbook => {
+            const pct = progress(runbook);
+            return <article key={runbook.id} className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4 space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-sm font-semibold text-[var(--ic-heading)]">{rb.title}</h2>
-                  <p className="text-xs text-[var(--ic-muted)] mt-0.5">{rb.id} · Phase: {rb.phase} · Est. {rb.estMinutes} min</p>
+                  <h2 className="font-semibold text-[var(--ic-heading)]">{runbook.title}</h2>
+                  <p className="text-xs text-[var(--ic-muted)] mt-1">{runbook.phase} · {runbook.estMinutes} min estimated · Project {runbook.projectId}</p>
                 </div>
-                <span className={`text-xs font-bold px-2 py-1 rounded-full ${pct === 100 ? 'bg-emerald-500/15 text-emerald-300' : pct >= 50 ? 'bg-cyan-500/15 text-cyan-300' : 'bg-amber-500/15 text-amber-300'}`}>{pct}%</span>
-              </div>
-              <div className="h-1.5 rounded-full bg-[var(--ic-surface)] overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-cyan-500 to-violet-500 transition-all" style={{ width: `${pct}%` }} />
-              </div>
-              <ul className="space-y-1.5">
-                {rb.steps.map((s, i) => (
-                  <li key={i}>
-                    <button onClick={() => toggle(rb.id, s)} disabled={!demo} title={demo ? 'Toggle simulated checklist step' : 'Step persistence is not available in Live Mode'} className="w-full text-left flex items-start gap-2 group disabled:cursor-not-allowed">
-                      {s.done
-                        ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-emerald-400 shrink-0" />
-                        : <Circle className="w-4 h-4 mt-0.5 text-[var(--ic-muted)] group-hover:text-cyan-400 shrink-0" />}
-                      <span className={`text-sm ${s.done ? 'line-through text-[var(--ic-muted)]' : 'text-[var(--ic-text)]'}`}>
-                        {s.text}
-                        <span className="block text-[11px] text-[var(--ic-muted)]">Owner: {s.owner}{s.scriptRef ? ` · script: ${s.scriptRef}` : ''}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center justify-between pt-1 border-t border-[var(--ic-border)]">
-                {proj ? (
-                  <Link to="/projects" className="text-xs text-cyan-400 hover:underline flex items-center gap-1">
-                    <ExternalLink className="w-3.5 h-3.5" /> Linked project: {proj.name}
-                  </Link>
-                ) : <span className="text-xs text-[var(--ic-muted)]">Linked project: {rb.projectId}</span>}
-                <button disabled title="Runbook execution is not implemented yet" className="text-xs px-2.5 py-1 rounded-lg bg-violet-600/80 text-[var(--ic-heading)] flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed">
-                  <PlayCircle className="w-3.5 h-3.5" /> Auto-execute remaining
+                <button onClick={() => void removeRunbook(runbook)} disabled={working === String(runbook.id)}
+                  aria-label={'Delete ' + runbook.title} className="p-2 rounded-lg text-[var(--ic-muted)] hover:text-red-400 disabled:opacity-50">
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
-            </article>
-          );
-        })}
-      </div>
+              <div className="flex items-center gap-3">
+                <div className="h-1.5 flex-1 rounded-full bg-[var(--ic-surface-2)] overflow-hidden">
+                  <div className="h-full bg-violet-500" style={{ width: pct + '%' }} />
+                </div>
+                <span className="text-xs text-[var(--ic-muted)] tabular-nums">{pct}%</span>
+              </div>
+              <ol className="space-y-2">
+                {runbook.steps.map((step, index) => <li key={index} className="flex items-start gap-2 text-sm">
+                  <button onClick={() => void toggleStep(runbook, index)} disabled={working === String(runbook.id)}
+                    aria-label={(step.done ? 'Mark incomplete: ' : 'Complete: ') + step.text}
+                    className="mt-0.5 text-violet-400 disabled:opacity-50">
+                    {step.done ? <CheckCircle2 className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className={step.done ? 'text-[var(--ic-muted)] line-through' : 'text-[var(--ic-text)]'}>{step.text}</p>
+                    <p className="text-[10px] text-[var(--ic-muted)]">{step.owner}{step.scriptRef ? ' · Script reference: ' + step.scriptRef : ''}</p>
+                  </div>
+                </li>)}
+              </ol>
+              <Link to="/projects" className="inline-flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300">
+                Open Project Portfolio <ExternalLink className="w-3 h-3" />
+              </Link>
+            </article>;
+          })}
+          {!runbooks.length && <div className="xl:col-span-2 rounded-xl border border-dashed border-[var(--ic-border)] p-10 text-center text-sm text-[var(--ic-muted)]">
+            No project runbooks exist yet. Create one to persist a procedure checklist against a project.
+          </div>}
+        </div>}
 
-      <footer className="text-xs text-[var(--ic-muted)]">
-        {demo ? 'DEMO MODE: runbooks and checklist progress are simulated locally; no device actions are executed.' : 'LIVE MODE: read-only. Runbook storage, checklist persistence, and execution endpoints are not implemented.'}
-      </footer>
+      {showCreate && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowCreate(false)}>
+        <div className="w-full max-w-lg rounded-2xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5 space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-[var(--ic-heading)] flex items-center gap-2"><Wand2 className="w-4 h-4 text-violet-400" /> Create project runbook</h2>
+            <button onClick={() => setShowCreate(false)} aria-label="Close" className="text-[var(--ic-muted)]"><X className="w-5 h-5" /></button>
+          </div>
+          <label className="block text-xs text-[var(--ic-muted)]">Title
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Quarterly DR drill"
+              className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]" />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-xs text-[var(--ic-muted)]">Project
+              <select value={projectId} onChange={e => setProjectId(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]">
+                {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </label>
+            <label className="block text-xs text-[var(--ic-muted)]">Phase
+              <input value={phase} onChange={e => setPhase(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm text-[var(--ic-heading)]" />
+            </label>
+          </div>
+          <label className="block text-xs text-[var(--ic-muted)]">Procedure / documentation (one step per line)
+            <textarea value={doc} onChange={e => setDoc(e.target.value)} rows={6}
+              placeholder={'1. Preserve evidence\n2. Notify incident lead\n3. Validate containment'}
+              className="mt-1 w-full rounded-lg border border-[var(--ic-border)] bg-[var(--ic-surface-2)] px-3 py-2 text-sm font-mono text-[var(--ic-heading)]" />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowCreate(false)} className="rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-text)]">Cancel</button>
+            <button onClick={() => void createRunbook()} disabled={!title.trim() || !projectId || working === 'create'}
+              className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+              {working === 'create' ? 'Saving…' : 'Save runbook'}
+            </button>
+          </div>
+        </div>
+      </div>}
     </div>
   );
 }
