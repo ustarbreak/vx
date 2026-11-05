@@ -771,6 +771,7 @@ export interface DiscoveredDevice {
   source?: 'discovery' | 'manual'; // provenance — never inferred client-side
   last_seen?: string | null;   // real observation timestamp, null = unknown
   created_at: string;
+  monitoring_state?: 'enrolled' | 'monitored' | 'offline' | 'stale' | 'unknown';
 }
 
 // Optional live-monitoring enrichment for a discovered device. The backend
@@ -803,7 +804,10 @@ export const discoveryApi = {
   cancelScan: (id: number) => api.post<ScanRow>(`/scans/${id}/cancel`),
   scanStatus: (id: number) => api.get<ScanRow>(`/scans/${id}`),
   scanDevices: (id: number) => api.get<DiscoveredDevice[]>(`/scans/${id}/devices`),
-  devices: () => api.get<DiscoveredDevice[]>('/devices'),
+  devices: async () => {
+    const response = await api.get<DiscoveredDevice[] | { items?: DiscoveredDevice[] }>('/devices');
+    return Array.isArray(response) ? response : (Array.isArray(response.items) ? response.items : []);
+  },
   deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
