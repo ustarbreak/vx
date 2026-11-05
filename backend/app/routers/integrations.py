@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import get_db
 from app.models import Integration, User, AuditLog
 from app.schemas import IntegrationCreate, IntegrationUpdate, IntegrationResponse, IntegrationTestResult
@@ -140,12 +140,19 @@ async def test_integration(
             detail="Integration not found"
         )
     
+    # Never attempt a provider call with missing credentials. Secret values are
+    # write-only and are deliberately absent from IntegrationResponse.
+    if integration.name in {"Wazuh", "MISP", "Elastic Security"} and not integration.api_key:
+        return IntegrationTestResult(success=False, message="Credential is not configured; add the API key before testing.")
+    if integration.name == "Wazuh" and not integration.api_username:
+        return IntegrationTestResult(success=False, message="Wazuh account username is not configured.")
+
     # Test connection based on integration name
     try:
         if integration.name == "Wazuh":
             service = WazuhService(
                 base_url=integration.api_endpoint,
-                api_user="admin",  # Should be stored in DB
+                api_user=integration.api_username,
                 api_password=integration.api_key
             )
             agents = await service.get_agents()
@@ -180,7 +187,7 @@ async def test_integration(
             )
         
         # Update last sync
-        integration.last_sync = datetime.utcnow()
+        integration.last_sync = datetime.now(timezone.utc)
         integration.status = "active"
         await db.commit()
         
@@ -205,6 +212,8 @@ async def test_integration(
         )
         
     except Exception as e:
+        # A failed health check must not leave a stale active state behind.
+        integration.status = "inactive"
         # Log failed test
         audit_log = AuditLog(
             actor_id=current_user.id,
