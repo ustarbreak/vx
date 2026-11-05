@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Lock, Shield, AlertTriangle, CheckCircle } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const FW_VENDORS = ['fortinet', 'cisco', 'paloalto', 'checkpoint', 'opnsense'];
@@ -83,6 +85,8 @@ interface FirewallRule {
 }
 
 export default function FirewallManagementPage() {
+  const navigate = useNavigate();
+  const { ruleId } = useParams<{ ruleId: string }>();
   const [rules, setRules] = useState<FirewallRule[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -114,6 +118,24 @@ export default function FirewallManagementPage() {
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
+
+
+  const selectedRule = ruleId ? rules.find((rule) => rule.id === ruleId) : undefined;
+  if (ruleId) return (
+    <SecurityRecordDetail backPath="/client-admin/firewall-mgmt" service="firewall-mgmt" serviceTitle="Firewall Management"
+      recordId={ruleId} recordType="Firewall rule" subtitle={selectedRule ? selectedRule.name : "Firewall rule"}
+      status={selectedRule?.status} sourceLabel="Tenant firewall policy feed"
+      fields={selectedRule ? [
+        { label: "Source", value: selectedRule.source }, { label: "Destination", value: selectedRule.destination },
+        { label: "Port / protocol", value: selectedRule.port }, { label: "Action", value: selectedRule.action },
+        { label: "Hit count", value: selectedRule.hits }, { label: "Rule status", value: selectedRule.status },
+      ] : []}
+      groups={FW_GROUPS}
+      contextParams={selectedRule ? { rule: selectedRule.id, ip: selectedRule.source, reason: "Review firewall rule " + selectedRule.id + ": " + selectedRule.name } : {}}
+      recommendations={["Validate rule owner, business purpose and approved change reference.","Review source, destination, port and effective policy order.","Check hit count and traffic logs over a representative time window.","Assess shadowing, broad access and exposure to internet-facing assets.","Use a candidate diff, approval and verified backup before changing or rolling back rules."]}
+      notFound={!selectedRule}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -172,7 +194,7 @@ export default function FirewallManagementPage() {
           </thead>
           <tbody>
             {rules.map((rule) => (
-              <tr key={rule.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
+              <tr key={rule.id} onClick={() => navigate('/client-admin/firewall-mgmt/' + encodeURIComponent(rule.id))} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] cursor-pointer">
                 <td className="py-3 px-4 text-[var(--ic-heading)] font-medium">{rule.name}</td>
                 <td className="py-3 px-4 text-gray-300 font-mono text-sm">{rule.source}</td>
                 <td className="py-3 px-4 text-gray-300 font-mono text-sm">{rule.destination}</td>
