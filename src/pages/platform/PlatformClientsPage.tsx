@@ -296,20 +296,30 @@ export default function PlatformClientsPage() {
     o.contactEmail.toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleEntitlement = (orgId: string, serviceId: ServiceId) => {
-    setEntitlements(prev => ({
-      ...prev,
-      [orgId]: (prev[orgId] ?? []).map(e =>
-        e.serviceId === serviceId
-          ? {
-              ...e,
-              enabled: !e.enabled,
-              activatedAt: !e.enabled ? new Date().toISOString().split('T')[0] : e.activatedAt,
-              deactivatedAt: !e.enabled ? null : new Date().toISOString().split('T')[0],
-            }
-          : e
-      ),
-    }));
+  const toggleEntitlement = async (orgId: string, serviceId: ServiceId) => {
+    setActionError('');
+    const current = getEntitlements(orgId).find(e => e.serviceId === serviceId);
+    if (isDemoMode()) {
+      setEntitlements(prev => ({
+        ...prev,
+        [orgId]: (prev[orgId] ?? []).map(e => e.serviceId === serviceId ? {
+          ...e, enabled: !e.enabled,
+          activatedAt: !e.enabled ? new Date().toISOString() : e.activatedAt,
+          deactivatedAt: !e.enabled ? null : new Date().toISOString(),
+        } : e),
+      }));
+      return;
+    }
+    if (!current?.backendId) {
+      setActionError('Aucun entitlement persistant n’existe pour ce service. Son activation doit être provisionnée par le workflow Billing/Plans.');
+      return;
+    }
+    try {
+      await entitlementsApi.update(current.backendId, { enabled: !current.enabled });
+      await loadOrgs();
+    } catch (error) {
+      setActionError(error instanceof ApiError ? error.message : 'La mise à jour de l’entitlement a échoué.');
+    }
   };
 
   return (
@@ -331,6 +341,8 @@ export default function PlatformClientsPage() {
         </button>
       </div>
 
+      {loadError && <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm text-rose-300">{loadError}</div>}
+      {actionError && <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-300">{actionError}</div>}
       {showCreate && (
         <CreateOrgModal
           onClose={() => setShowCreate(false)}
@@ -532,9 +544,9 @@ export default function PlatformClientsPage() {
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="text-xs text-[var(--ic-muted)]">${service.basePrice}/mo</span>
-                            {isAvailable ? (
+                            {isAvailable && (isDemoMode() || !!ent?.backendId) ? (
                               <button
-                                onClick={() => toggleEntitlement(selectedOrg.id, service.id)}
+                                onClick={() => void toggleEntitlement(selectedOrg.id, service.id)}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                                   isEnabled
                                     ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20'
@@ -544,7 +556,7 @@ export default function PlatformClientsPage() {
                                 {isEnabled ? 'Disable' : 'Enable'}
                               </button>
                             ) : (
-                              <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--ic-surface-2)] text-[var(--ic-muted)]">N/A</span>
+                              <span className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--ic-surface-2)] text-[var(--ic-muted)]">{!isAvailable ? 'N/A' : isDemoMode() ? 'N/A' : 'Not provisioned'}</span>
                             )}
                           </div>
                         </div>
