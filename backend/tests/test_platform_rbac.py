@@ -19,7 +19,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.core.platform_rbac import has_permission
-from app.models import Organization, User
+from app.models import Organization, User, SnmpCredential
 from app.main import app
 
 @pytest_asyncio.fixture()
@@ -38,6 +38,9 @@ async def session_factory():
             User(id=3, email="analyst@example.com", hashed_password=get_password_hash("pw"), name="Analyst", role="platform_analyst", org_id=None),
             User(id=4, email="staff@example.com", hashed_password=get_password_hash("pw"), name="User", role="platform_user", org_id=None),
             User(id=5, email="tenant@example.com", hashed_password=get_password_hash("pw"), name="Tenant Admin", role="client_admin", org_id=1),
+            SnmpCredential(id=1, org_id=1, name="Tenant SNMP", version="v3",
+                           username="snmp-reader", auth_protocol="SHA", auth_passphrase="auth-secret",
+                           priv_protocol="AES", priv_passphrase="priv-secret", port=161),
         ])
         await db.commit()
     yield factory
@@ -389,3 +392,25 @@ async def test_security_ops_requests_require_owner_granted_tenant_scope(session_
         assert allowed.json()["task"]["status"] == "manual"
         assert denied_cross.status_code == 403
         assert history.status_code == 200, history.text
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_credentials_require_scoped_permission_and_mask_secrets(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.get("/api/discovery/snmp-credentials?org_id=1")
+        assert denied.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.infrastructure.credentials.read",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert grant.status_code == 201, grant.text
+
+    async with client_for(session_factory, 2, version=1) as expert:
+        response = await expert.get("/api/discovery/snmp-credentials?org_id=1")
+        assert response.status_code == 200, response.text
+        credential = response.json()[0]
+        assert credential["community"] is None
+        assert credential["auth_passphrase"] == "********"
+        assert credential["priv_passphrase"] == "********"
