@@ -56,7 +56,7 @@ async def service_status(
     # T4.2 (additive, flag-gated): advance the per-org onboarding lifecycle
     # from probe results. Payload shape unchanged unless the flag is on.
     from app.core.config import settings
-    if settings.SERVICE_LIFECYCLE_ENABLED:
+    if settings.SERVICE_LIFECYCLE_ENABLED and current_user.org_id is not None:
         from app.platform import lifecycle
         target = "connected" if res.get("reachable") else "installed"
         row = await lifecycle.advance(db, current_user.org_id, service_id, target)
