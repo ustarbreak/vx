@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Database, CheckCircle, AlertTriangle, Clock, HardDrive } from 'lucide-react';
 import { tryLiveFeed } from '../../hooks/useLiveFeed';
 import OpsConsole from '../../components/OpsConsole';
+import SecurityRecordDetail from '../../components/SecurityRecordDetail';
 import type { ActionGroup } from '../../services/securityOps';
 
 const BACKUP_GROUPS: ActionGroup[] = [
@@ -67,6 +69,8 @@ interface BackupJob {
 }
 
 export default function BackupDRPage() {
+  const navigate = useNavigate();
+  const { jobId } = useParams<{ jobId: string }>();
   const [jobs, setJobs] = useState<BackupJob[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -97,6 +101,25 @@ export default function BackupDRPage() {
   if (loading) {
     return <div className="flex items-center justify-center h-96"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500"></div></div>;
   }
+
+
+  const selectedJob = jobId ? jobs.find((job) => job.id === jobId) : undefined;
+  if (jobId) return (
+    <SecurityRecordDetail backPath="/client-admin/backup-dr" service="backup-dr" serviceTitle="Backup & DR"
+      recordId={jobId} recordType="Backup job" subtitle={selectedJob ? selectedJob.name : "Backup job"}
+      status={selectedJob?.status} sourceLabel="Tenant backup inventory feed"
+      fields={selectedJob ? [
+        { label: "Protected device", value: selectedJob.device }, { label: "Backup type", value: selectedJob.type },
+        { label: "Status", value: selectedJob.status }, { label: "Data size", value: selectedJob.size },
+        { label: "Last run", value: selectedJob.lastRun ? new Date(selectedJob.lastRun).toLocaleString() : "Not recorded" },
+        { label: "Next run", value: new Date(selectedJob.nextRun).toLocaleString() },
+      ] : []}
+      groups={BACKUP_GROUPS}
+      contextParams={selectedJob ? { device: selectedJob.device, job: selectedJob.id, reason: "Backup job review " + selectedJob.id + " for " + selectedJob.device } : {}}
+      recommendations={["Confirm the protected workload, backup target and retention policy.","Check the most recent job result, logs, agent health and repository capacity.","Verify encryption, immutability and off-site or isolated copy status.","Perform a restore test in an isolated environment before relying on recovery.","Require explicit approval and verify restore target before overwriting production data or initiating failover."]}
+      notFound={!selectedJob}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -154,7 +177,7 @@ export default function BackupDRPage() {
           </thead>
           <tbody>
             {jobs.map((job) => (
-              <tr key={job.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)]">
+              <tr key={job.id} onClick={() => navigate('/client-admin/backup-dr/' + encodeURIComponent(job.id))} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] cursor-pointer">
                 <td className="py-3 px-4 text-[var(--ic-heading)]">{job.name}</td>
                 <td className="py-3 px-4 text-blue-400 cursor-pointer hover:text-blue-300">{job.device}</td>
                 <td className="py-3 px-4 text-gray-300 capitalize">{job.type}</td>
