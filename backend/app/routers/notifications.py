@@ -239,7 +239,7 @@ async def alerts_summary(
     until: datetime | None = None,
 ):
     """Severity/status totals over the FULL filtered set (not just the page)."""
-    eff = _scope_org(current_user, org_id)
+    eff = await _scope_org(current_user, org_id, db, "platform.alerts.read")
     common = dict(org=eff, severity=severity, a_status=status_f, source=source,
                   assignee=assignee, q=q, since=since, until=until)
     total = (await db.execute(_alert_filters(select(func.count(Alert.id)), **common))).scalar() or 0
@@ -307,7 +307,7 @@ async def alert_correlation_groups(
     (>1 live member sharing dedup_key + window_epoch). Powers the workspace
     relationship canvas; edge evidence is composed from these persisted fields.
     """
-    eff = _scope_org(current_user, org_id)
+    eff = await _scope_org(current_user, org_id, db, "platform.alerts.read")
     pol = await nv.get_grouping_policy(db)
     grp_q = (
         select(Alert.org_id, Alert.dedup_key, Alert.window_epoch,
@@ -416,10 +416,11 @@ async def bulk_alert_action(body: BulkAlertActionIn,
     results = []
     for aid in body.ids:
         alert = (await db.execute(select(Alert).where(Alert.id == aid))).scalars().first()
-        if not alert or (current_user.role != "platform_admin" and alert.org_id != current_user.org_id):
+        if not alert:
             results.append({"id": aid, "ok": False, "reason": "not_found_or_cross_tenant"})
             continue
         try:
+            await _ensure_resource_scope(current_user, alert.org_id, db, "platform.alerts.manage")
             _, changed = await nv.transition_alert(
                 db, alert, actor=current_user.email, new_status=target_status,
                 assignee=(body.assignee if body.action == "assign" else ...))
@@ -495,7 +496,7 @@ async def get_event_evidence(event_uid: str,
     if current_user.role == "platform_admin":
         org = await _scope_org(current_user, org_id, db, "platform.alerts.evidence.read")
     else:
-        org = _scope_org(current_user, org_id)   # 403 if org_id != user.org_id
+        org = await _scope_org(current_user, org_id, db, "platform.alerts.evidence.read")
         org = org if org is not None else current_user.org_id
     rec = await ev.get_evidence(
         db, org_id=org, event_uid=event_uid)
@@ -510,12 +511,15 @@ async def get_event_evidence(event_uid: str,
 # Notification rules (visual rule builder persists here)
 # ---------------------------------------------------------------------------
 @router.get("/notification-rules", response_model=list[RuleResponse])
-async def list_rules(current_user: User = Depends(get_current_user),
+async def list_rules(org_id: int | None = Query(None),
+                     current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
+    scope = await _scope_org(current_user, org_id, db, "platform.alerts.read")
     stmt = select(NotificationRule).order_by(NotificationRule.id)
     if current_user.role != "platform_admin":
-        stmt = stmt.where((NotificationRule.org_id == current_user.org_id) |
-                          (NotificationRule.org_id.is_(None)))
+        stmt = stmt.where(NotificationRule.org_id == scope)
+    elif scope is not None:
+        stmt = stmt.where(NotificationRule.org_id == scope)
     return (await db.execute(stmt)).scalars().all()
 
 
@@ -544,8 +548,15 @@ async def update_rule(rule_id: int, body: RuleUpdate,
     rule = (await db.execute(select(NotificationRule).where(NotificationRule.id == rule_id))).scalars().first()
     if not rule:
         raise HTTPException(404, "Rule not found")
-    if current_user.role != "platform_admin" and rule.org_id not in (None, current_user.org_id):
-        raise HTTPException(403, "Cross-tenant access denied")
+    if rule.org_id is None:
+        if current_user.role != "platform_admin" and not (
+            is_platform_role(current_user.role) and await has_permission(
+                current_user, "platform.notification_rules.manage", db
+            )
+        ):
+            raise HTTPException(403, "Global notification rule permission required")
+    else:
+        await _ensure_resource_scope(current_user, rule.org_id, db, "platform.notification_rules.manage")
     for field, val in (body.model_dump(exclude_unset=True)).items():
         setattr(rule, field, val)
     await db.commit()
@@ -559,8 +570,15 @@ async def delete_rule(rule_id: int, current_user: User = Depends(get_current_use
     rule = (await db.execute(select(NotificationRule).where(NotificationRule.id == rule_id))).scalars().first()
     if not rule:
         raise HTTPException(404, "Rule not found")
-    if current_user.role != "platform_admin" and rule.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if rule.org_id is None:
+        if current_user.role != "platform_admin" and not (
+            is_platform_role(current_user.role) and await has_permission(
+                current_user, "platform.notification_rules.manage", db
+            )
+        ):
+            raise HTTPException(403, "Global notification rule permission required")
+    else:
+        await _ensure_resource_scope(current_user, rule.org_id, db, "platform.notification_rules.manage")
     await db.delete(rule)
     await db.commit()
 
@@ -580,7 +598,7 @@ async def list_notifications(
     limit: int = Query(300, le=1000),
     page: int = Query(1, ge=1),
 ):
-    eff = _scope_org(current_user, org_id)
+    eff = await _scope_org(current_user, org_id, db, "platform.notifications.read")
     stmt = select(Notification).order_by(Notification.created_at.desc())
     if eff is not None:
         stmt = stmt.where(Notification.org_id == eff)
@@ -625,8 +643,7 @@ async def retry_one_notification(notif_id: int, current_user: User = Depends(get
     n = (await db.execute(select(Notification).where(Notification.id == notif_id))).scalars().first()
     if not n:
         raise HTTPException(404, "Notification not found")
-    if current_user.role != "platform_admin" and n.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_resource_scope(current_user, n.org_id, db, "platform.notifications.manage")
     n = await nv.retry_notification(db, n, actor=current_user.email)
     return NotificationRetryResult(id=n.id, status=n.status, attempts=n.attempts,
                                    last_error=n.last_error, sent_at=n.sent_at)
@@ -639,8 +656,7 @@ async def ack(notif_id: int, current_user: User = Depends(get_current_user),
     n = (await db.execute(select(Notification).where(Notification.id == notif_id))).scalars().first()
     if not n:
         raise HTTPException(404, "Notification not found")
-    if current_user.role != "platform_admin" and n.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_resource_scope(current_user, n.org_id, db, "platform.notifications.manage")
     await nv.ack_notification(db, n, actor=current_user.email)
     return {"ok": True}
 
