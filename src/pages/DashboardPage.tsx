@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Shield, AlertTriangle, Target, Zap, Clock, RefreshCw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { mockRiskScore, mockAlerts, mockAlertTimeline, mockThreatTrend } from '../data/mockData';
@@ -30,7 +31,7 @@ type ComplianceControl = { status: string; score: number | null };
 type TimelinePoint = { time: string; alerts: number };
 type ThreatTrendPoint = { date: string; threats: number; blocked: number };
 
-function KpiTile({ icon, value, tone }: { icon: React.ReactNode; value: React.ReactNode; tone: string }) {
+function KpiTile({ icon, value, tone }: { icon: ReactNode; value: ReactNode; tone: string }) {
   return <div className="flex items-center gap-3 min-w-0">
     <span className={tone + ' flex-shrink-0'}>{icon}</span>
     <p className={'text-xl sm:text-2xl font-bold text-[var(--ic-heading)] leading-none tabular-nums truncate ' + tone}>{value}</p>
