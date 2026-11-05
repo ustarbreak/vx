@@ -206,23 +206,14 @@ type NistCat = { category: string; categoryName: string; overallScore: number };
 function useComplianceData(): { cats: NistCat[]; score: number } | null {
   const [data, setData] = useState<{ cats: NistCat[]; score: number } | null>(null);
   useEffect(() => {
-    let alive = true;
-    api.get<any>('/analytics/overview')
-      .then((ov) => {
-        if (!alive) return;
-        const dets: any = ov?.detections?.by_severity ?? ov?.detections ?? {};
-        // Derive per-function scores from detection mix (fewer high-sev findings => higher score)
-        const total = typeof ov?.detections?.total === 'number' ? ov.detections.total : 0;
-        const crit = Number(dets.critical ?? dets.high ?? 0);
-        const cats: NistCat[] = ['ID', 'PR', 'DE', 'RS', 'RC', 'GV'].map((cat, i) => {
-          const base = Math.max(35, 98 - crit * 4 - total + i * 2);
-          return { category: cat, categoryName: cat, overallScore: Math.min(100, Math.max(0, base)) };
-        });
-        const score = Math.round(cats.reduce((a, c) => a + c.overallScore, 0) / cats.length);
-        setData({ cats, score });
-      })
-      .catch(() => { if (alive && isDemoMode()) setData({ cats: mockNISTMapping as any, score: mockRiskScore.compliance }); else if (alive) setData(null); });
-    return () => { alive = false; };
+    // Alert volume/severity is not a compliance assessment. Until the
+    // evidence-backed control register is available to this widget, show
+    // sample scores only in explicit Demo Mode and no score in Live Mode.
+    if (isDemoMode()) {
+      setData({ cats: mockNISTMapping as any, score: mockRiskScore.compliance });
+    } else {
+      setData(null);
+    }
   }, []);
   return data;
 }
@@ -233,7 +224,7 @@ function ComplianceScoreBody() {
   return (
     <div>
       <p className="text-3xl font-bold text-cyber-green">{d.score}%</p>
-      <p className="text-[10px] text-[var(--ic-muted)] mt-1 mb-3">NIST CSF 2.0 weighted average{isDemoMode() ? ' (demo dataset)' : ' (live detections)'} </p>
+      <p className="text-[10px] text-[var(--ic-muted)] mt-1 mb-3">NIST CSF 2.0 weighted average (demo fixture) </p>
       <div className="space-y-1.5">
         {d.cats.map((c) => (
           <div key={c.category} className="flex items-center gap-2 text-xs">
