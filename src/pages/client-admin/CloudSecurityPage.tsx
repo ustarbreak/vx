@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Cloud, AlertTriangle, CheckCircle, Shield, Server } from 'lucide-react';
-import { tryLiveFeed } from '../../hooks/useLiveFeed';
+import { fetchServiceLive } from '../../services/serviceData';
 import OpsConsole from '../../components/OpsConsole';
 import type { ActionGroup } from '../../services/securityOps';
 import { isDemoMode } from '../../services/demoMode';
@@ -87,10 +87,21 @@ export default function CloudSecurityPage() {
         ]);
         setFeedState('demo');
       } else {
-        const live = await tryLiveFeed<CloudAlert>('cloud-security');
-        if (cancelled) return;
-        setAlerts(live ?? []);
-        setFeedState(live ? 'live' : 'unavailable');
+        try {
+          const result = await fetchServiceLive<CloudAlert>('cloud-security');
+          if (cancelled) return;
+          if (result.source === 'live' && Array.isArray(result.records)) {
+            setAlerts(result.records);
+            setFeedState('live');
+          } else {
+            setAlerts([]);
+            setFeedState('unavailable');
+          }
+        } catch {
+          if (cancelled) return;
+          setAlerts([]);
+          setFeedState('unavailable');
+        }
       }
       if (!cancelled) setLoading(false);
     };
