@@ -52,6 +52,7 @@ PERMISSION_CATALOG = {
     "platform.infrastructure.read": "View global agent fleet and infrastructure",
     "platform.infrastructure.scan": "Start or cancel authorized infrastructure discovery",
     "platform.infrastructure.action": "Request allow-listed endpoint/device actions",
+    "platform.security_ops.read": "Read tenant Security Ops task history",
     "platform.security_ops.request": "Request allow-listed security operations",
     "platform.security_ops.approve": "Approve sensitive security operations",
     "platform.settings.read": "Read global platform settings",
