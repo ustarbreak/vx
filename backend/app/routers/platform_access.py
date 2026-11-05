@@ -18,6 +18,9 @@ from app.models import User, PlatformPermissionAssignment, AuditLog
 
 router = APIRouter(prefix="/platform/access", tags=["Platform Access"])
 
+class PlatformRoleUpdate(BaseModel):
+    role: str = Field(pattern="^(platform_expert|platform_analyst|platform_user)$")
+
 class AssignmentCreate(BaseModel):
     user_id: int
     permission_key: str
@@ -153,3 +156,43 @@ async def revoke_assignment(
         outcome="success",
     ))
     await db.commit()
+
+
+@router.get("/users")
+async def list_platform_staff(
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    rows = (await db.execute(select(User).where(
+        User.role.in_(sorted(PLATFORM_ROLES)),
+    ).order_by(User.name))).scalars().all()
+    return [{
+        "id": row.id, "email": row.email, "name": row.name, "role": row.role,
+        "status": row.status, "auth_version": row.auth_version,
+        "created_at": row.created_at,
+    } for row in rows]
+
+@router.patch("/users/{user_id}/role")
+async def update_platform_staff_role(
+    user_id: int,
+    body: PlatformRoleUpdate,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    target = await db.get(User, user_id)
+    if not target or target.role not in PLATFORM_ROLES - {"platform_admin"}:
+        raise HTTPException(404, "Platform Expert, Analyst or User account not found")
+    if target.id == owner.id:
+        raise HTTPException(403, "Owner role cannot be changed")
+    before = target.role
+    target.role = body.role
+    target.auth_version = int(target.auth_version or 0) + 1
+    db.add(AuditLog(
+        actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
+        org_id=None, action="platform.staff_role.updated", resource="User",
+        resource_id=str(target.id), details=f"role: {before} -> {target.role}",
+        outcome="success",
+    ))
+    await db.commit()
+    await db.refresh(target)
+    return {"id": target.id, "role": target.role, "auth_version": target.auth_version}
