@@ -134,23 +134,31 @@ async def test_permission_change_revokes_existing_bearer_token(session_factory):
         assert response.status_code == 401
 
 @pytest.mark.asyncio
-async def test_owner_cannot_create_second_owner_and_platform_staff_must_be_global(session_factory):
+async def test_only_owner_platform_access_api_can_create_platform_staff(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.post("/api/platform/access/users", json={
+            "email": "bad-expert@example.com", "name": "Bad Expert",
+            "password": "long-enough-password", "role": "platform_expert"
+        })
+        assert denied.status_code == 403
+        generic = await expert.post("/api/users/", json={
+            "email": "bad-generic@example.com", "name": "Bad Generic",
+            "password": "long-enough-password", "role": "platform_user", "org_id": None
+        })
+        assert generic.status_code == 403
+
     async with client_for(session_factory, 1) as owner:
-        invalid=await owner.post("/api/users/", json={
+        invalid = await owner.post("/api/users/", json={
             "email": "second-owner@example.com", "name": "Second Owner",
             "password": "long-enough-password", "role": "platform_admin", "org_id": None
         })
         assert invalid.status_code == 403
-        scoped=await owner.post("/api/users/", json={
-            "email": "bad-expert@example.com", "name": "Bad Expert",
-            "password": "long-enough-password", "role": "platform_expert", "org_id": 1
-        })
-        assert scoped.status_code == 422
-        valid=await owner.post("/api/users/", json={
+        valid = await owner.post("/api/platform/access/users", json={
             "email": "new-expert@example.com", "name": "New Expert",
-            "password": "long-enough-password", "role": "platform_expert", "org_id": None
+            "password": "long-enough-password", "role": "platform_expert"
         })
         assert valid.status_code == 201, valid.text
+        assert valid.json()["org_id"] if "org_id" in valid.json() else valid.json()["role"] == "platform_expert"
 
 
 @pytest.mark.asyncio
