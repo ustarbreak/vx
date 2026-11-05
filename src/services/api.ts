@@ -231,7 +231,7 @@ export interface BackendAuditLog {
 
 export const auditApi = {
   /** Platform-wide trail — platform_admin only (backend returns 403 otherwise). */
-  logs: (params?: { skip?: number; limit?: number; org_id?: number; actor_role?: string; outcome?: string }) => {
+  logs: (params?: { skip?: number; limit?: number; org_id?: number; actor_role?: string; outcome?: string; q?: string }) => {
     const qs = new URLSearchParams();
     if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && String(v) !== '') qs.set(k, String(v)); });
     const s = qs.toString();
