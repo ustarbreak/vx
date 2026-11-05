@@ -267,6 +267,8 @@ export interface BackendEntitlement {
 export const entitlementsApi = {
   list: (orgId?: number) =>
     api.get<BackendEntitlement[]>(`/entitlements/${orgId ? `?org_id=${orgId}` : ''}`),
+  update: (id: number, patch: { enabled?: boolean; seat_count?: number; notes?: string }) =>
+    api.patch<BackendEntitlement>(`/entitlements/${id}`, patch),
   check: (serviceId: string) =>
     api.get<{ entitled: boolean; service_id: string }>(`/entitlements/check/${serviceId}`),
   /** Backend-computed dependency graph (nodes = persisted entitlement rows). */
