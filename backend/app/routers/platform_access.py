@@ -42,12 +42,18 @@ async def effective_access(
         PlatformPermissionAssignment.revoked_at.is_(None),
     ))).scalars().all()
     now = datetime.now(timezone.utc)
+    active_assignments = []
     for row in rows:
         expires_at = row.expires_at
         if expires_at is not None and expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if expires_at is not None and expires_at <= now:
             continue
+        active_assignments.append({
+            "id": row.id, "permission_key": row.permission_key, "effect": row.effect,
+            "scope_type": row.scope_type, "scope_id": row.scope_id,
+            "expires_at": row.expires_at,
+        })
         if row.effect == "allow" and row.scope_type == "global":
             keys.add(row.permission_key)
         elif row.effect == "deny" and row.scope_type == "global":
@@ -58,6 +64,7 @@ async def effective_access(
         "user_id": current_user.id,
         "role": current_user.role,
         "owner": current_user.role == "platform_admin",
+        "assignments": active_assignments,
         "permissions": [
             {"key": key, "description": PERMISSION_CATALOG[key]}
             for key in sorted(keys) if key in PERMISSION_CATALOG
