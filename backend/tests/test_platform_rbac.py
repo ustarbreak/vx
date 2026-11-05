@@ -317,7 +317,7 @@ async def test_platform_user_directory_is_not_leaked_without_users_read(session_
         })
         assert grant.status_code == 201, grant.text
 
-    async with client_for(session_factory, 3) as analyst:
+    async with client_for(session_factory, 3, version=1) as analyst:
         listing = await analyst.get("/api/users/")
         assert listing.status_code == 200, listing.text
         assert all(row["role"].startswith("platform_") for row in listing.json())
