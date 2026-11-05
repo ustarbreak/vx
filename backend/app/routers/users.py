@@ -7,7 +7,6 @@ from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import UserCreate, UserResponse
 from app.core.security import get_password_hash, get_current_user, require_role
-from app.core.platform_rbac import require_permission
 from app.core.platform_rbac import has_permission, is_platform_role
 
 router = APIRouter(prefix="/users", tags=["Users"])
