@@ -241,6 +241,7 @@ export default function Layout() {
         { to: '/projects', icon: FolderKanban, label: 'Project Manager' },
         { to: '/reports', icon: FileBarChart2, label: 'Reports' },
         { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
+        { to: '/admin/access-control', icon: ShieldCheck, label: 'Access Control' },
       ],
     },
     {
