@@ -34,7 +34,7 @@ class SubscriptionCreate(BaseModel):
     current_period_start: datetime
     current_period_end: datetime
     trial_ends_at: datetime | None = None
-    provider: str = Field(default="manual", min_length=1, max_length=32)
+    provider: Literal["manual"] = "manual"
     provider_subscription_id: str | None = Field(default=None, max_length=160)
     change_reason: str | None = Field(default=None, max_length=300)
 
