@@ -6,12 +6,10 @@ Management, Backup & DR).
 
 POST /api/security-ops/actions
     Validates the action against the catalog (mirrors src/services/securityOps.ts),
-    records a durable SecurityOpsTask row + an AuditLog entry. The platform does
-    NOT open shell channels to devices by design: tasks are `queued` for the
-    enrolled goinfra collector / configured device integrations to pick up on
-    their next poll, or `manual` when no channel exists yet (a technician then
-    executes them with their own tooling). The response is always honest about
-    which of the two happened.
+    records a durable SecurityOpsTask row + an AuditLog entry. No agent task-poll /
+    acknowledgement endpoint is currently implemented, so every live dispatch
+    is `manual`. It is not sent to a device; a technician must execute it with
+    vendor tooling and record the outcome outside this endpoint.
 
 GET  /api/security-ops/tasks
     Recent dispatches for the caller's tenant (analyst history panel).
@@ -170,7 +168,7 @@ async def dispatch_action(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("client_admin")),
 ):
-    """Validate + durably queue one operator action from a security console."""
+    """Validate and durably record an operator action for manual execution."""
     service = (body.service or "").strip()
     action_id = (body.action_id or "").strip()
     if service not in VALID_SERVICES:
@@ -213,10 +211,10 @@ async def dispatch_action(
         action_id=action_id,
         label=safe_params.get("label", "") or action_id,
         vendor=vendor,
-        status="queued",
-        reason=("Queued for the tenant's enrolled goinfra collector / device integration "
-                "on its next policy poll. If no channel covers this target, a technician "
-                "executes it manually (status flips to 'manual')."),
+        status="manual",
+        reason=("No security-ops task pickup/acknowledgement endpoint is implemented. "
+                "Nothing was sent to a device; a technician must execute this action "
+                "using the vendor's own tooling."),
         params=safe_params,
         requested_by=current_user.email,
     )
@@ -240,12 +238,12 @@ async def dispatch_action(
     rendered = [f"[{ts}] task={uid} service={service} action={action_id}"]
     if vendor:
         rendered.append(f"vendor={vendor} — command batch rendered from the vendor catalog (dry-run diff staged)")
-    rendered.append("status=queued: awaiting collector/integration acknowledgement (no optimistic success shown)")
+    rendered.append("status=manual: no device dispatch occurred; technician execution required")
     return {
         "ok": True,
         "actionId": action_id,
         "source": "live",
-        "message": f"Dispatched \"{action_id}\" on {service} — recorded as {uid} in the audit trail.",
+        "message": f"Recorded action {action_id} as {uid}. No device command was sent; technician execution is required.",
         "output": "\n".join(rendered),
         "task": {"uid": uid, "status": task.status},
     }

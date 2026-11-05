@@ -112,7 +112,7 @@ async def test_email_security_catalog_uses_frontend_em_prefix(session_factory):
             "service": "email-security", "action_id": "em-header-analysis",
         })
     assert response.status_code == 200, response.text
-    assert response.json()["task"]["status"] == "queued"
+    assert response.json()["task"]["status"] == "manual"
 
 
 @pytest.mark.asyncio
@@ -129,7 +129,7 @@ async def test_valid_dispatch_is_tenant_scoped_and_persisted(session_factory):
         assert own.status_code == 200
         assert len(own.json()) == 1
         assert own.json()[0]["org_id"] == 1
-        assert own.json()[0]["status"] == "queued"
+        assert own.json()[0]["status"] == "manual"
     async with client_for(session_factory, 2) as other:
         foreign = await other.get("/api/security-ops/tasks")
         assert foreign.status_code == 200
@@ -138,3 +138,19 @@ async def test_valid_dispatch_is_tenant_scoped_and_persisted(session_factory):
         task = (await db.execute(__import__("sqlalchemy").select(SecurityOpsTask))).scalars().one()
         assert task.params.get("api_token") is None
         assert task.params["host"] == "workstation-01"
+
+
+@pytest.mark.asyncio
+async def test_live_dispatch_explicitly_says_no_device_command_was_sent(session_factory):
+    await seed(session_factory)
+    async with client_for(session_factory, 1) as client:
+        response = await client.post("/api/security-ops/actions", json={
+            "service": "endpoint-protection", "action_id": "ep-isolate",
+        })
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True  # persistence succeeded, not device execution
+    assert payload["task"]["status"] == "manual"
+    assert "No device command was sent" in payload["message"]
+    assert "technician execution is required" in payload["message"]
+    assert "status=manual" in payload["output"]
