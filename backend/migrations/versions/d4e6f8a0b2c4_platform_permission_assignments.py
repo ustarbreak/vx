@@ -15,6 +15,13 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column("users", sa.Column("auth_version", sa.Integer(), nullable=False, server_default="0"))
     op.create_table(
+        "platform_settings",
+        sa.Column("key", sa.String(length=120), primary_key=True),
+        sa.Column("value_json", sa.JSON(), nullable=False),
+        sa.Column("updated_by", sa.Integer(), sa.ForeignKey("users.id"), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=True),
+    )
+    op.create_table(
         "platform_permission_assignments",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
@@ -38,4 +45,5 @@ def downgrade() -> None:
     op.drop_index("ix_platform_perm_user_key", table_name="platform_permission_assignments")
     op.drop_index("ix_platform_permission_assignments_user_id", table_name="platform_permission_assignments")
     op.drop_table("platform_permission_assignments")
+    op.drop_table("platform_settings")
     op.drop_column("users", "auth_version")
