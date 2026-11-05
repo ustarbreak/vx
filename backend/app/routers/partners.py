@@ -37,7 +37,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role, require_permission
 from app.database import get_db
 from app.models import AuditLog, Organization, TenantSetting, User
 from app.schemas import (
@@ -181,9 +182,9 @@ def _license_payload(org: Organization, children: list[Organization]) -> dict:
     ).model_dump()
 
 
-async def _resolve_partner(pid: str, user: User, db: AsyncSession) -> Organization:
-    """Tenant isolation gate (rule 1). platform_admin may address any partner;
-    a partner_admin only their own org. Non-partner orgs -> 404 not configured."""
+async def _resolve_partner(pid: str, user: User, db: AsyncSession,
+                          permission: str = "platform.partners.read") -> Organization:
+    """Resolve one partner and enforce either Owner, platform capability or own-partner scope."""
     try:
         oid = int(pid)
     except (TypeError, ValueError):
@@ -191,7 +192,13 @@ async def _resolve_partner(pid: str, user: User, db: AsyncSession) -> Organizati
     org = (await db.execute(select(Organization).where(Organization.id == oid))).scalar_one_or_none()
     if org is None or not org.is_partner:
         raise HTTPException(404, "not configured — cette organisation n'est pas un partenaire du programme")
-    if user.role != "platform_admin" and str(user.org_id) != str(org.id):
+    if user.role == "platform_admin":
+        return org
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, partner_id=org.id):
+            raise HTTPException(403, "Partner permission required for this partner scope")
+        return org
+    if user.role != "partner_admin" or user.org_id != org.id:
         raise HTTPException(403, "Cross-partner access denied")
     return org
 
@@ -201,20 +208,25 @@ async def _resolve_partner(pid: str, user: User, db: AsyncSession) -> Organizati
 # --------------------------------------------------------------------------- #
 @router.get("")
 async def list_partners(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    res = await db.execute(select(Organization).where(Organization.is_partner.is_(True)).order_by(Organization.id))
+    all_partners = list(res.scalars().all())
     if current_user.role == "platform_admin":
-        res = await db.execute(select(Organization).where(Organization.is_partner.is_(True)).order_by(Organization.id))
-        orgs = list(res.scalars().all())
+        orgs = all_partners
+    elif is_platform_role(current_user.role):
+        orgs = [p for p in all_partners if await has_permission(
+            current_user, "platform.partners.read", db, partner_id=p.id
+        )]
     elif current_user.role == "partner_admin":
-        org = (await db.execute(select(Organization).where(Organization.id == current_user.org_id))).scalar_one_or_none()
-        orgs = [org] if org and org.is_partner else []
+        org = next((p for p in all_partners if p.id == current_user.org_id), None)
+        orgs = [org] if org else []
     else:
-        raise HTTPException(403, "Partners routes require a partner or platform-admin session")
+        raise HTTPException(403, "Partners routes require a partner or authorized platform session")
     return [await _partner_out(db, o) for o in orgs]
 
 
 @router.get("/stats")
 async def program_stats(db: AsyncSession = Depends(get_db),
-                        current_user: User = Depends(require_role("platform_admin"))):
+                        current_user: User = Depends(require_permission("platform.partners.read"))):
     partners = (await db.execute(select(Organization).where(Organization.is_partner.is_(True)))).scalars().all()
     active = [p for p in partners if p.status == "active"]
     wholesale = 0
@@ -273,7 +285,7 @@ async def put_branding(pid: str, body: WhiteLabelIn, request: Request,
                        db: AsyncSession = Depends(get_db),
                        current_user: User = Depends(get_current_user)):
     _rate_limit(f"branding:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     if body.logo_data_url and len(body.logo_data_url) > LOGO_MAX_B64:
         raise HTTPException(422, "Logo trop volumineux (max ~500 Ko en base64)")
     if body.custom_domain and not DOMAIN_RE.match(body.custom_domain.lower()):
@@ -301,7 +313,7 @@ async def verify_domain(pid: str, request: Request,
                         db: AsyncSession = Depends(get_db),
                         current_user: User = Depends(get_current_user)):
     _rate_limit(f"verify:{current_user.id}", 5, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     data = await _settings(db, org.id)
     b = _branding_of(data)
     if not b["custom_domain"]:
@@ -334,7 +346,7 @@ async def add_client(pid: str, body: EndClientIn, request: Request,
                      db: AsyncSession = Depends(get_db),
                      current_user: User = Depends(get_current_user)):
     _rate_limit(f"client:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     children = await _children(db, org.id)
     lic = _license_payload(org, children)
     if lic["client_seats_used"] >= lic["client_seats"]:
@@ -359,7 +371,7 @@ async def patch_client(pid: str, cid: str, body: EndClientPatch, request: Reques
                        db: AsyncSession = Depends(get_db),
                        current_user: User = Depends(get_current_user)):
     _rate_limit(f"client:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     child = None
     if str(cid).isdigit():
         child = (await db.execute(select(Organization).where(Organization.id == int(cid)))).scalar_one_or_none()
@@ -381,7 +393,7 @@ async def remove_client(pid: str, cid: str, request: Request,
                         db: AsyncSession = Depends(get_db),
                         current_user: User = Depends(get_current_user)):
     _rate_limit(f"client:{current_user.id}", 10, 60)
-    org = await _resolve_partner(pid, current_user, db)
+    org = await _resolve_partner(pid, current_user, db, "platform.partners.manage")
     if not str(cid).isdigit():
         raise HTTPException(404, "end-client not found for this partner")
     child = (await db.execute(select(Organization).where(Organization.id == int(cid)))).scalar_one_or_none()
