@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, text
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -1279,6 +1279,9 @@ class PlatformPermissionAssignment(Base):
     __table_args__ = (
         Index("ix_platform_perm_user_key", "user_id", "permission_key"),
         Index("ix_platform_perm_scope", "scope_type", "scope_id"),
+        CheckConstraint("effect IN ('allow','deny')", name="ck_platform_perm_effect"),
+        CheckConstraint("scope_type IN ('global','tenant','partner')", name="ck_platform_perm_scope"),
+        CheckConstraint("(scope_type = 'global' AND scope_id IS NULL) OR (scope_type IN ('tenant','partner') AND scope_id IS NOT NULL)", name="ck_platform_perm_scope_id"),
     )
 
     id = Column(Integer, primary_key=True)
