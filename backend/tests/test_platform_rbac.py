@@ -444,3 +444,25 @@ async def test_permission_expiry_handles_naive_and_aware_datetimes(session_facto
         })
         assert past.status_code == 422
         assert future.status_code == 201, future.text
+
+
+@pytest.mark.asyncio
+async def test_effective_access_response_applies_deny_precedence_and_shows_scopes(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        allow = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.billing.read",
+            "effect": "allow", "scope_type": "global"
+        })
+        deny = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 3, "permission_key": "platform.billing.read",
+            "effect": "deny", "scope_type": "global"
+        })
+        assert allow.status_code == 201, allow.text
+        assert deny.status_code == 201, deny.text
+
+    async with client_for(session_factory, 3, version=2) as analyst:
+        response = await analyst.get("/api/platform/access/me")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert "platform.billing.read" not in {p["key"] for p in payload["permissions"]}
+        assert len([a for a in payload["assignments"] if a["permission_key"] == "platform.billing.read"]) == 2
