@@ -156,7 +156,7 @@ def test_m1_migration_chain_is_linear_single_head():
     assert len(order) == len(mods) == 10
     assert order[-3] == "b7d2f4a1c8e3" and order[-2] == "c3d9e1f7a2b4"
     assert order[-1] == "d4e6f8a0b2c4"
-    assert order[-3] == "a3c5e7f9b1d2"
+    assert order[-4] == "a3c5e7f9b1d2"
     assert "f1b3d5e7a9c2" == order[order.index("a3c5e7f9b1d2") - 1]
 
 
