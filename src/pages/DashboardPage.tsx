@@ -202,10 +202,10 @@ export default function DashboardPage() {
           <DashboardWidget id="kpi-alerts" title="Open Alerts" spanOptions={[1, 2]}>
             <KpiTile icon={<AlertTriangle className="w-5 h-5" />} tone="text-red-400" value={loading ? '…' : value(data.openAlerts)} />
           </DashboardWidget>
-          <DashboardWidget id="kpi-threats" title={demo ? "Threat Feed Events" : "Active Threat Indicators"} spanOptions={[1, 2]}>
+          <DashboardWidget id="kpi-threats" title="Threat Feed Records" spanOptions={[1, 2]}>
             <KpiTile icon={<Target className="w-5 h-5" />} tone="text-orange-400" value={loading ? '…' : value(data.activeThreats)} />
           </DashboardWidget>
-          <DashboardWidget id="kpi-compliance" title="Assessed Controls" spanOptions={[1, 2]}>
+          <DashboardWidget id="kpi-compliance" title="Compliance Score" spanOptions={[1, 2]}>
             <KpiTile icon={<Shield className="w-5 h-5" />} tone="text-green-400" value={loading ? '…' : complianceValue} />
           </DashboardWidget>
           <DashboardWidget id="kpi-remediated" title="Completed SOAR Runs" spanOptions={[1, 2]}>
