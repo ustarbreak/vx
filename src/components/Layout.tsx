@@ -15,7 +15,7 @@ import {
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
-  MonitorSmartphone, CreditCard
+  MonitorSmartphone, CreditCard, Layers3
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
 
@@ -249,6 +249,8 @@ export default function Layout() {
       group: true, icon: Server, label: 'Platform', items: [
         { to: '/admin/themes', icon: Palette, label: 'Infracentra Themes' },
         { to: '/admin/packs', icon: Package, label: 'Pack Customizer' },
+        { to: '/admin/service-catalog', icon: Layers3, label: 'Service Catalog & Plans' },
+        { to: '/admin/integrations', icon: Network, label: 'Integrations' },
         { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
       ],
     },
