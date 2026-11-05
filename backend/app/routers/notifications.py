@@ -514,12 +514,13 @@ async def get_event_evidence(event_uid: str,
 async def list_rules(org_id: int | None = Query(None),
                      current_user: User = Depends(get_current_user),
                      db: AsyncSession = Depends(get_db)):
-    scope = await _scope_org(current_user, org_id, db, "platform.alerts.read")
+    scope = await _scope_org(current_user, org_id, db, "platform.notification_rules.read")
     stmt = select(NotificationRule).order_by(NotificationRule.id)
-    if current_user.role != "platform_admin":
-        stmt = stmt.where(NotificationRule.org_id == scope)
-    elif scope is not None:
-        stmt = stmt.where(NotificationRule.org_id == scope)
+    if is_platform_role(current_user.role):
+        if scope is not None:
+            stmt = stmt.where(NotificationRule.org_id == scope)
+    elif current_user.role != "platform_admin":
+        stmt = stmt.where((NotificationRule.org_id == scope) | (NotificationRule.org_id.is_(None)))
     return (await db.execute(stmt)).scalars().all()
 
 
