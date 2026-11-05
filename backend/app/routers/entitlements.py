@@ -6,7 +6,8 @@ from datetime import datetime
 from app.database import get_db
 from app.models import Entitlement, Organization, User, AuditLog, TenantServiceGrant
 from app.schemas import EntitlementCreate, EntitlementUpdate, EntitlementResponse
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import require_permission, has_permission, is_platform_role
 
 router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
 
@@ -109,20 +110,25 @@ async def get_service_chain(
 
 @router.get("/", response_model=List[EntitlementResponse])
 async def get_entitlements(
-    org_id: int = None,
+    org_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get entitlements (platform admin sees all, client users see their org)"""
+    """Read entitlements only within a tenant or explicitly authorized platform scope."""
     query = select(Entitlement)
-    
-    if current_user.role != "platform_admin":
-        # Client users can only see their own organization's entitlements
+    if current_user.role == "platform_admin":
+        if org_id is not None:
+            query = query.where(Entitlement.org_id == org_id)
+    elif is_platform_role(current_user.role):
+        if not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(403, "Billing read permission required for this scope")
+        if org_id is not None:
+            query = query.where(Entitlement.org_id == org_id)
+    else:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
+            raise HTTPException(403, "Tenant entitlement scope denied")
         query = query.where(Entitlement.org_id == current_user.org_id)
-    elif org_id:
-        # Platform admin can filter by org
-        query = query.where(Entitlement.org_id == org_id)
-    
+
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -175,7 +181,7 @@ async def create_entitlement(
     entitlement_data: EntitlementCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.billing.manage"))
 ):
     """Create entitlement (platform admin only)"""
     # Check if organization exists
@@ -236,7 +242,7 @@ async def update_entitlement(
     entitlement_data: EntitlementUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.billing.manage"))
 ):
     """Update entitlement (platform admin only) - THIS IS THE ENFORCEMENT ENDPOINT"""
     result = await db.execute(select(Entitlement).where(Entitlement.id == entitlement_id))
@@ -291,7 +297,7 @@ async def delete_entitlement(
     entitlement_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.billing.manage"))
 ):
     """Delete entitlement (platform admin only)"""
     result = await db.execute(select(Entitlement).where(Entitlement.id == entitlement_id))
