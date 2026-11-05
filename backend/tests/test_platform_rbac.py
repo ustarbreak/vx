@@ -537,8 +537,8 @@ async def test_platform_dashboard_uses_database_aggregates_and_dashboard_permiss
         assert payload["partners"]["total"] == 1
         assert payload["users"]["total"] == 5
         assert payload["infrastructure"]["collector_probes"] == 0
-        assert payload["commercial"]["subscriptions"]["available"] is False
-        assert "not represented as subscriptions" in payload["commercial"]["subscriptions"]["reason"]
+        assert payload["commercial"]["subscriptions"]["available"] is True
+        assert payload["commercial"]["subscriptions"]["current"] == 0
 
     async with client_for(session_factory, 5) as tenant:
         denied = await tenant.get("/api/platform/dashboard/overview")
