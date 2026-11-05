@@ -158,7 +158,7 @@ async def test_only_owner_platform_access_api_can_create_platform_staff(session_
             "password": "long-enough-password", "role": "platform_expert"
         })
         assert valid.status_code == 201, valid.text
-        assert valid.json()["org_id"] if "org_id" in valid.json() else valid.json()["role"] == "platform_expert"
+        assert valid.json()["role"] == "platform_expert"
 
 
 @pytest.mark.asyncio
