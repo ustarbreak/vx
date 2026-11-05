@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Search, Eye, Edit, CheckCircle2, XCircle, Shield, Ban, Users, DollarSign, Key, FileText, Server, Activity, Copy, RefreshCw, Trash2, Plus, ExternalLink } from 'lucide-react';
 import { demoOrganizations, serviceCatalog } from '../../data/mockData';
 import { Organization, ServiceId, ServiceEntitlement } from '../../types';
-import { organizationsApi, ApiError } from '../../services/api';
+import { organizationsApi, entitlementsApi, ApiError } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
 import {
   demoApiKeys, demoLicenses, demoDevices, demoTechnicians, demoPlatformAudit,
 } from '../../data/demoWorld';
@@ -27,6 +28,8 @@ const DW_ORG_ID: Record<string, number> = {
 const dwOrgId = (orgId: string): number | null =>
   DW_ORG_ID[orgId] ?? (/^org-db-(\d+)$/.exec(orgId)?.[1] ? Number(/^org-db-(\d+)$/.exec(orgId)![1]) : null);
 
+type ManagedEntitlement = ServiceEntitlement & { backendId?: number };
+
 interface ClientApiKeyRow { key: string; label: string; createdAt: string; lastUsed: string; status: 'active' | 'revoked' }
 interface ClientLicenseRow { id: string; type: string; seats: number; endpoints: number; expiresAt: string; status: 'active' | 'expiring' | 'expired' }
 interface ClientDeviceRow { id: string; hostname: string; type: string; os: string; ip: string; status: 'online' | 'offline' | 'degraded'; lastSeen: string; agent: string; isProbe?: boolean }
@@ -34,6 +37,7 @@ interface ClientMemberRow { name: string; email: string; role: string; mfa: bool
 interface ClientActivityRow { time: string; action: string; detail: string; actor: string; type: 'system' | 'alert' | 'compliance' | 'auth' | 'ticket' | 'rule' | 'license' }
 
 const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoApiKeys
@@ -42,6 +46,7 @@ const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
 };
 
 const licenseFor = (org: Organization): ClientLicenseRow | null => {
+  if (!isDemoMode()) return null;
   const oid = dwOrgId(org.id);
   const lic = oid != null ? demoLicenses.find(l => l.orgId === oid) : undefined;
   if (lic) {
@@ -59,6 +64,7 @@ const licenseFor = (org: Organization): ClientLicenseRow | null => {
 };
 
 const devicesFor = (org: Organization): ClientDeviceRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(org.id);
   if (oid == null) return [];
   const rows = demoDevices.filter(d => d.orgId === oid).map(d => ({
@@ -78,6 +84,7 @@ const deviceCountFor = (org: Organization): number => {
 };
 
 const membersFor = (orgId: string): ClientMemberRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoTechnicians
@@ -89,6 +96,7 @@ const membersFor = (orgId: string): ClientMemberRow[] => {
 };
 
 const activityFor = (orgId: string): ClientActivityRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   const now = Date.now();
   const rel = (iso: string) => {
@@ -220,7 +228,7 @@ export default function PlatformClientsPage() {
   const [search, setSearch] = useState('');
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [activeTab, setActiveTab] = useState<'services' | 'devices' | 'members' | 'api-keys' | 'license' | 'activity'>('services');
-  const [entitlements, setEntitlements] = useState<Record<string, ServiceEntitlement[]>>(
+  const [entitlements, setEntitlements] = useState<Record<string, ManagedEntitlement[]>>(
     Object.fromEntries(demoOrganizations.map(o => [o.id, [...o.entitlements]]))
   );
   // Real tenants from the backend (POST/GET /api/organizations/) — merged with demo rows
@@ -252,9 +260,9 @@ export default function PlatformClientsPage() {
   useEffect(() => { loadOrgs(); }, []);
 
   // entitlements state for backend orgs defaults to empty list
-  const getEntitlements = (orgId: string): ServiceEntitlement[] => entitlements[orgId] ?? [];
+  const getEntitlements = (orgId: string): ManagedEntitlement[] => entitlements[orgId] ?? [];
 
-  const allOrgs = [...demoOrganizations, ...backendOrgs.filter(b => !demoOrganizations.some(d => d.name.toLowerCase() === b.name.toLowerCase()))];
+  const allOrgs = isDemoMode() ? demoOrganizations : backendOrgs;
 
   const filtered = allOrgs.filter(o =>
     o.name.toLowerCase().includes(search.toLowerCase()) ||
