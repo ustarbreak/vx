@@ -1291,3 +1291,12 @@ class PlatformPermissionAssignment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PlatformSetting(Base):
+    """Durable singleton-style key/value settings for the platform control plane."""
+    __tablename__ = "platform_settings"
+    key = Column(String(120), primary_key=True)
+    value_json = Column(JSON, nullable=False, default=dict)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
