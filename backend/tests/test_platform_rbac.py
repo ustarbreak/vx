@@ -466,3 +466,29 @@ async def test_effective_access_response_applies_deny_precedence_and_shows_scope
         payload = response.json()
         assert "platform.billing.read" not in {p["key"] for p in payload["permissions"]}
         assert len([a for a in payload["assignments"] if a["permission_key"] == "platform.billing.read"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_partner_operations_writes_require_partner_scoped_manage_grant(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.post("/api/partners/3/handovers", json={
+            "content": "Shift handover without permission", "shift": "morning"
+        })
+        assert denied.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.partners.manage",
+            "effect": "allow", "scope_type": "partner", "scope_id": 3
+        })
+        assert grant.status_code == 201, grant.text
+
+    async with client_for(session_factory, 2, version=1) as expert:
+        allowed = await expert.post("/api/partners/3/handovers", json={
+            "content": "Authorized scoped shift handover", "shift": "morning"
+        })
+        cross_partner = await expert.post("/api/partners/2/handovers", json={
+            "content": "Must not cross partner scope", "shift": "morning"
+        })
+        assert allowed.status_code == 201, allowed.text
+        assert cross_partner.status_code == 404
