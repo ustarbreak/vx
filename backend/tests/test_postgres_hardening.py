@@ -213,6 +213,51 @@ async def test_m2_stage4_revision_ops_execute_on_postgres(engine):
     assert "dedup_key IS NOT NULL" in idxdef
 
 
+
+
+async def test_m4_platform_rbac_migration_upgrade_and_downgrade_postgres(engine):
+    """Exercise the real PA-02 migration without touching persistent test data."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import importlib.util
+
+    async with engine.connect() as conn:
+        tx = await conn.begin()
+
+        def exercise(sync_conn):
+            sync_conn.execute(sa.text("CREATE TABLE users (id SERIAL PRIMARY KEY)"))
+            sync_conn.execute(sa.text("CREATE TABLE organizations (id SERIAL PRIMARY KEY)"))
+            sync_conn.execute(sa.text("INSERT INTO users (id) VALUES (1), (2)"))
+            mc = MigrationContext.configure(connection=sync_conn, opts={"target_metadata": None})
+            spec = importlib.util.spec_from_file_location(
+                "rev_d4e6", os.path.join(os.path.dirname(__file__), "..",
+                "migrations", "versions", "d4e6f8a0b2c4_platform_permission_assignments.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            with Operations.context(mc):
+                mod.upgrade()
+            cols = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'"))}
+            tables = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "auth_version" in cols
+            assert {"platform_settings", "platform_permission_assignments"} <= tables
+            # Existing accounts remain intact and receive the zero-version default.
+            versions = sync_conn.execute(sa.text("SELECT auth_version FROM users ORDER BY id")).scalars().all()
+            assert versions == [0, 0]
+            with Operations.context(mc):
+                mod.downgrade()
+            cols_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'"))}
+            tables_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "auth_version" not in cols_after
+            assert "platform_settings" not in tables_after
+            assert "platform_permission_assignments" not in tables_after
+
+        await conn.run_sync(exercise)
+        await tx.rollback()
+
 # ---------------------------------------------------------------------------
 # P1 — ON CONFLICT partial-index inference on Postgres
 # ---------------------------------------------------------------------------
