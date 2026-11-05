@@ -7,7 +7,7 @@ is unaffected. Run against a real server:
   pytest tests/test_postgres_hardening.py -p no:libtmux -q
 
 Covers the previously SQLite-only evidence gaps:
-  M1  migration chain integrity (single linear head through all revisions)
+  M1  migration graph integrity (single reachable head across merged branches)
   M2  full alembic-style upgrade path executed on Postgres (op.add_column /
       create_index with postgresql_where), ending at head b7d2f4a1c8e3
   P1  ON CONFLICT ... WHERE partial-index inference against the index created
@@ -21,7 +21,7 @@ Covers the previously SQLite-only evidence gaps:
       semantics on Postgres)
 
 STAGE 6A additions (outcome labeling):
-  M1 now asserts single head == c3d9e1f7a2b4 across 9 revisions;
+  M1 now asserts a single reachable head == d4e6f8a0b2c4 across the full migration DAG;
   M3 executes the Stage 6A revision's real op.* code paths on Postgres and
      verifies its downgrade() removes ONLY outcome_labels.
 """
@@ -132,7 +132,7 @@ async def _fresh_schema(engine):
 # M1 — chain integrity (engine-independent but part of the hardening set)
 # ---------------------------------------------------------------------------
 
-def test_m1_migration_chain_is_linear_single_head():
+def test_m1_migration_graph_has_one_reachable_head():
     import importlib.util
     vdir = os.path.join(os.path.dirname(__file__), "..", "migrations", "versions")
     mods = {}
@@ -143,20 +143,32 @@ def test_m1_migration_chain_is_linear_single_head():
         m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(m)
         mods[m.revision] = m.down_revision
-    downs = set(mods.values())
-    heads = [r for r in mods if r not in downs]
-    assert heads == ["c3d9e1f7a2b4"], f"expected single head, got {heads}"
-    # walk from head to base
-    order, cur = [], heads[0]
-    while cur is not None:
-        assert cur in mods, f"dangling down_revision {cur}"
-        order.append(cur)
-        cur = mods[cur]
-    order.reverse()
-    assert len(order) == len(mods) == 9
-    assert order[-2] == "b7d2f4a1c8e3" and order[-1] == "c3d9e1f7a2b4"
-    assert order[-3] == "a3c5e7f9b1d2"
-    assert "f1b3d5e7a9c2" == order[order.index("a3c5e7f9b1d2") - 1]
+
+    def parents(revision):
+        value = mods[revision]
+        if value is None:
+            return []
+        return list(value) if isinstance(value, (tuple, list)) else [value]
+
+    all_parents = {parent for revision in mods for parent in parents(revision)}
+    heads = sorted(revision for revision in mods if revision not in all_parents)
+    assert heads == ["d4e6f8a0b2c4"], f"expected one migration head, got {heads}"
+
+    reachable = set()
+    def visit(revision):
+        if revision in reachable:
+            return
+        reachable.add(revision)
+        for parent in parents(revision):
+            assert parent in mods, f"dangling down_revision {parent} from {revision}"
+            visit(parent)
+
+    visit(heads[0])
+    assert reachable == set(mods), f"unreachable migrations: {sorted(set(mods) - reachable)}"
+    assert set(parents("d4e6f8a0b2c4")) == {
+        "h8i0j2k4l6m8", "k1l3m5n7o9p1"
+    }
+    assert "b7d2f4a1c8e3" in reachable and "a3c5e7f9b1d2" in reachable
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +223,51 @@ async def test_m2_stage4_revision_ops_execute_on_postgres(engine):
     assert "status <> ALL (ARRAY['resolved'::text, 'closed'::text])" in idxdef
     assert "dedup_key IS NOT NULL" in idxdef
 
+
+
+
+async def test_m4_platform_rbac_migration_upgrade_and_downgrade_postgres(engine):
+    """Exercise the real PA-02 migration without touching persistent test data."""
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    import importlib.util
+
+    async with engine.connect() as conn:
+        tx = await conn.begin()
+
+        def exercise(sync_conn):
+            sync_conn.execute(sa.text("CREATE TABLE users (id SERIAL PRIMARY KEY)"))
+            sync_conn.execute(sa.text("CREATE TABLE organizations (id SERIAL PRIMARY KEY)"))
+            sync_conn.execute(sa.text("INSERT INTO users (id) VALUES (1), (2)"))
+            mc = MigrationContext.configure(connection=sync_conn, opts={"target_metadata": None})
+            spec = importlib.util.spec_from_file_location(
+                "rev_d4e6", os.path.join(os.path.dirname(__file__), "..",
+                "migrations", "versions", "d4e6f8a0b2c4_platform_permission_assignments.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            with Operations.context(mc):
+                mod.upgrade()
+            cols = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'"))}
+            tables = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "auth_version" in cols
+            assert {"platform_settings", "platform_permission_assignments"} <= tables
+            # Existing accounts remain intact and receive the zero-version default.
+            versions = sync_conn.execute(sa.text("SELECT auth_version FROM users ORDER BY id")).scalars().all()
+            assert versions == [0, 0]
+            with Operations.context(mc):
+                mod.downgrade()
+            cols_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='users'"))}
+            tables_after = {r[0] for r in sync_conn.execute(sa.text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema=current_schema()"))}
+            assert "auth_version" not in cols_after
+            assert "platform_settings" not in tables_after
+            assert "platform_permission_assignments" not in tables_after
+
+        await conn.run_sync(exercise)
+        await tx.rollback()
 
 # ---------------------------------------------------------------------------
 # P1 — ON CONFLICT partial-index inference on Postgres

@@ -44,7 +44,7 @@ export default function StatisticsPage() {
       if (results[3].status === 'rejected') errors.push('SOAR run history unavailable');
       setLiveStats({
         devices: devices.length,
-        online: devices.filter(d => ['online', 'active'].includes(String(d.status).toLowerCase())).length,
+        online: devices.filter(d => d.monitoring_state === 'monitored').length,
         alerts, threats, completedRuns,
       });
       setLiveError(errors.join(' · '));

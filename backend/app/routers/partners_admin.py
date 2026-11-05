@@ -26,12 +26,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import PartnerUpdateIn, PartnerMigrateIn
-from app.core.security import require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from app.services.pricing_engine import PRICING_CONFIG
 
 router = APIRouter(prefix="/partners", tags=["Partner Admin"])
 
 TIER_IDS = [t["id"] for t in PRICING_CONFIG["partner"]["tiers"]]
+
+async def _require_partner_manage(user: User, org: Organization, db: AsyncSession) -> None:
+    if user.role == "platform_admin":
+        return
+    if not is_platform_role(user.role) or not await has_permission(
+        user, "platform.partners.manage", db, partner_id=org.id
+    ):
+        raise HTTPException(403, "Partner management permission required for this partner scope")
+
+
 
 
 def _audit(current_user: User, action: str, details: str, org_id: int) -> AuditLog:
@@ -57,9 +68,10 @@ async def _get_partner(pid: str, db: AsyncSession) -> Organization:
 async def update_partner(
     pid: str, body: PartnerUpdateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(get_current_user),
 ):
     org = await _get_partner(pid, db)
+    await _require_partner_manage(current_user, org, db)
     patch = body.model_dump(exclude_none=True)
     changed = []
     for k, v in patch.items():
@@ -89,9 +101,10 @@ async def update_partner(
 async def suspend_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(get_current_user),
 ):
     org = await _get_partner(pid, db)
+    await _require_partner_manage(current_user, org, db)
     org.status = "suspended" if org.status != "suspended" else "active"
     db.add(_audit(current_user, "partner.status_changed",
                   f"Partenaire {org.name} → {org.status}", org.id))
@@ -103,13 +116,14 @@ async def suspend_partner(
 async def migrate_partner(
     pid: str, body: PartnerMigrateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(get_current_user),
 ):
     """Repurposed (Phase 1): force a pricing_config partner tier instead of the
     old EUR Starter/Business/Scale plans. The override pins the license tier in
     routers/partners._license_payload; automatic progression by managed units
     resumes when the override is cleared (tier=null via PATCH)."""
     org = await _get_partner(pid, db)
+    await _require_partner_manage(current_user, org, db)
     target = str(body.tier or "").lower()
     if target not in TIER_IDS:
         raise HTTPException(400, f"Tier invalide — attendu: {'|'.join(TIER_IDS)}")
@@ -126,9 +140,10 @@ async def migrate_partner(
 async def delete_partner(
     pid: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(get_current_user),
 ):
     org = await _get_partner(pid, db)
+    await _require_partner_manage(current_user, org, db)
     children = (await db.execute(select(Organization).where(Organization.parent_org_id == org.id))).scalars().all()
     if len(children) > 0:
         raise HTTPException(409,

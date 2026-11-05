@@ -771,6 +771,7 @@ export interface DiscoveredDevice {
   source?: 'discovery' | 'manual'; // provenance — never inferred client-side
   last_seen?: string | null;   // real observation timestamp, null = unknown
   created_at: string;
+  monitoring_state?: 'enrolled' | 'monitored' | 'offline' | 'stale' | 'unknown';
 }
 
 // Optional live-monitoring enrichment for a discovered device. The backend
@@ -803,7 +804,10 @@ export const discoveryApi = {
   cancelScan: (id: number) => api.post<ScanRow>(`/scans/${id}/cancel`),
   scanStatus: (id: number) => api.get<ScanRow>(`/scans/${id}`),
   scanDevices: (id: number) => api.get<DiscoveredDevice[]>(`/scans/${id}/devices`),
-  devices: () => api.get<DiscoveredDevice[]>('/devices'),
+  devices: async () => {
+    const response = await api.get<DiscoveredDevice[] | { items?: DiscoveredDevice[] }>('/devices');
+    return Array.isArray(response) ? response : (Array.isArray(response.items) ? response.items : []);
+  },
   deviceDetail: (id: number) => api.get<DeviceDetailInfo>(`/devices/${id}`),
   importDevice: (id: number) => api.post(`/devices/${id}/import`),
   engineStatus: () => api.get<{ nmap_available: boolean; mode: string }>('/engine-status'),
@@ -1317,4 +1321,49 @@ export const dashboardLayoutApi = {
   put: (pageKey: string, layout: WidgetLayoutEntryDto[], addedCatalog?: string[], order?: string[]) =>
     api.put<DashboardLayoutOut>(`/dashboard/layout/${pageKey}`, { layout, added_catalog: addedCatalog ?? [], order: order ?? [] }),
   del: (pageKey: string) => api.del<void>(`/dashboard/layout/${pageKey}`),
+};
+
+
+// ---------------------------------------------------------------------------
+// Platform RBAC — Owner-controlled staff roles and scoped permission grants.
+// Mirrors backend/app/routers/platform_access.py.
+// ---------------------------------------------------------------------------
+export type PlatformStaffRole = 'platform_admin' | 'platform_expert' | 'platform_analyst' | 'platform_user';
+export interface PlatformPermissionDto { key: string; description: string }
+export interface PlatformPermissionAssignmentDto {
+  id: number;
+  user_id: number;
+  permission_key: string;
+  effect: 'allow' | 'deny';
+  scope_type: 'global' | 'tenant' | 'partner';
+  scope_id: number | null;
+  granted_by?: number;
+  created_at?: string;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+}
+export interface PlatformStaffDto {
+  id: number; email: string; name: string; role: PlatformStaffRole;
+  status: string; auth_version: number; created_at: string | null;
+}
+export const platformAccessApi = {
+  me: () => api.get<{
+    user_id: number; role: PlatformStaffRole; owner: boolean;
+    permissions: PlatformPermissionDto[]; permission_catalog: PlatformPermissionDto[];
+    assignments: PlatformPermissionAssignmentDto[];
+  }>('/platform/access/me'),
+  staff: () => api.get<PlatformStaffDto[]>('/platform/access/users'),
+  createStaff: (data: {
+    email: string; name: string; password: string;
+    role: Exclude<PlatformStaffRole, 'platform_admin'>;
+  }) => api.post<{ id: number; email: string; name: string; role: PlatformStaffRole; status: string; auth_version: number }>('/platform/access/users', data),
+  assignments: (userId?: number) =>
+    api.get<PlatformPermissionAssignmentDto[]>(`/platform/access/assignments${userId ? `?user_id=${userId}` : ''}`),
+  createAssignment: (data: {
+    user_id: number; permission_key: string; effect: 'allow' | 'deny';
+    scope_type: 'global' | 'tenant' | 'partner'; scope_id?: number | null; expires_at?: string | null;
+  }) => api.post<PlatformPermissionAssignmentDto>('/platform/access/assignments', data),
+  revokeAssignment: (id: number) => api.del<void>(`/platform/access/assignments/${id}`),
+  updateRole: (userId: number, role: Exclude<PlatformStaffRole, 'platform_admin'>) =>
+    api.patch<{ id: number; role: PlatformStaffRole; auth_version: number }>(`/platform/access/users/${userId}/role`, { role }),
 };

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, text
+from sqlalchemy import Column, BigInteger, Float, Numeric, Index, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, UniqueConstraint, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -61,6 +61,7 @@ class User(Base):
     role = Column(String, nullable=False)  # platform_admin, client_admin, client_user
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
     status = Column(String, default="active")
+    auth_version = Column(Integer, nullable=False, default=0, server_default="0")
     mfa_enabled = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -1269,4 +1270,36 @@ class ServiceLifecycleState(Base):
     installed_at = Column(String(40))
     connected_at = Column(String(40))
     first_success_at = Column(String(40))
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PlatformPermissionAssignment(Base):
+    """Owner-managed, auditable permission override for one platform staff user."""
+    __tablename__ = "platform_permission_assignments"
+    __table_args__ = (
+        Index("ix_platform_perm_user_key", "user_id", "permission_key"),
+        Index("ix_platform_perm_scope", "scope_type", "scope_id"),
+        CheckConstraint("effect IN ('allow','deny')", name="ck_platform_perm_effect"),
+        CheckConstraint("scope_type IN ('global','tenant','partner')", name="ck_platform_perm_scope"),
+        CheckConstraint("(scope_type = 'global' AND scope_id IS NULL) OR (scope_type IN ('tenant','partner') AND scope_id IS NOT NULL)", name="ck_platform_perm_scope_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission_key = Column(String(120), nullable=False)
+    effect = Column(String(8), nullable=False, default="allow")  # allow|deny
+    scope_type = Column(String(16), nullable=False, default="global")  # global|tenant|partner
+    scope_id = Column(Integer, nullable=True)
+    granted_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PlatformSetting(Base):
+    """Durable singleton-style key/value settings for the platform control plane."""
+    __tablename__ = "platform_settings"
+    key = Column(String(120), primary_key=True)
+    value_json = Column(JSON, nullable=False, default=dict)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

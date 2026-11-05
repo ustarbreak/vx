@@ -153,7 +153,7 @@ async def verify_login_second_factor(body: VerifyBody, db: AsyncSession = Depend
             ok = True
     if not ok:
         raise HTTPException(422, "Invalid or expired code")
-    return {"access_token": create_access_token({"sub": user.email}),
+    return {"access_token": create_access_token({"sub": str(user.id), "email": user.email, "role": user.role, "ver": int(user.auth_version or 0)}),
             "token_type": "bearer", "user": {"email": user.email, "role": user.role,
                                               "org_id": user.org_id}}
 

@@ -5,7 +5,8 @@ from typing import List, Optional
 from app.database import get_db
 from app.models import AuditLog, User
 from app.schemas import AuditLogResponse
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import require_permission, is_platform_role
 
 router = APIRouter(prefix="/audit", tags=["Audit Logs"])
 
@@ -18,7 +19,7 @@ async def get_audit_logs(
     actor_role: Optional[str] = None,
     outcome: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.audit.read"))
 ):
     """Get audit logs (platform admin only)"""
     query = select(AuditLog)
@@ -48,7 +49,7 @@ async def get_my_org_audit_logs(
     current_user: User = Depends(get_current_user)
 ):
     """Get audit logs for current user's organization"""
-    if current_user.role == "platform_admin":
+    if is_platform_role(current_user.role):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Platform admins should use /audit/logs endpoint"

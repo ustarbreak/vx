@@ -21,7 +21,12 @@ async def register(
     request: Request,
     db: AsyncSession = Depends(get_db)
 ):
-    """Register a new user"""
+    """Register a basic client user only; privileged roles require Owner provisioning."""
+    if user_data.role != "client_user":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is limited to client_user; privileged roles require an authorized invitation or Owner action"
+        )
     # Check if user already exists
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
@@ -168,7 +173,7 @@ async def login(
 
     # Create access token
     access_token = create_access_token(
-        data={"sub": user.id, "email": user.email, "role": user.role}
+        data={"sub": user.id, "email": user.email, "role": user.role, "ver": int(user.auth_version or 0)}
     )
     
     # Log successful login

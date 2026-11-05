@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from app.models import User, SnmpCredential, DiscoveredDevice
 from app.schemas import SnmpCredentialResponse
 from app.services.discovery import snmp_probe
@@ -28,6 +29,29 @@ from app.services.device_graph import (
 )
 
 router = APIRouter(prefix="/discovery", tags=["Auto-Discovery & SNMP"])
+
+async def _ensure_infrastructure_scope(user: User, org_id: int, db: AsyncSession, permission: str) -> None:
+    if user.role == "platform_admin":
+        return
+    if is_platform_role(user.role):
+        if not await has_permission(user, permission, db, org_id=org_id):
+            raise HTTPException(403, "Infrastructure permission required for this tenant")
+        return
+    if user.org_id != org_id:
+        raise HTTPException(403, "Cross-tenant access denied")
+
+
+def _safe_credential(cred: SnmpCredential) -> dict:
+    return {
+        "id": cred.id, "org_id": cred.org_id, "name": cred.name, "version": cred.version,
+        "community": "********" if cred.community else None, "username": cred.username,
+        "auth_protocol": cred.auth_protocol,
+        "auth_passphrase": "********" if cred.auth_passphrase else None,
+        "priv_protocol": cred.priv_protocol,
+        "priv_passphrase": "********" if cred.priv_passphrase else None,
+        "port": cred.port, "created_at": cred.created_at,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Credential update / test
@@ -59,9 +83,10 @@ async def update_credential(cred_id: int, body: SnmpCredentialUpdate,
     cred = (await db.execute(select(SnmpCredential).where(SnmpCredential.id == cred_id))).scalars().first()
     if not cred:
         raise HTTPException(404, "Credential not found")
-    if current_user.role != "platform_admin" and cred.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
-    upd = body.model_dump(exclude_unset=True)
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Credential administration requires an administrator role")
+    await _ensure_infrastructure_scope(current_user, cred.org_id, db, "platform.infrastructure.credentials.manage")
+    upd = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v != "********"}
     merged = {**{f: getattr(cred, f) for f in upd}, **upd}
     ver = merged.get("version") or cred.version
     if ver in ("v1", "v2c") and not (merged.get("community") or "").strip():
@@ -72,7 +97,7 @@ async def update_credential(cred_id: int, body: SnmpCredentialUpdate,
         setattr(cred, k, v)
     await db.commit()
     await db.refresh(cred)
-    return cred
+    return _safe_credential(cred)
 
 
 @router.post("/snmp-credentials/{cred_id}/test")
@@ -88,8 +113,9 @@ async def test_credential(cred_id: int, body: SnmpTestRequest,
     cred = (await db.execute(select(SnmpCredential).where(SnmpCredential.id == cred_id))).scalars().first()
     if not cred:
         raise HTTPException(404, "Credential not found")
-    if current_user.role != "platform_admin" and cred.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Credential testing requires an administrator role")
+    await _ensure_infrastructure_scope(current_user, cred.org_id, db, "platform.infrastructure.credentials.manage")
     try:
         import ipaddress
         ipaddress.ip_address(body.target_ip)
@@ -129,6 +155,7 @@ async def test_credential(cred_id: int, body: SnmpTestRequest,
 
 @router.get("/graph")
 async def infrastructure_graph(group_by: str = Query("type", pattern="^(type|site|subnet)$"),
+                               org_id: int | None = Query(None),
                                current_user: User = Depends(get_current_user),
                                db: AsyncSession = Depends(get_db)):
     """Force-directed Infrastructure graph with pivot nodes.
@@ -136,12 +163,18 @@ async def infrastructure_graph(group_by: str = Query("type", pattern="^(type|sit
     Nodes/edges derive ONLY from persisted DiscoveredDevice rows + real probe
     heartbeats; pivots are exact aggregates of device_type / site / subnet.
     """
-    org_id = current_user.org_id
-    if current_user.role == "platform_admin" and not org_id:
-        raise HTTPException(400, "org_id required — pass ?org_id= via a client session or use a tenant account")
-    if org_id is None:
-        raise HTTPException(400, "User has no organization")
-    return await build_graph(db, org_id, group_by)
+    scope = org_id
+    if current_user.role == "platform_admin":
+        if scope is None:
+            raise HTTPException(422, "org_id is required for an infrastructure graph")
+    elif is_platform_role(current_user.role):
+        if scope is None or not await has_permission(current_user, "platform.infrastructure.read", db, org_id=scope):
+            raise HTTPException(403, "Infrastructure read permission required for this tenant")
+    else:
+        if current_user.org_id is None or (scope is not None and scope != current_user.org_id):
+            raise HTTPException(403, "Tenant infrastructure scope denied")
+        scope = current_user.org_id
+    return await build_graph(db, scope, group_by)
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +189,7 @@ async def device_full(device_id: int, current_user: User = Depends(get_current_u
     dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
     if not dev:
         raise HTTPException(404, "Device not found")
-    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    await _ensure_infrastructure_scope(current_user, dev.org_id, db, "platform.infrastructure.read")
     from app.routers.discovery import device_detail
     detail = await device_detail(device_id, current_user, db)
     related = await related_items(db, dev)
@@ -186,8 +218,9 @@ async def device_action(device_id: int, body: DeviceActionRequest,
     dev = (await db.execute(select(DiscoveredDevice).where(DiscoveredDevice.id == device_id))).scalars().first()
     if not dev:
         raise HTTPException(404, "Device not found")
-    if current_user.role != "platform_admin" and dev.org_id != current_user.org_id:
-        raise HTTPException(403, "Cross-tenant access denied")
+    if current_user.role not in {"platform_admin", "client_admin"} and not is_platform_role(current_user.role):
+        raise HTTPException(403, "Endpoint actions require an administrator role")
+    await _ensure_infrastructure_scope(current_user, dev.org_id, db, "platform.infrastructure.action")
     if body.mode not in ("simulate", "execute"):
         raise HTTPException(422, "mode must be 'simulate' or 'execute'")
     try:

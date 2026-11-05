@@ -11,7 +11,8 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user, get_password_hash
-from app.models import User, Organization, NotificationRule
+from app.core.platform_rbac import require_permission
+from app.models import User, Organization, NotificationRule, PlatformSetting, AuditLog
 from app.schemas import OrganizationResponse, OrganizationUpdate
 from app.services.seed import seed_demo_tenant
 
@@ -56,20 +57,36 @@ class SystemSettingsPatch(BaseModel):
 
 
 @router.get("/system")
-async def get_system_settings(current_user: User = Depends(get_current_user)):
-    return _SYSTEM_SETTINGS
+async def get_system_settings(current_user: User = Depends(require_permission("platform.settings.read")),
+                             db: AsyncSession = Depends(get_db)):
+    row = await db.get(PlatformSetting, "system")
+    return {**_DEFAULT_SETTINGS, **(row.value_json if row else {})}
 
 
 @router.put("/system")
 async def update_system_settings(patch: SystemSettingsPatch,
-                                 current_user: User = Depends(get_current_user)):
-    for k, v in patch.model_dump(exclude_none=True).items():
-        _SYSTEM_SETTINGS[k] = v
-    return _SYSTEM_SETTINGS
+                                 current_user: User = Depends(require_permission("platform.settings.manage")),
+                                 db: AsyncSession = Depends(get_db)):
+    row = await db.get(PlatformSetting, "system")
+    if row is None:
+        row = PlatformSetting(key="system", value_json=dict(_DEFAULT_SETTINGS), updated_by=current_user.id)
+        db.add(row)
+    updated = {**_DEFAULT_SETTINGS, **(row.value_json or {}), **patch.model_dump(exclude_none=True)}
+    row.value_json = updated
+    row.updated_by = current_user.id
+    db.add(AuditLog(
+        actor_id=current_user.id, actor_name=current_user.email, actor_role=current_user.role,
+        org_id=None, action="platform.settings.updated", resource="PlatformSetting",
+        resource_id="system", details="Updated keys: " + ", ".join(sorted(patch.model_dump(exclude_none=True))),
+        outcome="success",
+    ))
+    await db.commit()
+    await db.refresh(row)
+    return updated
 
 
 @router.get("/overview")
-async def settings_overview(current_user: User = Depends(get_current_user),
+async def settings_overview(current_user: User = Depends(require_permission("platform.tenants.read")),
                             db: AsyncSession = Depends(get_db)):
     """Everything the platform-admin Settings page renders, from real data."""
     orgs = (await db.execute(select(Organization).order_by(Organization.name))).scalars().all()
@@ -166,12 +183,12 @@ _PB_SEQ = {"n": 0}
 
 
 @router_playbooks.get("")
-async def list_playbooks(current_user: User = Depends(_gcu)):
+async def list_playbooks(current_user: User = Depends(require_permission("platform.services.read"))):
     return list(_PLAYBOOKS.values())
 
 
 @router_playbooks.post("", status_code=201)
-async def save_playbook(pb: PlaybookDef, current_user: User = Depends(_gcu)):
+async def save_playbook(pb: PlaybookDef, current_user: User = Depends(require_permission("platform.services.manage"))):
     try:
         pb.steps = [s for s in pb.steps]  # keep shape
         _validate_steps([s.model_dump() for s in pb.steps])
@@ -185,7 +202,7 @@ async def save_playbook(pb: PlaybookDef, current_user: User = Depends(_gcu)):
 
 
 @router_playbooks.put("/{pb_id}")
-async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depends(_gcu)):
+async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depends(require_permission("platform.services.manage"))):
     if pb_id not in _PLAYBOOKS:
         raise HTTPException(404, "Playbook not found")
     try:
@@ -198,12 +215,12 @@ async def update_playbook(pb_id: int, pb: PlaybookDef, current_user: User = Depe
 
 
 @router_playbooks.delete("/{pb_id}", status_code=204)
-async def delete_playbook(pb_id: int, current_user: User = Depends(_gcu)):
+async def delete_playbook(pb_id: int, current_user: User = Depends(require_permission("platform.services.manage"))):
     _PLAYBOOKS.pop(pb_id, None)
 
 
 @router_playbooks.post("/{pb_id}/run", status_code=410)
-async def run_playbook_legacy(pb_id: int, current_user: User = Depends(_gcu)):
+async def run_playbook_legacy(pb_id: int, current_user: User = Depends(require_permission("platform.services.manage"))):
     """The legacy executor fabricated 'completed' results for every step —
     it violated the no-invented-execution-rules policy and is retired.
     Use POST /api/soar/playbooks/{id}/run (simulate | preview | execute) which

@@ -26,7 +26,7 @@ from app.models import (Organization, User, Ticket, AuditLog, Entitlement,
                         DiscoveredDevice, MonitoringRule, TenantServiceGrant)
 from app.schemas import (TenantSummaryOut, ClientTicketIn, RuleCreateIn,
                          RuleUpdateIn, RuleOut, GrantIn, GrantOut)
-from app.core.security import require_role
+from app.core.platform_rbac import require_scoped_permission, require_permission
 
 router = APIRouter(prefix="/admin", tags=["Tenant Manager"])
 
@@ -57,7 +57,7 @@ def _platform_audit(current_user: User, action: str, details: str) -> AuditLog:
 async def tenant_summary(
     org_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
 ):
     org = await _get_org(db, org_id)
 
@@ -97,7 +97,7 @@ async def tenant_summary(
 async def create_ticket_for_client(
     org_id: int, body: ClientTicketIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.manage")),
 ):
     org = await _get_org(db, org_id)
     count = (await db.execute(select(safunc.count(Ticket.id)))).scalar_one() or 0
@@ -121,7 +121,7 @@ async def create_ticket_for_client(
 async def list_rules(
     org_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
 ):
     rows = (await db.execute(
         select(MonitoringRule).where(MonitoringRule.org_id.in_([org_id]))
@@ -133,7 +133,7 @@ async def list_rules(
 async def create_rule(
     org_id: int, body: RuleCreateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.manage")),
 ):
     org = await _get_org(db, org_id)
     n = (await db.execute(select(safunc.count(MonitoringRule.id)))) .scalar_one() or 0
@@ -159,7 +159,7 @@ async def create_rule(
 async def update_rule(
     org_id: int, rule_id: str, body: RuleUpdateIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.manage")),
 ):
     r = await db.get(MonitoringRule, rule_id)
     if not r or r.org_id != org_id:
@@ -176,7 +176,7 @@ async def update_rule(
 async def delete_rule(
     org_id: int, rule_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.manage")),
 ):
     r = await db.get(MonitoringRule, rule_id)
     if not r or r.org_id != org_id:
@@ -190,7 +190,7 @@ async def delete_rule(
 async def set_grant(
     org_id: int, body: GrantIn,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.manage")),
 ):
     """Active/désactive un service pour un client, avec override éventuel du plan.
     Écrit systématiquement la ligne d'audit `entitlement.updated` (miroir démo)."""
@@ -227,7 +227,7 @@ async def set_grant(
 async def get_grants(
     org_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
 ) -> Dict[str, GrantOut]:
     rows = (await db.execute(
         select(TenantServiceGrant).where(TenantServiceGrant.org_id == org_id)
@@ -238,7 +238,7 @@ async def get_grants(
 @router.get("/audit-platform")
 async def platform_audit_log(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin")),
+    current_user: User = Depends(require_permission("platform.audit.read")),
 ):
     """Journal des actions admin plateforme (grants, rules, partners, tickets)."""
     rows = (await db.execute(

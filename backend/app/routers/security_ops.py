@@ -21,7 +21,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from app.database import get_db
 from app.models import AuditLog, SecurityOpsTask, User
 
@@ -143,6 +144,7 @@ class ActionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     service: str
     action_id: str
+    org_id: int | None = None
     vendor: str | None = None
     params: dict = {}
 
@@ -166,7 +168,7 @@ class TaskOut(BaseModel):
 async def dispatch_action(
     body: ActionRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("client_admin")),
+    current_user: User = Depends(get_current_user),
 ):
     """Validate and durably record an operator action for manual execution."""
     service = (body.service or "").strip()
@@ -194,9 +196,22 @@ async def dispatch_action(
         if not any(s in k.lower() for s in ("password", "secret", "token", "key"))
     }
 
-    org_id = current_user.org_id
-    if org_id is None:
-        raise HTTPException(status_code=403, detail="User has no organization scope.")
+    if current_user.role == "platform_admin":
+        org_id = body.org_id
+        if org_id is None:
+            raise HTTPException(status_code=422, detail="Owner must select an explicit tenant scope.")
+    elif is_platform_role(current_user.role):
+        org_id = body.org_id
+        if org_id is None or not await has_permission(
+            current_user, "platform.security_ops.request", db, org_id=org_id
+        ):
+            raise HTTPException(status_code=403, detail="Security Ops request permission required for this tenant.")
+    else:
+        if current_user.role != "client_admin" or current_user.org_id is None:
+            raise HTTPException(status_code=403, detail="Client administrator access required.")
+        if body.org_id is not None and body.org_id != current_user.org_id:
+            raise HTTPException(status_code=403, detail="Cross-tenant Security Ops request denied.")
+        org_id = current_user.org_id
 
     last = (await db.execute(
         select(SecurityOpsTask.uid).order_by(desc(SecurityOpsTask.id)).limit(1)
@@ -252,14 +267,25 @@ async def dispatch_action(
 @router.get("/tasks", response_model=list[TaskOut])
 async def list_tasks(
     service: str | None = Query(None),
+    org_id: int | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Recent ops dispatches for the caller's tenant."""
-    if current_user.org_id is None:
-        return []
-    query = select(SecurityOpsTask).where(SecurityOpsTask.org_id == current_user.org_id)
+    """Recent Security Ops tasks, always bounded by the caller's authorized scope."""
+    query = select(SecurityOpsTask)
+    if current_user.role == "platform_admin":
+        if org_id is not None:
+            query = query.where(SecurityOpsTask.org_id == org_id)
+    elif is_platform_role(current_user.role):
+        if not await has_permission(current_user, "platform.security_ops.read", db, org_id=org_id):
+            raise HTTPException(403, "Security Ops read permission required for this scope")
+        if org_id is not None:
+            query = query.where(SecurityOpsTask.org_id == org_id)
+    else:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
+            raise HTTPException(403, "Tenant Security Ops scope denied")
+        query = query.where(SecurityOpsTask.org_id == current_user.org_id)
     if service:
         query = query.where(SecurityOpsTask.service == service)
     query = query.order_by(desc(SecurityOpsTask.id)).limit(limit)

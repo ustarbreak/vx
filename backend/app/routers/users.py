@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models import User, Organization, AuditLog
 from app.schemas import UserCreate, UserResponse
 from app.core.security import get_password_hash, get_current_user, require_role
+from app.core.platform_rbac import has_permission, is_platform_role
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -18,6 +19,8 @@ class ClientUserUpdate(BaseModel):
 
 CLIENT_ASSIGNABLE_ROLES = {"technician", "analyst", "client_user"}
 PLATFORM_ASSIGNABLE_ROLES = CLIENT_ASSIGNABLE_ROLES | {"client_admin"}
+PLATFORM_STAFF_ROLES = {"platform_expert", "platform_analyst", "platform_user"}
+CREATABLE_USER_ROLES = PLATFORM_ASSIGNABLE_ROLES | {"partner_admin", "sales"}
 VALID_USER_STATUSES = {"active", "inactive"}
 
 
@@ -29,18 +32,23 @@ async def get_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get users (platform admin sees all, client admin sees their org)"""
+    """List users only within an explicitly authorized platform or tenant scope."""
     query = select(User)
-    
-    # Filter by organization
-    if current_user.role != "platform_admin":
-        # Client users can only see their own organization
+    if current_user.role == "platform_admin":
+        if org_id is not None:
+            query = query.where(User.org_id == org_id)
+    elif is_platform_role(current_user.role):
+        if org_id is not None or not await has_permission(current_user, "platform.users.read", db):
+            raise HTTPException(status_code=403, detail="Platform staff directory permission required")
+        query = query.where(User.role.in_(sorted(PLATFORM_STAFF_ROLES | {"platform_admin"})))
+    else:
+        if current_user.org_id is None:
+            raise HTTPException(status_code=403, detail="User directory scope is unavailable")
+        if org_id is not None and org_id != current_user.org_id:
+            raise HTTPException(status_code=403, detail="Cross-tenant user listing denied")
         query = query.where(User.org_id == current_user.org_id)
-    elif org_id:
-        # Platform admin can filter by org
-        query = query.where(User.org_id == org_id)
-    
-    result = await db.execute(query.offset(skip).limit(limit))
+
+    result = await db.execute(query.offset(skip).limit(min(limit, 200)))
     return result.scalars().all()
 
 
@@ -50,26 +58,26 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get user by ID"""
-    # Check permissions
-    if current_user.role != "platform_admin":
-        if current_user.id != user_id and current_user.org_id != (
-            await db.execute(select(User).where(User.id == user_id))
-        ).scalar_one_or_none().org_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to view this user"
-            )
-    
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    
+    """Get a user by ID after resolving existence and enforcing directory scope."""
+    user = await db.get(User, user_id)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if current_user.role == "platform_admin":
+        return user
+    if is_platform_role(current_user.role):
+        if user.id == current_user.id:
+            return user
+        if user.role not in PLATFORM_STAFF_ROLES | {"platform_admin"} or not await has_permission(
+            current_user, "platform.users.read", db
+        ):
+            raise HTTPException(status_code=403, detail="Platform staff directory permission required")
+        return user
+
+    if user.id != current_user.id and (
+        current_user.org_id is None or user.org_id != current_user.org_id
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to view this user")
     return user
 
 
@@ -95,8 +103,8 @@ async def update_client_user(
             raise HTTPException(status_code=403, detail="Client admins may only manage technician, analyst, and client-user accounts")
         allowed_roles = CLIENT_ASSIGNABLE_ROLES
     else:
-        if target.role == "platform_admin":
-            raise HTTPException(status_code=403, detail="Platform administrator accounts cannot be changed through this endpoint")
+        if target.role == "platform_admin" or target.role in PLATFORM_STAFF_ROLES:
+            raise HTTPException(status_code=403, detail="Platform staff accounts must be managed through the Owner access-control endpoint")
         allowed_roles = PLATFORM_ASSIGNABLE_ROLES
 
     changes = body.model_dump(exclude_none=True)
@@ -110,6 +118,7 @@ async def update_client_user(
     before = {"role": target.role, "status": target.status}
     for key, value in changes.items():
         setattr(target, key, value)
+    target.auth_version = int(target.auth_version or 0) + 1
     db.add(AuditLog(
         actor_id=current_user.id,
         actor_name=current_user.email,
@@ -134,7 +143,10 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin"))
 ):
-    """Create a new user (platform admin only)"""
+    """Create a tenant/partner account; platform staff provisioning uses the Owner access API."""
+    if user_data.role not in CREATABLE_USER_ROLES:
+        raise HTTPException(status_code=403, detail="This role cannot be created through the generic user endpoint")
+
     # Check if email already exists
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
@@ -143,15 +155,25 @@ async def create_user(
             detail="Email already registered"
         )
     
-    # If org_id provided, check if organization exists
+    # Validate platform-vs-tenant identity boundaries before persisting.
+    organization = None
     if user_data.org_id:
         result = await db.execute(select(Organization).where(Organization.id == user_data.org_id))
-        if not result.scalar_one_or_none():
+        organization = result.scalar_one_or_none()
+        if not organization:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Organization not found"
             )
-    
+
+    if user_data.role in PLATFORM_STAFF_ROLES:
+        if user_data.org_id is not None:
+            raise HTTPException(status_code=422, detail="Platform staff accounts must not belong to a tenant")
+    elif user_data.role != "sales" and user_data.org_id is None:
+        raise HTTPException(status_code=422, detail="Tenant and partner accounts require an organization")
+    if user_data.role == "partner_admin" and not getattr(organization, "is_partner", False):
+        raise HTTPException(status_code=422, detail="partner_admin accounts require a partner organization")
+
     # Create user
     hashed_password = get_password_hash(user_data.password)
     new_user = User(
@@ -163,9 +185,8 @@ async def create_user(
     )
     
     db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-    
+    await db.flush()  # assign the new user ID before writing the audit reference
+
     # Log audit
     audit_log = AuditLog(
         actor_id=current_user.id,
@@ -181,7 +202,8 @@ async def create_user(
     )
     db.add(audit_log)
     await db.commit()
-    
+    await db.refresh(new_user)
+
     return new_user
 
 
@@ -192,7 +214,7 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("platform_admin"))
 ):
-    """Delete user (platform admin only)"""
+    """Delete a user (Owner only)."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     
@@ -202,6 +224,10 @@ async def delete_user(
             detail="User not found"
         )
     
+    # The Owner account is immutable and cannot be deleted through this endpoint.
+    if user.role == "platform_admin":
+        raise HTTPException(status_code=403, detail="The Owner account cannot be deleted")
+
     # Prevent self-deletion
     if user.id == current_user.id:
         raise HTTPException(

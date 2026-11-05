@@ -6,9 +6,18 @@ from datetime import datetime
 from app.database import get_db
 from app.models import Entitlement, Organization, User, AuditLog, TenantServiceGrant
 from app.schemas import EntitlementCreate, EntitlementUpdate, EntitlementResponse
-from app.core.security import get_current_user, require_role
+from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role, require_permission
 
 router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
+
+async def _require_billing_scope(user: User, org_id: int, db: AsyncSession, permission: str) -> None:
+    if user.role == "platform_admin":
+        return
+    if not is_platform_role(user.role) or not await has_permission(user, permission, db, org_id=org_id):
+        raise HTTPException(403, "Billing permission required for this tenant scope")
+
+
 
 
 @router.get("/graph")
@@ -30,8 +39,12 @@ async def get_service_graph(
         target_org = org_id or current_user.org_id
         if not target_org:
             raise HTTPException(status_code=400, detail="org_id required for platform admins without an organization")
+    elif is_platform_role(current_user.role):
+        if org_id is None or not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(status_code=403, detail="Billing read permission required for this tenant scope")
+        target_org = org_id
     else:
-        if org_id and org_id != current_user.org_id:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
             raise HTTPException(status_code=403, detail="Cannot read another organization's graph")
         target_org = current_user.org_id
 
@@ -44,6 +57,7 @@ async def get_service_graph(
 @router.get("/chain/{service_id}")
 async def get_service_chain(
     service_id: str,
+    org_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -52,9 +66,17 @@ async def get_service_chain(
     it — computed on the tenant's real entitlement rows."""
     from app.services.service_graph import SERVICE_DEPENDENCY_RULES
 
-    org_id = current_user.org_id
-    if current_user.role == "platform_admin" and not org_id:
-        raise HTTPException(status_code=400, detail="Platform admin must query via /graph?org_id=")
+    if current_user.role == "platform_admin":
+        org_id = org_id or current_user.org_id
+    elif is_platform_role(current_user.role):
+        if org_id is None or not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(status_code=403, detail="Billing read permission required for this tenant scope")
+    else:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
+            raise HTTPException(status_code=403, detail="Cannot read another organization's service chain")
+        org_id = current_user.org_id
+    if org_id is None:
+        raise HTTPException(status_code=400, detail="org_id is required for platform staff without a tenant")
 
     rows = (await db.execute(
         select(Entitlement).where(Entitlement.org_id == org_id)
@@ -109,20 +131,25 @@ async def get_service_chain(
 
 @router.get("/", response_model=List[EntitlementResponse])
 async def get_entitlements(
-    org_id: int = None,
+    org_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get entitlements (platform admin sees all, client users see their org)"""
+    """Read entitlements only within a tenant or explicitly authorized platform scope."""
     query = select(Entitlement)
-    
-    if current_user.role != "platform_admin":
-        # Client users can only see their own organization's entitlements
+    if current_user.role == "platform_admin":
+        if org_id is not None:
+            query = query.where(Entitlement.org_id == org_id)
+    elif is_platform_role(current_user.role):
+        if not await has_permission(current_user, "platform.billing.read", db, org_id=org_id):
+            raise HTTPException(403, "Billing read permission required for this scope")
+        if org_id is not None:
+            query = query.where(Entitlement.org_id == org_id)
+    else:
+        if current_user.org_id is None or (org_id is not None and org_id != current_user.org_id):
+            raise HTTPException(403, "Tenant entitlement scope denied")
         query = query.where(Entitlement.org_id == current_user.org_id)
-    elif org_id:
-        # Platform admin can filter by org
-        query = query.where(Entitlement.org_id == org_id)
-    
+
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -175,7 +202,7 @@ async def create_entitlement(
     entitlement_data: EntitlementCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(get_current_user)
 ):
     """Create entitlement (platform admin only)"""
     # Check if organization exists
@@ -187,6 +214,7 @@ async def create_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Organization not found"
         )
+    await _require_billing_scope(current_user, org.id, db, "platform.billing.manage")
     
     # Check if entitlement already exists
     result = await db.execute(
@@ -236,7 +264,7 @@ async def update_entitlement(
     entitlement_data: EntitlementUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(get_current_user)
 ):
     """Update entitlement (platform admin only) - THIS IS THE ENFORCEMENT ENDPOINT"""
     result = await db.execute(select(Entitlement).where(Entitlement.id == entitlement_id))
@@ -247,6 +275,7 @@ async def update_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entitlement not found"
         )
+    await _require_billing_scope(current_user, entitlement.org_id, db, "platform.billing.manage")
     
     # Track old state for audit
     old_enabled = entitlement.enabled
@@ -291,7 +320,7 @@ async def delete_entitlement(
     entitlement_id: int,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(get_current_user)
 ):
     """Delete entitlement (platform admin only)"""
     result = await db.execute(select(Entitlement).where(Entitlement.id == entitlement_id))
@@ -302,6 +331,7 @@ async def delete_entitlement(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Entitlement not found"
         )
+    await _require_billing_scope(current_user, entitlement.org_id, db, "platform.billing.manage")
     
     # Log audit before deletion
     audit_log = AuditLog(
