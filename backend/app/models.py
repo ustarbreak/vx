@@ -255,6 +255,14 @@ class PlatformSubscription(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    __table_args__ = (
+        Index(
+            "uq_platform_subscription_current_org", "org_id", unique=True,
+            postgresql_where=text("is_current = true"),
+            sqlite_where=text("is_current = 1"),
+        ),
+    )
+
 
 class UpsellEvent(Base):
     __tablename__ = "upsell_events"
