@@ -243,7 +243,7 @@ async def dispatch_action(
         "ok": True,
         "actionId": action_id,
         "source": "live",
-        "message": f"Dispatched \"{action_id}\" on {service} — recorded as {uid} in the audit trail.",
+        "message": f"Recorded \\"{action_id}\\" as {uid}. No device command was sent; technician execution is required.",
         "output": "\n".join(rendered),
         "task": {"uid": uid, "status": task.status},
     }
