@@ -43,12 +43,12 @@ async def session_factory():
     yield factory
     await engine.dispose()
 
-def client_for(factory, user_id):
+def client_for(factory, user_id, version=0):
     async def override_db():
         async with factory() as db:
             yield db
     app.dependency_overrides[get_db] = override_db
-    headers={"Authorization": f"Bearer {create_access_token({'sub': str(user_id)})}"}
+    headers={"Authorization": f"Bearer {create_access_token({'sub': str(user_id), 'ver': version})}"}
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers)
 
 @pytest.mark.asyncio
@@ -274,7 +274,7 @@ async def test_channel_permissions_are_tenant_scoped_and_writes_are_audited(sess
         })
         assert grant.status_code == 201, grant.text
 
-    async with client_for(session_factory, 2) as expert:
+    async with client_for(session_factory, 2, version=1) as expert:
         allowed = await expert.put("/api/channels/configs", json={
             "channel": "webhook", "enabled": True,
             "config": {"url": "https://hooks.example.test/tenant-one"},
@@ -345,7 +345,7 @@ async def test_platform_alert_and_notification_reads_require_owner_granted_scope
         assert alert_grant.status_code == 201, alert_grant.text
         assert notification_grant.status_code == 201, notification_grant.text
 
-    async with client_for(session_factory, 2) as expert:
+    async with client_for(session_factory, 2, version=2) as expert:
         alert_allowed = await expert.get("/api/alerts?org_id=1")
         alert_cross = await expert.get("/api/alerts?org_id=2")
         notification_allowed = await expert.get("/api/notifications?org_id=1")
