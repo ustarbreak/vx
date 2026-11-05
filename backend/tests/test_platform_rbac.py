@@ -323,3 +323,34 @@ async def test_platform_user_directory_is_not_leaked_without_users_read(session_
         assert all(row["role"].startswith("platform_") for row in listing.json())
         missing = await analyst.get("/api/users/99999")
         assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_platform_alert_and_notification_reads_require_owner_granted_scope(session_factory):
+    async with client_for(session_factory, 2) as expert:
+        no_scope = await expert.get("/api/alerts")
+        assert no_scope.status_code == 403
+        no_notification_scope = await expert.get("/api/notifications")
+        assert no_notification_scope.status_code == 403
+
+    async with client_for(session_factory, 1) as owner:
+        alert_grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.alerts.read",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        notification_grant = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.notifications.read",
+            "effect": "allow", "scope_type": "tenant", "scope_id": 1
+        })
+        assert alert_grant.status_code == 201, alert_grant.text
+        assert notification_grant.status_code == 201, notification_grant.text
+
+    async with client_for(session_factory, 2) as expert:
+        alert_allowed = await expert.get("/api/alerts?org_id=1")
+        alert_cross = await expert.get("/api/alerts?org_id=2")
+        notification_allowed = await expert.get("/api/notifications?org_id=1")
+        notification_cross = await expert.get("/api/notifications?org_id=2")
+        assert alert_allowed.status_code == 200, alert_allowed.text
+        assert alert_cross.status_code == 403
+        assert notification_allowed.status_code == 200, notification_allowed.text
+        assert notification_cross.status_code == 403
