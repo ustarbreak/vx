@@ -1,126 +1,124 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Building2, Users, DollarSign, TrendingUp, AlertTriangle, CheckCircle2, Activity, Shield, Settings as SettingsIcon, Inbox, Radio, Wand2, Loader2 } from 'lucide-react';
-import { demoOrganizations, demoUsers, demoAuditLog, serviceCatalog } from '../../data/mockData';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Activity, AlertTriangle, Bell, Building2, CheckCircle2, Clock3,
+  Database, FileText, Layers3, Loader2, RefreshCw, Server, Shield,
+  Users, Workflow, XCircle,
+} from 'lucide-react';
+import { platformDashboardApi, type PlatformDashboardOverview } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
+
+function MetricCard({ label, value, detail, icon: Icon }: {
+  label: string; value: number | string; detail: string; icon: React.ElementType;
+}) {
+  return (
+    <article className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+      <div className="flex items-center gap-2 text-xs text-[var(--ic-muted)]"><Icon className="h-4 w-4 text-cyan-400" />{label}</div>
+      <p className="mt-3 text-2xl font-semibold text-[var(--ic-heading)] tabular-nums">{value}</p>
+      <p className="mt-1 text-xs text-[var(--ic-muted)]">{detail}</p>
+    </article>
+  );
+}
 
 export default function PlatformDashboardPage() {
-  const navigate = useNavigate();
-  const totalRevenue = demoOrganizations.reduce((sum, org) => sum + org.monthlyRevenue, 0);
-  const activeClients = demoOrganizations.filter(org => org.status === 'active').length;
-  const totalUsers = demoUsers.filter(u => u.role !== 'platform_admin').length;
-  const totalServices = serviceCatalog.length;
-  const blockedAttempts = demoAuditLog.filter(e => e.outcome === 'blocked').length;
+  const [data, setData] = useState<PlatformDashboardOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await platformDashboardApi.overview();
+      setData(result);
+    } catch (e) {
+      setData(null);
+      setError(e instanceof Error ? e.message : 'Les indicateurs de la plateforme sont indisponibles.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { if (!isDemoMode()) void load(); else setLoading(false); }, [load]);
+
+  if (isDemoMode()) {
+    return <div className="p-6">
+      <div className="max-w-3xl rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
+        <AlertTriangle className="mb-2 h-6 w-6 text-amber-400" />
+        <h1 className="text-xl font-semibold text-[var(--ic-heading)]">Vue d’ensemble de la plateforme</h1>
+        <p className="mt-2 text-sm text-[var(--ic-muted)]">Les métriques de production ne sont pas simulées. Désactivez le mode Démo et connectez-vous au backend pour consulter les agrégats réels.</p>
+      </div>
+    </div>;
+  }
 
   return (
-    <div className="p-4 lg:p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Platform Administration</h1>
-        <p className="text-[var(--ic-muted)] text-sm mt-1">Infracentra platform overview — clients, revenue, and system health</p>
-      </div>
+    <main className="space-y-6 p-4 lg:p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)]">Administration de la plateforme</h1>
+          <p className="mt-1 text-sm text-[var(--ic-muted)]">Indicateurs opérationnels calculés à partir des données persistées d’Infracentra.</p>
+        </div>
+        <button onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-[var(--ic-border)] px-3 py-2 text-sm text-[var(--ic-heading)] disabled:opacity-50">
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Actualiser
+        </button>
+      </header>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Building2 className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Total Clients</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{demoOrganizations.length}</p>
-          <p className="text-xs text-cyber-green mt-1">{activeClients} active</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <DollarSign className="w-4 h-4 text-green-400" />
-            <span className="text-xs text-[var(--ic-muted)]">MRR</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">${totalRevenue.toLocaleString()}</p>
-          <p className="text-xs text-cyber-green mt-1 flex items-center gap-1">
-            <TrendingUp className="w-3 h-3" /> +12%
-          </p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Users className="w-4 h-4 text-purple-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Total Users</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{totalUsers}</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">Across all orgs</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Shield className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Services</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{totalServices}</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">Available</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="w-4 h-4 text-red-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Blocked</span>
-          </div>
-          <p className="text-2xl font-bold text-cyber-red">{blockedAttempts}</p>
-          <p className="text-xs text-[var(--ic-muted)] mt-1">Access attempts</p>
-        </div>
-      </div>
+      {error && <div role="alert" className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-sm text-rose-300"><XCircle className="h-4 w-4 shrink-0" />{error}</div>}
+      {loading && <div className="flex items-center justify-center gap-2 py-16 text-sm text-[var(--ic-muted)]"><Loader2 className="h-5 w-5 animate-spin" />Chargement des métriques réelles…</div>}
 
-      {/* Client Overview */}
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-        <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">Client Portfolio</h3>
-        <div className="space-y-3">
-          {demoOrganizations.map(org => (
-            <div key={org.id} onClick={() => navigate(`/admin/tenants/${encodeURIComponent(org.id)}`)}
-              title="Ouvrir la fiche client"
-              className="cursor-pointer hover:border-cyan-500/40 transition-colors flex items-center justify-between p-4 rounded-xl bg-[var(--ic-surface)] border border-[var(--ic-border)]">
-              <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  org.tier === 'enterprise' ? 'bg-amber-500/10 text-amber-400' :
-                  org.tier === 'mid-market' ? 'bg-purple-500/10 text-purple-400' :
-                  'bg-blue-500/10 text-blue-400'
-                }`}>
-                  <Building2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-[var(--ic-heading)]">{org.name}</p>
-                  <p className="text-xs text-[var(--ic-muted)]">{org.tier.toUpperCase()} • {org.memberCount} members • {org.assetCount} assets</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <p className="text-sm font-bold text-cyber-green">${org.monthlyRevenue.toLocaleString()}/mo</p>
-                  <p className="text-xs text-[var(--ic-muted)]">Risk: {org.riskScore} • Compliance: {org.complianceScore}%</p>
-                </div>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium uppercase ${
-                  org.status === 'active' ? 'bg-green-500/10 text-green-400' :
-                  org.status === 'suspended' ? 'bg-red-500/10 text-red-400' :
-                  'bg-yellow-500/10 text-yellow-400'
-                }`}>
-                  {org.status}
-                </span>
-              </div>
+      {!loading && data && <>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 px-2 py-1 text-emerald-300"><CheckCircle2 className="h-3 w-3" /> Source : base de données</span>
+          <span className="text-[var(--ic-muted)]">Actualisé le {new Date(data.generated_at).toLocaleString()}</span>
+        </div>
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--ic-muted)]">Écosystème clients et équipe</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Tenants" value={data.tenants.total} detail={`${data.tenants.active} actifs`} icon={Building2} />
+            <MetricCard label="Partenaires MSP" value={data.partners.total} detail={`${data.partners.active} actifs`} icon={Layers3} />
+            <MetricCard label="Utilisateurs" value={data.users.total} detail={`${data.users.active} comptes actifs · ${data.users.platform_staff} staff plateforme`} icon={Users} />
+            <MetricCard label="Intégrations" value={data.integrations.total} detail={`${data.integrations.active} actives`} icon={Workflow} />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--ic-muted)]">Services et infrastructure</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Entitlements activés" value={data.commercial.enabled_entitlements} detail={`${data.commercial.enabled_services_in_use} services distincts utilisés`} icon={Shield} />
+            <MetricCard label="Agents collecteurs" value={data.infrastructure.collector_probes} detail={`${data.infrastructure.collector_probes_online} en ligne`} icon={Server} />
+            <MetricCard label="Équipements découverts" value={data.infrastructure.discovered_devices} detail="Enregistrements d’inventaire issus de la découverte" icon={Database} />
+            <MetricCard label="Alertes" value={data.operations.alerts} detail="Alertes enregistrées" icon={AlertTriangle} />
+          </div>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--ic-muted)]">Opérations et fiabilité</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Tickets" value={data.operations.tickets} detail="Tickets persistés" icon={FileText} />
+            <MetricCard label="Exécutions SOAR" value={data.operations.playbook_runs} detail="Exécutions enregistrées, tous statuts" icon={Activity} />
+            <MetricCard label="Tâches Security Ops" value={data.operations.security_ops_tasks} detail="Demandes et tâches enregistrées" icon={Clock3} />
+            <MetricCard label="Notifications en attente" value={data.notification_queue.queued} detail={`${data.notification_queue.failed_or_dead_letter} en échec ou dead-letter · ${data.notification_queue.total} au total`} icon={Bell} />
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <article className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5">
+            <h2 className="font-semibold text-[var(--ic-heading)]">Journal et sécurité</h2>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <div><p className="text-2xl font-semibold tabular-nums text-[var(--ic-heading)]">{data.audit.total}</p><p className="text-xs text-[var(--ic-muted)]">Événements</p></div>
+              <div><p className="text-2xl font-semibold tabular-nums text-rose-300">{data.audit.failures}</p><p className="text-xs text-[var(--ic-muted)]">Échecs</p></div>
+              <div><p className="text-2xl font-semibold tabular-nums text-amber-300">{data.audit.blocked}</p><p className="text-xs text-[var(--ic-muted)]">Bloqués</p></div>
             </div>
-          ))}
-        </div>
-      </div>
+          </article>
+          <article className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-5">
+            <h2 className="font-semibold text-[var(--ic-heading)]">Données commerciales non disponibles</h2>
+            <p className="mt-2 text-sm text-[var(--ic-muted)]">{data.commercial.subscriptions.reason}</p>
+            <p className="mt-2 text-xs text-amber-300">Aucun MRR, ARR ou nombre d’abonnements n’est estimé à partir des tarifs ou des entitlements.</p>
+          </article>
+        </section>
+      </>}
 
-      {/* Recent Audit */}
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-6">
-        <h3 className="text-sm font-semibold text-[var(--ic-text)] uppercase tracking-wider mb-4">Recent Activity</h3>
-        <div className="space-y-2">
-          {demoAuditLog.slice(0, 6).map(entry => (
-            <div key={entry.id} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--ic-surface)]">
-              <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
-                entry.outcome === 'success' ? 'bg-cyber-green' :
-                entry.outcome === 'blocked' ? 'bg-cyber-red' : 'bg-cyber-yellow'
-              }`} />
-              <div className="flex-1">
-                <p className="text-sm text-[var(--ic-text)]">{entry.details}</p>
-                <p className="text-xs text-[var(--ic-muted)] mt-1">{entry.actorName} • {new Date(entry.timestamp).toLocaleString()}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+      {!loading && !data && !error && <p className="rounded-xl border border-[var(--ic-border)] p-5 text-sm text-[var(--ic-muted)]">Aucune donnée disponible.</p>}
+    </main>
   );
 }
