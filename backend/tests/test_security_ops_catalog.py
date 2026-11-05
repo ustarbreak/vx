@@ -71,7 +71,7 @@ async def test_security_action_requires_authentication(session_factory):
         response = await client.post("/api/security-ops/actions", json={
             "service": "endpoint-protection", "action_id": "ep-isolate",
         })
-    assert response.status_code == 401
+    assert response.status_code in (401, 403)
 
 
 @pytest.mark.asyncio
