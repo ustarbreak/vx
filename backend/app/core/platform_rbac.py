@@ -21,12 +21,12 @@ ROLE_DEFAULTS = {
     "platform_expert": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.integrations.read",
-        "platform.infrastructure.read", "platform.services.read", "platform.alerts.read", "platform.alerts.manage", "platform.notifications.read",
+        "platform.infrastructure.read", "platform.services.read",
     },
     "platform_analyst": {
         "platform.dashboard.read", "platform.tenants.read", "platform.partners.read",
         "platform.audit.read", "platform.infrastructure.read", "platform.services.read",
-        "platform.reports.read", "platform.alerts.read", "platform.notifications.read",
+        "platform.reports.read",
     },
     "platform_user": {"platform.dashboard.read"},
 }
