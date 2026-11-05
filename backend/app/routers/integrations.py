@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models import Integration, User, AuditLog
 from app.schemas import IntegrationCreate, IntegrationUpdate, IntegrationResponse, IntegrationTestResult
 from app.core.security import get_current_user, require_role
+from app.core.platform_rbac import require_permission
 from app.services.wazuh import WazuhService
 from app.services.misp import MISPService
 from app.services.elastic import ElasticService
@@ -19,7 +20,7 @@ async def get_integrations(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.read"))
 ):
     """Get all integrations (platform admin only)"""
     result = await db.execute(
@@ -32,7 +33,7 @@ async def get_integrations(
 async def get_integration(
     integration_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.configure"))
 ):
     """Get integration by ID"""
     result = await db.execute(select(Integration).where(Integration.id == integration_id))
@@ -52,7 +53,7 @@ async def create_integration(
     integration_data: IntegrationCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("platform_admin"))
+    current_user: User = Depends(require_permission("platform.integrations.delete"))
 ):
     """Create a new integration (platform admin only)"""
     new_integration = Integration(**integration_data.model_dump())
