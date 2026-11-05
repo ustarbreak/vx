@@ -1,14 +1,14 @@
 """PA-02 platform permission assignments.
 
 Revision ID: d4e6f8a0b2c4
-Revises: c3d9e1f7a2b4, h8i0j2k4l6m8, k1l3m5n7o9p1
+Revises: h8i0j2k4l6m8, k1l3m5n7o9p1
 """
 from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d4e6f8a0b2c4"
-down_revision: Union[str, Sequence[str], None] = ("c3d9e1f7a2b4", "h8i0j2k4l6m8", "k1l3m5n7o9p1")
+down_revision: Union[str, Sequence[str], None] = ("h8i0j2k4l6m8", "k1l3m5n7o9p1")
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
