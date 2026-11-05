@@ -187,3 +187,22 @@ async def test_platform_system_settings_are_owner_only_and_persist(session_facto
         again=await owner.get("/api/settings/system")
         assert again.status_code == 200
         assert again.json()["auto_ticketing"] is False
+
+
+@pytest.mark.asyncio
+async def test_owner_can_change_platform_staff_role_and_revoke_session(session_factory):
+    old_token=create_access_token({"sub": "2", "ver": 0})
+    async with client_for(session_factory, 1) as owner:
+        response=await owner.patch("/api/platform/access/users/2/role", json={"role": "platform_analyst"})
+        assert response.status_code == 200, response.text
+        assert response.json()["role"] == "platform_analyst"
+        forbidden=await owner.patch("/api/platform/access/users/1/role", json={"role": "platform_user"})
+        assert forbidden.status_code == 404
+    async def override_db():
+        async with session_factory() as db:
+            yield db
+    app.dependency_overrides[get_db]=override_db
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test",
+        headers={"Authorization": f"Bearer {old_token}"}) as old_expert:
+        response=await old_expert.get("/api/platform/access/me")
+        assert response.status_code == 401
