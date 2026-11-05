@@ -5,6 +5,7 @@ import {
   AreaChart, Area
 } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
+import { isDemoMode } from '../../services/demoMode';
 import { demoDevices, demoDeviceMetrics, demoHealthStatuses, demoHash } from '../../data/demoWorld';
 
 interface PerformanceMetric {
@@ -25,12 +26,14 @@ interface SystemHealth {
 
 export default function PerformanceStatistics() {
   const { user } = useAuth();
+  const demo = isDemoMode();
   const [timeRange, setTimeRange] = useState('24h');
   const [metrics, setMetrics] = useState<PerformanceMetric[]>([]);
   const [systemHealth, setSystemHealth] = useState<SystemHealth[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!demo) { setMetrics([]); setSystemHealth([]); setLoading(false); return; }
     // Simulate API call to fetch performance metrics
     const fetchMetrics = async () => {
       try {
@@ -103,7 +106,7 @@ export default function PerformanceStatistics() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [user?.orgId]);
+  }, [demo, user?.orgId]);
 
   const currentMetrics = metrics[metrics.length - 1] || { cpu: 0, memory: 0, disk: 0, network: 0 };
   const avgMetrics = {
@@ -141,6 +144,34 @@ export default function PerformanceStatistics() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500 mx-auto"></div>
           <p className="mt-4 text-gray-400">Loading performance metrics...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!demo) {
+    return (
+      <div className="p-4 lg:p-6 space-y-5">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
+            <Activity className="w-6 h-6 text-cyan-400" /> Performance Statistics
+          </h1>
+          <p className="text-sm text-[var(--ic-muted)] mt-1">Live telemetry availability</p>
+        </div>
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5 space-y-2">
+          <h2 className="font-semibold text-amber-300">Historical performance telemetry is not connected</h2>
+          <p className="text-sm text-[var(--ic-text)]">
+            The current backend exposes discovered-device inventory and agent heartbeat information, but this page has no live time-series endpoint for CPU, memory, disk or network utilisation.
+            Those values are not estimated or generated in Live Mode.
+          </p>
+          <p className="text-xs text-[var(--ic-muted)]">
+            Connect a collector telemetry pipeline and persist timestamped metric samples before enabling these charts.
+          </p>
+        </div>
+        <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4">
+          <p className="text-sm font-medium text-[var(--ic-heading)]">Available now</p>
+          <p className="text-xs text-[var(--ic-muted)] mt-1">Use Monitored Devices for actual discovered assets and collector heartbeat state. Device discovery does not imply CPU/memory telemetry.</p>
+          <a href="#/client-admin/monitored-devices" className="inline-flex mt-3 text-sm text-cyan-400 hover:text-cyan-300">Open Monitored Devices →</a>
         </div>
       </div>
     );
