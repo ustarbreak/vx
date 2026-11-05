@@ -21,7 +21,7 @@ class ClientUserUpdate(BaseModel):
 CLIENT_ASSIGNABLE_ROLES = {"technician", "analyst", "client_user"}
 PLATFORM_ASSIGNABLE_ROLES = CLIENT_ASSIGNABLE_ROLES | {"client_admin"}
 PLATFORM_STAFF_ROLES = {"platform_expert", "platform_analyst", "platform_user"}
-CREATABLE_USER_ROLES = PLATFORM_ASSIGNABLE_ROLES | PLATFORM_STAFF_ROLES | {"partner_admin", "sales"}
+CREATABLE_USER_ROLES = PLATFORM_ASSIGNABLE_ROLES | {"partner_admin", "sales"}
 VALID_USER_STATUSES = {"active", "inactive"}
 
 
