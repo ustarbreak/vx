@@ -1,288 +1,64 @@
-import React, { useState } from 'react';
-import { integrationsData, getIntegrationStats } from '../../data/integrationsData';
-import { servicesData } from '../../data/servicesData';
-import { comingSoonServices } from '../../data/comingSoonServices';
-import { 
-  Key, Globe, CheckCircle2, XCircle, Clock, 
-  ExternalLink, Edit, Trash2, Plus, Filter,
-  Shield, Network, Server, Zap, AlertCircle
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Activity, CheckCircle2, PlugZap, Plus, RefreshCw, Shield, Trash2, XCircle, Wrench } from 'lucide-react';
+import { api } from '../../services/api';
+
+interface IntegrationRow {
+  id:number; name:string; service_id:string; integration_type:string; license_type:string;
+  pricing:string; status:string; api_endpoint:string|null; documentation_url:string|null;
+  last_sync:string|null; notes:string|null; created_at:string;
+}
+const empty = {name:'',service_id:'',integration_type:'api',license_type:'open-source',pricing:'free',status:'inactive',api_endpoint:'',api_key:'',documentation_url:'',notes:''};
 
 export default function PlatformIntegrationsPage() {
-  const [filter, setFilter] = useState<'all' | 'active' | 'inactive' | 'pending'>('all');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedIntegration, setSelectedIntegration] = useState<string | null>(null);
-
-  const stats = getIntegrationStats();
-
-  const filteredIntegrations = integrationsData.filter(integration => {
-    const matchesFilter = filter === 'all' || integration.status === filter;
-    const matchesSearch = integration.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         integration.serviceId.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesFilter && matchesSearch;
-  });
-
-  const getServiceName = (serviceId: string) => {
-    if (serviceId === 'coming-soon') return 'Coming Soon';
-    const service = servicesData.find(s => s.id === serviceId);
-    return service?.name || serviceId;
+  const [items,setItems] = useState<IntegrationRow[]>([]);
+  const [form,setForm] = useState(empty);
+  const [showForm,setShowForm] = useState(false);
+  const [loading,setLoading] = useState(true);
+  const [busy,setBusy] = useState<number|null>(null);
+  const [saving,setSaving] = useState(false);
+  const [error,setError] = useState<string|null>(null);
+  const [message,setMessage] = useState<string|null>(null);
+  const [testResults,setTestResults] = useState<Record<number,string>>({});
+  const load = async () => { setLoading(true); setError(null); try { setItems(await api.get<IntegrationRow[]>('/integrations/')); } catch(e:any) { setError(e?.message ?? 'Unable to load integrations'); } finally { setLoading(false); } };
+  useEffect(()=>{load();},[]);
+  const save = async (e:React.FormEvent) => { e.preventDefault(); setSaving(true); setError(null); setMessage(null);
+    try { await api.post('/integrations/',form); setForm(empty); setShowForm(false); setMessage('Integration created. Credentials are stored encrypted and never returned by the API.'); await load(); }
+    catch(e:any){setError(e?.message ?? 'Integration creation failed');} finally{setSaving(false);}
   };
-
-  const getServiceIcon = (serviceId: string) => {
-    if (serviceId === 'coming-soon') return '🔮';
-    const service = servicesData.find(s => s.id === serviceId);
-    return service?.icon || '🔧';
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active': return 'text-green-400 bg-green-500/10 border-green-500/20';
-      case 'inactive': return 'text-red-400 bg-red-500/10 border-red-500/20';
-      case 'pending': return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
-      default: return 'text-[var(--ic-muted)] bg-slate-500/10 border-slate-500/20';
-    }
-  };
-
-  const getLicenseColor = (licenseType: string) => {
-    switch (licenseType) {
-      case 'open-source': return 'text-green-400 bg-green-500/10';
-      case 'commercial': return 'text-purple-400 bg-purple-500/10';
-      case 'freemium': return 'text-blue-400 bg-blue-500/10';
-      default: return 'text-[var(--ic-muted)] bg-slate-500/10';
-    }
-  };
-
-  return (
-    <div className="p-4 lg:p-6 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2">
-            <Key className="w-7 h-7 text-cyan-400" />
-            Integration Management
-          </h1>
-          <p className="text-[var(--ic-muted)] text-sm mt-1">Manage API keys and service integrations</p>
-        </div>
-        <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-[var(--ic-heading)] text-sm font-medium hover:from-cyan-400 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/20">
-          <Plus className="w-4 h-4" />
-          Add Integration
-        </button>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Globe className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Total Integrations</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{stats.total}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <CheckCircle2 className="w-4 h-4 text-green-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Active</span>
-          </div>
-          <p className="text-2xl font-bold text-green-400">{stats.active}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Shield className="w-4 h-4 text-green-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Open Source</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{stats.openSource}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Zap className="w-4 h-4 text-purple-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Commercial</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{stats.commercial}</p>
-        </div>
-        <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertCircle className="w-4 h-4 text-blue-400" />
-            <span className="text-xs text-[var(--ic-muted)]">Freemium</span>
-          </div>
-          <p className="text-2xl font-bold text-[var(--ic-heading)]">{stats.freemium}</p>
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--ic-muted)]" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              placeholder="Search integrations..."
-              className="w-full pl-10 pr-4 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)] placeholder-slate-600 focus:outline-none focus:border-cyan-500/50"
-            />
-          </div>
-          <div className="flex gap-2">
-            {(['all', 'active', 'inactive', 'pending'] as const).map(status => (
-              <button
-                key={status}
-                onClick={() => setFilter(status)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                  filter === status
-                    ? 'bg-cyan-500/10 text-cyan-400 border border-[var(--ic-border)]'
-                    : 'text-[var(--ic-muted)] hover:text-[var(--ic-heading)] bg-[var(--ic-surface)] border border-[var(--ic-border)]'
-                }`}
-              >
-                {status.charAt(0).toUpperCase() + status.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Integrations List */}
-      <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[var(--ic-border)]">
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Integration</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Service</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Type</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Status</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">License</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Pricing</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Last Sync</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-[var(--ic-muted)] uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredIntegrations.map(integration => (
-                <tr key={integration.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface)] transition-colors">
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium text-[var(--ic-heading)]">{integration.name}</p>
-                      {integration.apiEndpoint && (
-                        <p className="text-xs text-[var(--ic-muted)] font-mono">{integration.apiEndpoint}</p>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{getServiceIcon(integration.serviceId)}</span>
-                      <span className="text-sm text-[var(--ic-text)]">{getServiceName(integration.serviceId)}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="px-2 py-1 rounded-lg bg-[var(--ic-surface-2)] text-xs text-[var(--ic-muted)] capitalize">
-                      {integration.type}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium border ${getStatusColor(integration.status)}`}>
-                      {integration.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`px-2 py-1 rounded-lg text-xs font-medium ${getLicenseColor(integration.licenseType)}`}>
-                      {integration.licenseType}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`text-xs font-medium ${
-                      integration.pricing === 'free' ? 'text-green-400' :
-                      integration.pricing === 'paid' ? 'text-yellow-400' : 'text-purple-400'
-                    }`}>
-                      {integration.pricing}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-xs text-[var(--ic-muted)]">
-                      {integration.lastSync ? new Date(integration.lastSync).toLocaleDateString() : 'Never'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {integration.documentationUrl && (
-                        <a
-                          href={integration.documentationUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-1.5 rounded text-[var(--ic-muted)] hover:text-cyan-400 hover:bg-cyan-500/10 transition-colors"
-                          title="Documentation"
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
-                      )}
-                      <button
-                        onClick={() => setSelectedIntegration(integration.id)}
-                        className="p-1.5 rounded text-[var(--ic-muted)] hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
-                        title="Edit"
-                      >
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      <button
-                        className="p-1.5 rounded text-[var(--ic-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Integration Detail Modal */}
-      {selectedIntegration && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedIntegration(null)} />
-          <div className="relative w-full max-w-2xl bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-2xl shadow-2xl p-6">
-            <h2 className="text-xl font-bold text-[var(--ic-heading)] mb-4">Integration Details</h2>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Name</p>
-                  <p className="text-sm text-[var(--ic-heading)]">
-                    {integrationsData.find(i => i.id === selectedIntegration)?.name}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">Service</p>
-                  <p className="text-sm text-[var(--ic-heading)]">
-                    {getServiceName(integrationsData.find(i => i.id === selectedIntegration)?.serviceId || '')}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">API Endpoint</p>
-                  <p className="text-sm text-[var(--ic-heading)] font-mono">
-                    {integrationsData.find(i => i.id === selectedIntegration)?.apiEndpoint || 'N/A'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-[var(--ic-muted)] uppercase tracking-wider">API Key</p>
-                  <p className="text-sm text-[var(--ic-heading)] font-mono">
-                    ••••••••••••••••
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 pt-4 border-t border-[var(--ic-border)]">
-                <button
-                  onClick={() => setSelectedIntegration(null)}
-                  className="flex-1 py-2 rounded-lg border border-[var(--ic-border)] text-[var(--ic-text)] text-sm font-medium hover:bg-[var(--ic-surface)] transition-colors"
-                >
-                  Close
-                </button>
-                <button className="flex-1 py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-[var(--ic-heading)] text-sm font-medium hover:from-cyan-400 hover:to-blue-500 transition-all shadow-lg shadow-cyan-500/20">
-                  Save Changes
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  const test = async (id:number) => { setBusy(id); setError(null); try { const r=await api.post<{success:boolean;message:string}>(`/integrations/${id}/test`,{}); setTestResults(x=>({...x,[id]:r.message})); await load(); }
+    catch(e:any){setError(e?.message ?? 'Connector test failed');} finally{setBusy(null);} };
+  const setStatus = async (item:IntegrationRow,status:string) => { setBusy(item.id); setError(null); try { await api.patch(`/integrations/${item.id}`,{status}); await load(); }
+    catch(e:any){setError(e?.message ?? 'Integration status update failed');} finally{setBusy(null);} };
+  const remove = async (id:number) => { if(!window.confirm('Delete this integration configuration? This does not delete external systems.')) return; setBusy(id); setError(null);
+    try { await api.del(`/integrations/${id}`); setMessage('Integration configuration deleted.'); await load(); }
+    catch(e:any){setError(e?.message ?? 'Integration deletion failed');} finally{setBusy(null);} };
+  const active=items.filter(x=>x.status==='active').length;
+  const pending=items.filter(x=>x.status==='pending').length;
+  return <div className="p-4 lg:p-6 space-y-6">
+    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-bold text-[var(--ic-heading)] flex items-center gap-2"><PlugZap className="w-6 h-6 text-cyan-400"/>Global Integration Registry</h1><p className="text-sm text-[var(--ic-muted)] mt-1">Configure, test, monitor and retire platform integrations. Secrets are write-only.</p></div>
+      <div className="flex gap-2"><button onClick={load} className="px-3 py-2 rounded-lg border border-[var(--ic-border)] text-sm"><RefreshCw className="inline w-4 h-4 mr-1"/>Refresh</button><button onClick={()=>setShowForm(x=>!x)} className="px-3 py-2 rounded-lg bg-cyan-600 text-white text-sm"><Plus className="inline w-4 h-4 mr-1"/>Add integration</button></div></header>
+    {error&&<div className="p-3 rounded-lg border border-rose-500/30 text-rose-300 text-sm">{error}</div>}
+    {message&&<div className="p-3 rounded-lg border border-emerald-500/30 text-emerald-300 text-sm">{message}</div>}
+    {showForm&&<form onSubmit={save} className="rounded-xl border border-cyan-500/30 bg-[var(--ic-surface)] p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <h2 className="md:col-span-2 xl:col-span-3 font-semibold">New integration configuration</h2>
+      <input required placeholder="Integration name" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} className="field"/>
+      <input required placeholder="Service ID" value={form.service_id} onChange={e=>setForm({...form,service_id:e.target.value})} className="field"/>
+      <select value={form.integration_type} onChange={e=>setForm({...form,integration_type:e.target.value})} className="field"><option value="api">API</option><option value="webhook">Webhook</option><option value="agent">Agent</option><option value="native">Native</option></select>
+      <select value={form.license_type} onChange={e=>setForm({...form,license_type:e.target.value})} className="field"><option value="open-source">Open source</option><option value="commercial">Commercial</option><option value="freemium">Freemium</option></select>
+      <select value={form.pricing} onChange={e=>setForm({...form,pricing:e.target.value})} className="field"><option value="free">Free</option><option value="paid">Paid</option><option value="custom">Custom</option></select>
+      <input placeholder="API endpoint" value={form.api_endpoint} onChange={e=>setForm({...form,api_endpoint:e.target.value})} className="field"/>
+      <input type="password" autoComplete="new-password" placeholder="API key / secret (write-only)" value={form.api_key} onChange={e=>setForm({...form,api_key:e.target.value})} className="field"/>
+      <input placeholder="Documentation URL" value={form.documentation_url} onChange={e=>setForm({...form,documentation_url:e.target.value})} className="field"/>
+      <input placeholder="Operational notes" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} className="field"/>
+      <div className="md:col-span-2 xl:col-span-3 flex gap-2 justify-end"><button type="button" onClick={()=>setShowForm(false)} className="px-4 py-2 border border-[var(--ic-border)] rounded-lg text-sm">Cancel</button><button disabled={saving} className="px-4 py-2 bg-cyan-600 text-white rounded-lg text-sm disabled:opacity-50">{saving?'Saving…':'Save integration'}</button></div>
+    </form>}
+    <div className="grid grid-cols-3 gap-3">{[['Registered',items.length],['Active',active],['Pending',pending]].map(([l,v]:any)=><div key={l} className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4"><div className="text-xs text-[var(--ic-muted)]">{l}</div><div className="text-2xl font-bold text-[var(--ic-heading)] mt-1">{loading?'…':v}</div></div>)}</div>
+    <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] overflow-hidden"><div className="p-4 border-b border-[var(--ic-border)]"><h2 className="font-semibold">Configured integrations</h2><p className="text-xs text-[var(--ic-muted)]">An active status is configuration state; only a successful connector test confirms connectivity.</p></div>
+      <div className="divide-y divide-[var(--ic-border)]">{items.map(item=><div key={item.id} className="p-4 flex flex-wrap items-center justify-between gap-4"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="font-semibold text-[var(--ic-heading)]">{item.name}</span><span className="text-[10px] uppercase text-[var(--ic-muted)]">{item.integration_type}</span><span className={'text-[10px] rounded-full px-2 py-0.5 '+(item.status==='active'?'bg-emerald-500/10 text-emerald-400':item.status==='pending'?'bg-amber-500/10 text-amber-400':'bg-slate-500/10 text-slate-400')}>{item.status}</span></div><div className="text-xs text-[var(--ic-muted)] mt-1">{item.service_id} · {item.license_type} · {item.pricing}</div><div className="text-xs text-[var(--ic-muted)]">{item.api_endpoint ?? 'Endpoint not configured'} · last test {item.last_sync?new Date(item.last_sync).toLocaleString():'never'}</div>{testResults[item.id]&&<div className="text-xs text-cyan-300 mt-1">{testResults[item.id]}</div>}</div>
+        <div className="flex flex-wrap gap-2 items-center"><button disabled={busy===item.id} onClick={()=>test(item.id)} className="px-3 py-1.5 rounded-lg border border-cyan-500/30 text-cyan-300 text-xs"><Activity className="inline w-3 h-3 mr-1"/>{busy===item.id?'Testing…':'Test'}</button><select disabled={busy===item.id} value={item.status} onChange={e=>setStatus(item,e.target.value)} className="bg-[var(--ic-surface-2)] border border-[var(--ic-border)] rounded-lg px-2 py-1.5 text-xs"><option value="inactive">Inactive</option><option value="pending">Pending</option><option value="active">Active</option></select><button disabled={busy===item.id} onClick={()=>remove(item.id)} className="p-2 text-rose-400"><Trash2 size={15}/></button></div>
+      </div>)}
+      {!items.length&&!loading&&<div className="p-8 text-center text-sm text-[var(--ic-muted)]"><Wrench className="mx-auto mb-2 opacity-50"/>No integrations configured. Add a connector configuration before enabling service flows.</div>}</div>
+    </section>
+    <style>{'.field{background:var(--ic-surface-2);border:1px solid var(--ic-border);border-radius:.5rem;padding:.6rem .75rem;color:var(--ic-text);font-size:.85rem;min-width:0}'}</style>
+  </div>;
 }
