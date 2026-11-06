@@ -35,3 +35,13 @@ async def test_mock_dry_run_has_no_execution_side_effect():
 
 def test_unknown_provider_is_not_fabricated():
     assert ConnectorRegistry().create("does-not-exist", {}) is None
+
+
+@pytest.mark.asyncio
+async def test_velociraptor_obeys_provider_contract_without_external_service():
+    provider = ConnectorRegistry().create("endpoint-forensics", {})
+    assert provider is not None
+    assert [a.name for a in provider.actions()] == ["artifact.collect", "hunt.create"]
+    health = await provider.probe()
+    assert health["status"] == "not_configured"
+    assert await provider.fetch_detections(limit=5) == []
