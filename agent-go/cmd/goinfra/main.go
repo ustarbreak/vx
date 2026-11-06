@@ -165,6 +165,9 @@ func runAgent(args []string, once bool) error {
 		log.Printf("hello failed: %v", err)
 	}
 
+	// Load tenant scan policy before the first collection cycle so SNMP
+	// credentials and approved CIDRs are available from the outset.
+	a.refreshPolicy()
 	// initial cycles immediately, then ticker
 	a.cycle()
 	if once {
