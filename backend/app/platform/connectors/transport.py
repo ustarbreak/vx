@@ -1,8 +1,8 @@
-"""Single transport helper for all connector HTTP calls (T2.5, owner decision #5).
+"""Single transport helper for connector HTTP calls.
 
-Honors settings.CONNECTOR_TLS_VERIFY: default False keeps today's lenient
-behavior byte-compatible (wazuh.py:21, connectors.py:155/187 use verify=False);
-strict verification is an explicit opt-in until the migration task lands.
+TLS certificate verification is enabled by default. An explicit
+CONNECTOR_TLS_VERIFY=false override is reserved for trusted lab environments
+using self-signed certificates and must not be used in public production.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.core.config import settings
 
 
 def tls_verify() -> bool:
-    return bool(getattr(settings, "CONNECTOR_TLS_VERIFY", False))
+    return bool(getattr(settings, "CONNECTOR_TLS_VERIFY", True))
 
 
 async def get_json(url: str, timeout: float = 8.0,
