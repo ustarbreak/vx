@@ -242,8 +242,9 @@ async def job_h_kpis(db, day: str | None = None) -> dict:
         auto = K.automation_rate([(i.status, i.auto_closed) for i in inc]) if inc else None
         if auto is not None:
             vals["automation_pct"] = (auto, "%")
-        crit = sum(1 for i in inc if i.severity == "crit")
-        vals["incidents_crit"] = (crit, "count")
+        if inc:
+            crit = sum(1 for i in inc if i.severity == "crit")
+            vals["incidents_crit"] = (crit, "count")
         if tk:
             vals["tickets_opened"] = (len(tk), "count")
             br = sum(1 for t in tk if t.sla_breached)
@@ -323,12 +324,12 @@ async def job_m_freeze(db) -> dict:
         # posture snapshot from monthly components
         comps = {r.kpi: r.value for r in (await db.execute(select(KpiMonthly).where(
             KpiMonthly.tenant_id == ten, KpiMonthly.month == prev))).scalars().all()}
+        # Composite posture is published only when its component scores are
+        # measured. Alert FP rate and incident counts are not posture scores.
         vuln_sub = None
-        if "fp_rate" in comps:  # detection quality proxy until scanner wired
-            vuln_sub = max(0.0, 100.0 - comps.get("fp_rate", 0.0) * 2)
         cov = comps.get("coverage_pct")
         comp = comps.get("compliance_pct")
-        inc_sub = max(0.0, 100.0 - comps.get("incidents_crit", 0.0) * 5.0)
+        inc_sub = None
         ps = K.posture_score(vuln_sub, cov, comp, inc_sub)
         if ps is not None:
             await db.execute(delete(KpiMonthly).where(
