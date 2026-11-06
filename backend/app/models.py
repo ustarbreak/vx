@@ -243,6 +243,24 @@ class UpsellEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class UsageEvent(Base):
+    """Append-only, idempotent usage fact; prices are never stored on events."""
+    __tablename__ = "usage_events"
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    metric = Column(String(32), nullable=False)  # endpoints|seats|siem_gb|backup_gb
+    quantity = Column(Numeric(18, 6), nullable=False)
+    unit = Column(String(24), nullable=False)
+    source = Column(String(80), nullable=False)
+    idempotency_key = Column(String(128), nullable=False)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (
+        UniqueConstraint("org_id", "idempotency_key", name="uq_usage_event_org_idempotency"),
+        Index("ix_usage_event_org_metric_time", "org_id", "metric", "occurred_at"),
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
