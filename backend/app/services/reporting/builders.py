@@ -760,7 +760,7 @@ async def build_infra(tenant: str, period: str) -> list:
                 ["Orchestration", "Exécution des playbooks", NA, "@med:Non mesuré"],
                 ["Interface", "Visualisation & exports", NA, "@med:Non mesuré"]
             ]]]
-        ]]
+        ]
         controls = []
         if last:
             controls = [
