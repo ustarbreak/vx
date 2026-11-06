@@ -515,9 +515,11 @@ async def ingest_agent_events(agent_id: int, body: AgentEventsBody,
             else:
                 accepted += 1
         except Exception:
+            # Do not acknowledge a partially failed batch. Already committed
+            # evidence is idempotent, so retrying safely resumes processing.
             await db.rollback()
             logger.exception("agent event ingestion failed for probe=%s source=%s", probe.id, source)
-            rejected += 1
+            raise
     await _touch(db, probe)
     return {"ok": True, "accepted": accepted, "duplicates": duplicates,
             "rejected": rejected, "received": min(len(body.events), 250)}
