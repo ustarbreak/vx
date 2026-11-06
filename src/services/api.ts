@@ -178,10 +178,10 @@ export interface OrganizationCreatePayload {
 // Demo Mode: answered by demoMode.ts stores seeded from demoRulesSeed.
 // ---------------------------------------------------------------------------
 export interface TenantSummary {
-  id: number; name: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
+  id: number; name: string; tier: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
   plan_tier: 'STARTER' | 'PRO' | 'SOUVERAIN'; billing_cycle: 'MONTHLY' | 'ANNUAL';
   endpoints: number; members: number; services_active: number; open_incidents: number;
-  probes: { id: string; hostname: string; ip: string; status: string }[];
+  probes: { id: number; hostname: string; ip: string; status: string }[];
   children: { id: number; name: string; org_type: string }[];
 }
 export interface MonitoringRuleOut {
