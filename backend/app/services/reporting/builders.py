@@ -468,7 +468,7 @@ async def build_soar(tenant: str, period: str) -> list:
                 e["saved"] += r.manual_minutes_saved
         all_durs = [d for e in by_pb.values() for d in e["dur"]]
         avg_dur = sum(all_durs) / len(all_durs) if all_durs else None
-        saved_min_total = hours * 60 if hours else 0
+        saved_min_total = hours * 60 if hours is not None else None
         p1 = ["Automatisation op\u00e9rationnelle", "Playbooks ex\u00e9cut\u00e9s et temps \u00e9conomis\u00e9.", [
             ["K", [["Ex\u00e9cutions", f"{len(runs):,}", "= tous playbooks", "3"],
                    ["Succ\u00e8s", f"{round(100*len(ok)/max(len(runs),1),1)} %",
@@ -479,10 +479,10 @@ async def build_soar(tenant: str, period: str) -> list:
                     "= comparaison temps manuel estim\u00e9", "2"]]],
             (["G", "Part d'incidents automatis\u00e9e", round(auto)] if auto is not None else
              _note("Aucun incident clos sur la p\u00e9riode pour mesurer l'automatisation."))]]
-        bars = [[name, max(1, round(100 * e["saved"] / max(saved_min_total, 1))), c,
-                 f"{e['saved']/60:.0f} h"]
-                for (name, e), c in zip(sorted(by_pb.items(), key=lambda x: -x[1]["saved"])[:6],
-                                        ["3", "1", "2", "w", "o", "b"])]
+        measured_pb = [(name, e) for name, e in by_pb.items() if e["saved"] > 0]
+        bars = [[name, round(100 * e["saved"] / saved_min_total), color, f"{e['saved']/60:.1f} h"]
+                for (name, e), color in zip(sorted(measured_pb, key=lambda x: -x[1]["saved"])[:6],
+                                             ["3", "1", "2", "w", "o", "b"])] if saved_min_total else []
         p2 = ["Performance par sc\u00e9nario", "R\u00e9partition du gain op\u00e9rationnel.", [
             ["B", "Temps gagn\u00e9 par playbook", bars],
             ["T", "Playbooks", ["Nom", "D\u00e9clencheur", "Actions", "Ex\u00e9c.", "Succ\u00e8s", "Dur\u00e9e moy."],
