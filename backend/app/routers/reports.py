@@ -166,7 +166,7 @@ async def export_bundle(scope: str = Query("all", pattern="^(all|family)$"),
             writer = csv.writer(buf)
             writer.writerow(["Infracentra report #" + str(num) + ": " + title, "period=" + period, "tenant=" + tenant])
             writer.writerows(_blocks_to_rows(pages))
-            payload = ("\\ufeff" + buf.getvalue()).encode("utf-8")
+            payload = ("\ufeff" + buf.getvalue()).encode("utf-8")
             archive.writestr(fam + "/report" + str(num).zfill(2) + "_" + key + "_" + period + ".csv", payload)
             manifest.append({"number": num, "id": key, "family": fam, "pages": total})
             if not use_demo:
@@ -344,7 +344,7 @@ async def export(report_id: str, format: str = Query("csv", pattern="^(csv|pdf)$
         writer.writerow(["Infracentra report #" + str(num) + ": " + title, "period=" + period,
                          "tenant=" + tenant, "updated=" + str(dd.now_utc())])
         writer.writerows(_blocks_to_rows(selected))
-        payload = ("\\ufeff" + buf.getvalue()).encode("utf-8")
+        payload = ("\ufeff" + buf.getvalue()).encode("utf-8")
         media_type = "text/csv; charset=utf-8"
     if not use_demo:
         db.add(RptExportLog(tenant_id=tenant, user_id=str(current_user.id), report_id=report_id,
