@@ -19,6 +19,10 @@ async def test_production_lifespan_does_not_call_create_all(monkeypatch):
     monkeypatch.setattr(main, "ensure_platform_admin", AsyncMock())
     monkeypatch.setattr(main, "encrypt_legacy_integration_secrets", AsyncMock())
     monkeypatch.setattr(main, "ensure_demo_accounts", AsyncMock())
+    from app.services import seed
+    monkeypatch.setattr(seed, "ensure_grouping_policy", AsyncMock())
+    monkeypatch.setattr(seed, "ensure_uid_counters", AsyncMock())
+    monkeypatch.setattr(seed, "ensure_triage_policy", AsyncMock())
     monkeypatch.setattr(main, "init_db", AsyncMock(side_effect=AssertionError("create_all must not run")))
     monkeypatch.setattr(main, "AsyncSessionLocal", lambda: _SessionContext())
     monkeypatch.setattr(main, "_escalation_loop", AsyncMock())
