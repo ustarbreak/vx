@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Activity, AlertTriangle, Building2, CheckCircle2, CircleHelp, RefreshCw, Server, Shield, Ticket, Users, Workflow, PlugZap } from 'lucide-react';
+import { Activity, AlertTriangle, Building2, CheckCircle2, HelpCircle, RefreshCw, Server, Shield, Ticket, Users, Workflow, PlugZap } from 'lucide-react';
 import { ApiError, platformDashboardApi, PlatformDashboardOverview } from '../../services/api';
 
 const KPI = [
@@ -26,7 +26,7 @@ function Distribution({ title, values }: { title: string; values?: Record<string
           {entries.map(([label, value]) => (
             <div key={label}>
               <div className="flex justify-between text-xs mb-1">
-                <span className="text-[var(--ic-text)] capitalize">{label.replaceAll('_', ' ')}</span>
+                <span className="text-[var(--ic-text)] capitalize">{label.replace(/_/g, ' ')}</span>
                 <span className="text-[var(--ic-muted)] tabular-nums">{value}</span>
               </div>
               <div className="h-2 rounded-full bg-[var(--ic-surface-2)] overflow-hidden">
@@ -117,7 +117,7 @@ export default function PlatformDashboardPage() {
             <div className="grid md:grid-cols-2 gap-3">
               {Object.entries(data.limitations).map(([key, value]) => (
                 <div key={key} className="rounded-lg bg-[var(--ic-surface-2)] p-3">
-                  <p className="text-xs font-semibold text-[var(--ic-heading)] capitalize">{key.replaceAll('_', ' ')}</p>
+                  <p className="text-xs font-semibold text-[var(--ic-heading)] capitalize">{key.replace(/_/g, ' ')}</p>
                   <p className="text-xs text-[var(--ic-muted)] mt-1">{value}</p>
                 </div>
               ))}
