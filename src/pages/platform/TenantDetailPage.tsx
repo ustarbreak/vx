@@ -102,7 +102,7 @@ export default function TenantDetailPage() {
       </div>
 
       {tab === 'summary' && <div className="text-sm text-[var(--ic-muted)] p-6 bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl">Le résumé est affiché en haut de page. Sélectionnez un onglet pour gérer le client en détail.</div>}
-      {tab === 'services' && <ServicesTab orgId={numericId} planTier={sum.plan_tier} />}
+      {tab === 'services' && <ServicesTab orgId={numericId} tenantTier={sum.tier} />}
       {tab === 'devices' && <DevicesTab orgId={numericId} />}
       {tab === 'members' && <MembersTab orgId={numericId} />}
       {tab === 'api-keys' && <ApiKeysTab orgId={numericId} />}
@@ -294,7 +294,7 @@ function PlaceholderTab({ label }: { label: string }) {
 }
 
 /* ---------- Services + Grant Access (override plan) ---------- */
-function ServicesTab({ orgId, planTier }: { orgId: string; planTier: string }) {
+function ServicesTab({ orgId, tenantTier }: { orgId: string; tenantTier: string }) {
   const [grants, setGrants] = useState<Record<string, ServiceGrantOut>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   useEffect(() => { tenantManagerApi.grants(orgId).then(setGrants).catch(() => {}); }, [orgId]);
@@ -315,7 +315,7 @@ function ServicesTab({ orgId, planTier }: { orgId: string; planTier: string }) {
       <div className="grid md:grid-cols-2 gap-3">
         {serviceCatalog.map(s => {
           const g = grants[s.id];
-          const enabled = g ? g.enabled : s.availableTiers.includes(planTier.toLowerCase()); // default from the selected tenant's actual plan
+          const enabled = g ? g.enabled : s.availableTiers.includes(tenantTier); // default from the selected tenant's actual plan
           return (
             <div key={s.id} className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
