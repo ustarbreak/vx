@@ -127,3 +127,14 @@ async def test_report_exports_csv_and_pdf_from_same_payload(session_factory, mon
         assert csv_response.content.startswith(b"\xef\xbb\xbf")
         assert pdf_response.status_code == 200
         assert pdf_response.content.startswith(b"%PDF")
+
+
+
+def test_export_flatten_supports_roadmap_and_histogram_blocks():
+    pages = [["Overview", "Live", [
+        ["C", "Roadmap", [["Phase 1", ["Connect sources", "Validate controls"], "o"]]],
+        ["H", "Distribution", [["High", 3], ["Low", 5]]],
+    ]]]
+    rows = reports._blocks_to_rows(pages)
+    assert ["Roadmap", "roadmap", "Phase 1", "Connect sources; Validate controls", "o", ""] in rows
+    assert ["Distribution", "histogram", "High", "3", "", ""] in rows
