@@ -1,7 +1,7 @@
 id: vuln-scanning
 name: Vuln Scanning
-status: roadmap
-provider: native
+status: beta
+provider: connector
 engine: OpenVAS / Greenbone Community Edition
 docs_url: https://docs.greenbone.net/GSM-Manual/gos-22.04/en/scanning/
 endpoints:
@@ -16,7 +16,11 @@ dependencies:
   rationale: Le scanneur cible l'inventaire produit par la découverte automatique
     ; hors inventaire = hors périmètre.
 in_seed: true
-actions: []
+actions:
+- name: vulnerability.fetch
+  method: GET
+  dangerous: false
+  status: beta
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES
