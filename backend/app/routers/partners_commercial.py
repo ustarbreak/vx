@@ -57,7 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import get_current_user
 from app.database import get_db
 from app.models import (
-    Organization, PartnerDealRegistration, QuoteRecord, TenantSetting, User,
+    Organization, PartnerDealRegistration, QuoteRecord, TenantSetting, UsageEvent, User,
 )
 from app.routers.partners import (
     _audit, _children, _rate_limit, _resolve_partner, _settings, _save_settings,
@@ -475,10 +475,15 @@ async def get_quote(pid: str, qid: int, user: User = Depends(get_current_user),
 # --------------------------------------------------------------------------- #
 # 3.4 Billing — computed from real columns + pricing_config (no new tables)    #
 # --------------------------------------------------------------------------- #
-def _billable_for_client(c: Organization, settings: dict) -> Dict[str, Any]:
+def _billable_for_client(c: Organization, settings: dict, metered: Optional[dict] = None) -> Dict[str, Any]:
     """Wholesale line for one client: pack price × units + SIEM GB overage +
     backup overage + 24/7, using pricing_config rates (single source of truth)."""
-    b = settings.get("billing", {})
+    b = dict(settings.get("billing", {}))
+    if metered:
+        if metered.get("siem_gb_day") is not None:
+            b["siem_gb_day"] = metered["siem_gb_day"]
+        if metered.get("backup_gb") is not None:
+            b["backup_gb"] = metered["backup_gb"]
     pack = b.get("pack") if b.get("pack") in PACK_IDS else None
     units = D(str(max(c.asset_count or 0, 0)))
     if pack:
@@ -513,6 +518,34 @@ def _billable_for_client(c: Organization, settings: dict) -> Dict[str, Any]:
              "amount_mad": float(soc247)},
         ],
         "monthly_excl_vat_mad": float(total),
+        "metering": metered or {"source": "tenant_billing_settings"},
+    }
+
+
+async def _metered_usage_for_month(db: AsyncSession, org_id: int, month: str) -> Optional[dict]:
+    """Convert recorded monthly SIEM GB into billable daily average and use
+    the peak backup snapshot. If no events exist, retain persisted legacy inputs."""
+    year, mon = _month_or_400(month)
+    start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    end = datetime(year + (mon == 12), 1 if mon == 12 else mon + 1, 1, tzinfo=timezone.utc)
+    rows = (await db.execute(
+        select(UsageEvent.metric, func.sum(UsageEvent.quantity), func.max(UsageEvent.quantity))
+        .where(UsageEvent.org_id == org_id, UsageEvent.occurred_at >= start,
+               UsageEvent.occurred_at < end)
+        .group_by(UsageEvent.metric)
+    )).all()
+    if not rows:
+        return None
+    values = {metric: (total, peak) for metric, total, peak in rows}
+    days = (end - start).days
+    siem_total = values.get("siem_gb", (None, None))[0]
+    backup_peak = values.get("backup_gb", (None, None))[1]
+    return {
+        "source": "usage_events",
+        "period": month,
+        "siem_gb_month": float(siem_total) if siem_total is not None else None,
+        "siem_gb_day": float(siem_total / D(str(days))) if siem_total is not None else None,
+        "backup_gb": float(backup_peak) if backup_peak is not None else None,
     }
 
 
@@ -533,7 +566,8 @@ async def billing_statement(pid: str, client_org_id: int = Query(...), month: st
     _month_or_400(month)
     child = _child_or_404(await _children(db, partner.id), client_org_id)
     st = await _settings(db, child.id)
-    line = _billable_for_client(child, st)
+    metered = await _metered_usage_for_month(db, child.id, month)
+    line = _billable_for_client(child, st, metered)
     tier = (await _partner_tier(db, partner))["tier"]
     out_line = _apply_tier(line, D(str(tier["discount"])), D(str(PRICING_CONFIG["partner"]["totalDiscountCap"])))
     out_line = {**out_line, "tier": tier["id"]}   # tier id echoed on the statement line too
@@ -553,7 +587,8 @@ async def billing_invoice(pid: str, month: str = Query(...),
         if c.status == "disabled":
             continue
         st = await _settings(db, c.id)
-        lines.append(_apply_tier(_billable_for_client(c, st),
+        metered = await _metered_usage_for_month(db, c.id, month)
+        lines.append(_apply_tier(_billable_for_client(c, st, metered),
                                  D(str(tier["discount"])),
                                  D(str(PRICING_CONFIG["partner"]["totalDiscountCap"]))))
     gross = sum(D(str(l["monthly_excl_vat_mad"])) for l in lines)
