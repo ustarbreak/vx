@@ -1381,3 +1381,9 @@ export interface PlatformDashboardOverview {
 export const platformDashboardApi = {
   overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
 };
+
+
+export const platformStaffApi = {
+  updateStatus: (userId: number, status: 'active' | 'inactive') =>
+    api.patch<{ id: number; status: string; auth_version: number }>(`/platform/access/users/${userId}/status`, { status }),
+};
