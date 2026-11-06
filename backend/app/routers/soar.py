@@ -314,7 +314,7 @@ async def _run_step(db: AsyncSession, run: PlaybookRun, step: dict, user: User,
         if action == "snmp_query":
             return "failed", "snmp_query requires a discovery credential context; use the Discovery service directly"
         if action == "snapshot":
-            return "completed", f"Snapshot request recorded for target {redact(str(params.get('target', '')))}"
+            return "failed", "No snapshot provider is configured — no snapshot was created"
         if action in ("block_ip", "isolate_host"):
             # No firewall/EDR connector is wired in this deployment. Being
             # honest: the action did NOT execute.
@@ -350,11 +350,12 @@ async def run_playbook(pb_id: int, body: RunRequest,
             "requires_confirmation": True,
         })
 
-    # idempotency: same key + same playbook returns the existing run
+    # Idempotency replay is scoped to the effective tenant, including shared playbooks.
     if body.idempotency_key:
         prev = (await db.execute(
             select(PlaybookRun).where(
                 PlaybookRun.playbook_id == p.id,
+                PlaybookRun.org_id == (p.org_id if p.org_id is not None else current_user.org_id),
                 PlaybookRun.idempotency_key == body.idempotency_key)
         )).scalars().first()
         if prev:
@@ -469,7 +470,7 @@ async def list_runs(current_user: User = Depends(get_current_user),
                     page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=200)):
     stmt = select(PlaybookRun)
     if current_user.role != "platform_admin":
-        stmt = stmt.where(PlaybookRun.org_id.in_([current_user.org_id, None]))
+        stmt = stmt.where(PlaybookRun.org_id == current_user.org_id)
     if playbook_id:
         stmt = stmt.where(PlaybookRun.playbook_id == playbook_id)
     if incident_uid:
@@ -496,7 +497,7 @@ async def get_run(run_uid: str, current_user: User = Depends(get_current_user),
     r = (await db.execute(select(PlaybookRun).where(PlaybookRun.uid == run_uid))).scalars().first()
     if not r:
         raise HTTPException(404, "Run not found")
-    if current_user.role != "platform_admin" and r.org_id not in (None, current_user.org_id):
+    if current_user.role != "platform_admin" and r.org_id != current_user.org_id:
         raise HTTPException(403, "Cross-tenant access denied")
     out = _run_out(r)
     p = (await db.execute(select(Playbook).where(Playbook.id == r.playbook_id))).scalars().first()
