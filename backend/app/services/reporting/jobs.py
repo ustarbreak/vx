@@ -146,8 +146,11 @@ async def job_h_ingest(db, lookback_hours: int = 2) -> dict:
             "severity": {"critical":"crit","high":"high","medium":"med","low":"low"}.get(worst.severity, "med"),
             "cvss": max((float(row.cvss) for row in all_rows if row.cvss is not None), default=None),
             "assets_affected": len(asset_ids) if asset_ids else len(all_rows),
-            "found_at": min(row.first_seen_at for row in all_rows if row.first_seen_at is not None),
-            "fixed_at": max(row.last_seen_at for row in all_rows) if all_resolved else None,
+            "found_at": min((row.first_seen_at for row in all_rows if row.first_seen_at is not None), default=None),
+            "fixed_at": max(row.last_seen_at for row in all_rows if row.last_seen_at is not None) if all_resolved else None,
+            "perimeter": "endpoint",
+            "exploited_in_wild": next((row.raw.get("exploited_in_wild") for row in all_rows if isinstance(row.raw, dict) and isinstance(row.raw.get("exploited_in_wild"), bool)), None),
+            "patch_available": next((row.raw.get("patch_available") for row in all_rows if isinstance(row.raw, dict) and isinstance(row.raw.get("patch_available"), bool)), None),
             "source": "vulnerability-management", "recorded_at": _utcnow(),
         }
         if existing:
