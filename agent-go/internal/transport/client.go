@@ -174,6 +174,7 @@ type DiscoveryDevice struct {
 	OpenPorts  []int  `json:"open_ports,omitempty"`
 	SysName    string `json:"sys_name,omitempty"`
 	SysDescr   string `json:"sys_descr,omitempty"`
+	SNMPFacts  interface{} `json:"snmp_facts,omitempty"`
 	ViaAgent   int    `json:"via_agent"`
 }
 
