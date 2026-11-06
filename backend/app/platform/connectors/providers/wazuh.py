@@ -34,7 +34,7 @@ class WazuhProvider(ConnectorProvider):
         return WazuhService(
             cfg.get("api_endpoint", ""),
             cfg.get("username") or cfg.get("api_user") or "wazuh",
-            cfg.get("password") or cfg.get("api_key") or "",
+            cfg.get("password") or cfg.get("api_password") or cfg.get("api_key") or "",
         )
 
     async def probe(self) -> Dict[str, Any]:
