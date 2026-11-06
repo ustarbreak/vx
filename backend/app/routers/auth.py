@@ -27,22 +27,23 @@ async def register(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Public registration is limited to client_user; privileged roles require an authorized invitation or Owner action"
         )
-    # Check if user already exists
+    # Public registration must never let an unauthenticated caller attach
+    # themselves to an arbitrary customer tenant by guessing its numeric ID.
+    # Reject before any database access so this security boundary is enforced
+    # independently of database availability or test-fixture state.
+    if user_data.org_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant membership must be provisioned by an authorized tenant administrator"
+        )
+
+    # Check if user already exists only after rejecting caller-selected tenants.
     result = await db.execute(select(User).where(User.email == user_data.email))
     if result.scalar_one_or_none():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    # If org_id provided, check if organization exists
-    if user_data.org_id:
-        result = await db.execute(select(Organization).where(Organization.id == user_data.org_id))
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organization not found"
-            )
     
     # Create user
     hashed_password = get_password_hash(user_data.password)
