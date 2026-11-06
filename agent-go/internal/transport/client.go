@@ -24,14 +24,14 @@ type Client struct {
 }
 
 func New(base, token string, insecure bool) *Client {
-	tr := &http.Transport{}
+	tr := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 90 * time.Second}
 	if insecure {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true} // #nosec G402 -- explicit lab-only flag
 	}
 	return &Client{
 		Base:  strings.TrimRight(base, "/"),
 		Token: token,
-		HTTP:  &http.Client{Timeout: 30 * time.Second, Transport: tr},
+		HTTP:  &http.Client{Timeout: 45 * time.Second, Transport: tr},
 	}
 }
 
@@ -181,4 +181,11 @@ type DiscoveryDevice struct {
 func (c *Client) ReportDiscovery(agentID int, devices []DiscoveryDevice) error {
 	return c.do("POST", fmt.Sprintf("/api/agent/%d/discovery", agentID),
 		map[string]interface{}{"devices": devices}, nil)
+}
+
+// ReportEvents uploads normalized host/syslog observations to the tenant-scoped
+// event ingestion endpoint. The server applies durable evidence idempotency.
+func (c *Client) ReportEvents(agentID int, events interface{}) error {
+	return c.do("POST", fmt.Sprintf("/api/agent/%d/events", agentID),
+		map[string]interface{}{"events": events}, nil)
 }
