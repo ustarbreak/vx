@@ -30,6 +30,7 @@ import PSAPage from './pages/PSAPage';
 
 // Platform admin views
 import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
+import PlatformTeamPage from './pages/platform/PlatformTeamPage';
 import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
 import PlatformIntegrationsPage from './pages/platform/PlatformIntegrationsPage';
@@ -132,6 +133,12 @@ function TenantDetailRedirect() {
   return <Navigate to={`/admin/tenants/${orgId ?? ''}`} replace />;
 }
 
+function PlatformOwnerRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'platform_admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -181,6 +188,7 @@ function AppRoutes() {
 
         {/* Platform admin views */}
         <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
+        <Route path="admin/team" element={<PlatformOwnerRoute><PlatformTeamPage /></PlatformOwnerRoute>} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />
