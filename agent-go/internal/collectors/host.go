@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -133,7 +134,7 @@ func readTemperatures() []TempSen {
 			Crit: round2(float64(crit) / 1000.0),
 		})
 	}
-	return out
+	return outMap
 }
 
 // --------------------------------------------------------------- memory ----
@@ -263,7 +264,15 @@ func (c *Collector) collectNetwork(inv *Inventory) {
 }
 
 func defaultRouteIfaces() map[string]bool {
-	out := map[string]bool{}
+	outMap := map[string]bool{}
+	if runtime.GOOS == "windows" {
+		cmd := "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Get-NetIPInterface | Select-Object -ExpandProperty InterfaceAlias -Unique"
+		if out, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd).Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if name := strings.TrimSpace(line); name != "" { outMap[strings.ToLower(name)] = true }
+			}
+		}
+	}
 	if runtime.GOOS == "linux" {
 		// parse /proc/net/route (hex 00000000 destination)
 		b, err := os.ReadFile("/proc/net/route")
