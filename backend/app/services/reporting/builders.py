@@ -799,13 +799,13 @@ async def build_network(tenant: str, period: str) -> list:
             sites.setdefault(m.site or "si\u00e8ge", []).append(m)
         p1 = ["Qualit\u00e9 de service", "Moyennes p\u00e9riodiques consolid\u00e9es.", [
             ["K", [["Latence moyenne", f"{lat:.1f} ms" if lat is not None else NA, "= seuil 30 ms",
-                    "o" if (lat or 1e9) < 30 else "w"],
+                    "o" if lat is not None and lat < 30 else "w"],
                    ["Gigue", f"{jit:.1f} ms" if jit is not None else NA, "= voix & visio",
-                    "o" if (jit or 1e9) < 15 else "w"],
+                    "o" if jit is not None and jit < 15 else "w"],
                    ["Perte de paquets", f"{loss:.2f} %" if loss is not None else NA, "= qualit\u00e9 r\u00e9elle",
-                    "o" if (loss or 1) < 0.5 else "b"],
+                    "o" if loss is not None and loss < 0.5 else "b"],
                    ["Bande utilis\u00e9e", f"{bw:.0f} %" if bw is not None else NA, "= pic de charge",
-                    "w" if (bw or 0) > 80 else "1"]]]]]
+                    "w" if bw is not None and bw > 80 else "1"]]]]]
         rows = []
         for site, mm in sorted(sites.items()):
             l = [x.avg_value for x in mm if x.metric == "latency_ms" and x.avg_value is not None]
@@ -887,7 +887,9 @@ async def build_endpoint(tenant: str, period: str) -> list:
                     _empty_unavailable("Sant\u00e9 des agents"),
                     _empty_unavailable("D\u00e9tections & quarantaine")]
         last = eh[-1]
-        tot = max(last.total_endpoints or 1, 1)
+        tot = last.total_endpoints or 0
+        if tot <= 0:
+            return [_empty_unavailable("Protection des postes"), _empty_unavailable("Santé des agents"), _empty_unavailable("Détections & quarantaine")]
         prot_pct = round(100 * (last.protected or 0) / tot)
         out_pct = round(100 * (last.outdated_agent or 0) / tot)
         p1 = ["Protection des postes", "Parc sous agent de s\u00e9curit\u00e9.", [
@@ -899,9 +901,9 @@ async def build_endpoint(tenant: str, period: str) -> list:
                    ["Chiffrement disque", f"{last.disk_encrypted_pct:.0f} %" if last.disk_encrypted_pct is not None else NA,
                     "= objectif 100 %", "o" if (last.disk_encrypted_pct or 0) >= 95 else "w"]]],
             ["G", "Couverture de protection", prot_pct]]]
-        trend = [round(100 * (x.protected or 0) / max(x.total_endpoints or 1, 1)) for x in eh]
+        trend = [round(100 * (x.protected or 0) / x.total_endpoints) for x in eh if x.total_endpoints and x.total_endpoints > 0]
         p2 = ["Sant\u00e9 des agents", "\u00c9volution de la couverture.", [
-            ["S", "Postes prot\u00e9g\u00e9s (%)", trend[-14:] if len(trend) > 1 else [prot_pct, prot_pct]],
+            ["S", "Postes prot\u00e9g\u00e9s (%)", trend[-14:] if len(trend) > 1 else []],
             ["B", "R\u00e9partition par \u00e9tat",
              [["Sains", prot_pct, "o"], ["Agents \u00e0 mettre \u00e0 jour", out_pct, "w"],
               ["Hors ligne", max(0, 100 - prot_pct - out_pct), "b"]]]]]
