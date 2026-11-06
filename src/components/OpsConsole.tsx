@@ -58,6 +58,22 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
 
   const lastResult = results[0];
 
+  const updateTaskStatus = async (task: SecurityOpsTask, status: 'in_progress' | 'completed' | 'failed') => {
+    const outcome = status === 'in_progress'
+      ? 'Technician acknowledged; execution is in progress.'
+      : window.prompt(status === 'completed' ? 'Describe the verified execution result:' : 'Describe why execution failed:');
+    if (status !== 'in_progress' && !outcome?.trim()) return;
+    try {
+      await api.patch('/security-ops/tasks/' + encodeURIComponent(task.uid) + '/status', { status, outcome: outcome || '' });
+      await refreshTaskHistory();
+    } catch (error) {
+      setHistoryState('unavailable');
+      setResults((prev) => [{ ok: false, actionId: task.action_id, source: 'live',
+        message: 'Could not update task ' + task.uid + ': ' + (error instanceof Error ? error.message : 'Backend error')
+      }, ...prev].slice(0, 12));
+    }
+  };
+
   const openAction = (g: ActionGroup, a: SecurityActionDef) => {
     // Actions with no required params run immediately.
     if (!g.fields || g.fields.length === 0) {
@@ -76,6 +92,7 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
       const res = await runSecurityAction(service, a, params);
       setResults((prev) => [res, ...prev].slice(0, 12));
       setPending(null);
+      await refreshTaskHistory();
     } catch (error) {
       const failedResult: RunResult = {
         ok: false,
@@ -213,14 +230,28 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead><tr className="text-gray-500 border-b border-[var(--ic-border)]"><th className="py-2 pr-3">Task</th><th className="py-2 pr-3">Action</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Requested by</th><th className="py-2">Created</th></tr></thead>
+              <thead><tr className="text-gray-500 border-b border-[var(--ic-border)]"><th className="py-2 pr-3">Task</th><th className="py-2 pr-3">Action</th><th className="py-2 pr-3">Status</th><th className="py-2 pr-3">Requested by</th><th className="py-2 pr-3">Created</th><th className="py-2">Technician outcome</th></tr></thead>
               <tbody>{taskHistory.map((task) => (
                 <tr key={task.uid} className="border-b border-[var(--ic-border)]/60">
                   <td className="py-2 pr-3 font-mono text-cyan-300">{task.uid}</td>
                   <td className="py-2 pr-3 text-gray-300">{task.label || task.action_id}</td>
                   <td className="py-2 pr-3"><span className="rounded bg-amber-500/10 px-2 py-1 text-amber-300">{task.status}</span></td>
                   <td className="py-2 pr-3 text-gray-400">{task.requested_by}</td>
-                  <td className="py-2 text-gray-400">{new Date(task.created_at).toLocaleString()}</td>
+                  <td className="py-2 pr-3 text-gray-400">{new Date(task.created_at).toLocaleString()}</td>
+                  <td className="py-2">
+                    {['manual', 'queued'].includes(task.status) && (
+                      <button onClick={() => void updateTaskStatus(task, 'in_progress')}
+                              className="mr-2 rounded border border-cyan-500/30 px-2 py-1 text-cyan-300 hover:bg-cyan-500/10">Acknowledge</button>
+                    )}
+                    {['manual', 'queued', 'in_progress'].includes(task.status) && (
+                      <>
+                        <button onClick={() => void updateTaskStatus(task, 'completed')}
+                                className="mr-2 rounded border border-emerald-500/30 px-2 py-1 text-emerald-300 hover:bg-emerald-500/10">Record success</button>
+                        <button onClick={() => void updateTaskStatus(task, 'failed')}
+                                className="rounded border border-red-500/30 px-2 py-1 text-red-300 hover:bg-red-500/10">Record failure</button>
+                      </>
+                    )}
+                  </td>
                 </tr>
               ))}</tbody>
             </table>
