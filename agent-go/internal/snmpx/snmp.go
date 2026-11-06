@@ -32,6 +32,8 @@ type DeviceFacts struct {
 	SysDescr    string          `json:"sys_descr"`
 	SysName     string          `json:"sys_name"`
 	SysObjectID string          `json:"sys_objectid"`
+	SysContact  string          `json:"sys_contact,omitempty"`
+	SysLocation string          `json:"sys_location,omitempty"`
 	UptimeTicks int64           `json:"uptime_ticks"`
 	MatchedCred string          `json:"matched_credential"`
 	Interfaces  []SNMPInterface `json:"interfaces,omitempty"`
@@ -63,6 +65,8 @@ var oids = map[string]string{
 	"sysObjectID":   "1.3.6.1.2.1.1.2.0",
 	"sysUpTime":     "1.3.6.1.2.1.1.3.0",
 	"sysName":       "1.3.6.1.2.1.1.5.0",
+	"sysContact": "1.3.6.1.2.1.1.4.0",
+	"sysLocation": "1.3.6.1.2.1.1.6.0",
 	"ifDescr":       "1.3.6.1.2.1.2.2.1.2",
 	"ifType":        "1.3.6.1.2.1.2.2.1.3",
 	"ifSpeed":       "1.3.6.1.2.1.2.2.1.5",
@@ -72,6 +76,9 @@ var oids = map[string]string{
 	"ifMtu": "1.3.6.1.2.1.2.2.1.4",
 	"ifInOctets": "1.3.6.1.2.1.2.2.1.10",
 	"ifOutOctets": "1.3.6.1.2.1.2.2.1.16",
+	"ifHighSpeed": "1.3.6.1.2.1.31.1.1.1.15",
+	"ifHCInOctets": "1.3.6.1.2.1.31.1.1.1.6",
+	"ifHCOutOctets": "1.3.6.1.2.1.31.1.1.1.10",
 	"ipAdEntAddr": "1.3.6.1.2.1.4.20.1.1",
 	"ipAdEntIfIndex": "1.3.6.1.2.1.4.20.1.2",
 	"arpIfIndex": "1.3.6.1.2.1.4.22.1.1",
@@ -176,7 +183,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 		}
 	}()
 
-	res, err := g.Get([]string{oids["sysDescr"], oids["sysObjectID"], oids["sysUpTime"], oids["sysName"]})
+	res, err := g.Get([]string{oids["sysDescr"], oids["sysObjectID"], oids["sysUpTime"], oids["sysName"], oids["sysContact"], oids["sysLocation"]})
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +195,10 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 			f.SysDescr = toString(pdu)
 		case "." + oids["sysName"]:
 			f.SysName = toString(pdu)
+		case "." + oids["sysContact"]:
+			f.SysContact = toString(pdu)
+		case "." + oids["sysLocation"]:
+			f.SysLocation = toString(pdu)
 		case "." + oids["sysObjectID"]:
 			f.SysObjectID = strings.TrimPrefix(v, ".")
 		case "." + oids["sysUpTime"]:
@@ -213,6 +224,9 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 		fillCol(g, oids["ifMtu"], idxs, f, func(s *SNMPInterface, v string) { s.MTU = v })
 		fillCol(g, oids["ifInOctets"], idxs, f, func(s *SNMPInterface, v string) { s.InOctets = v })
 		fillCol(g, oids["ifOutOctets"], idxs, f, func(s *SNMPInterface, v string) { s.OutOctets = v })
+		fillCol(g, oids["ifHighSpeed"], idxs, f, func(s *SNMPInterface, v string) { if v != "0" { if mbps, err := strconv.ParseUint(v, 10, 64); err == nil { s.Speed = fmt.Sprint(mbps * 1000000) } } })
+		fillCol(g, oids["ifHCInOctets"], idxs, f, func(s *SNMPInterface, v string) { s.InOctets = v })
+		fillCol(g, oids["ifHCOutOctets"], idxs, f, func(s *SNMPInterface, v string) { s.OutOctets = v })
 		fillCol(g, oids["ifAdminStatus"], idxs, f, func(s *SNMPInterface, v string) { if v == "1" { s.AdminState = "up" } else { s.AdminState = "down" } })
 		fillCol(g, oids["ifOperStatus"], idxs, f, func(s *SNMPInterface, v string) { if v == "1" { s.State = "up" } else { s.State = "down" } })
 	}
