@@ -45,6 +45,7 @@ config.set_main_option("sqlalchemy.url", url)
 # Metadata target: import models so Base.metadata is populated.
 try:
     import app.models  # noqa: F401,E402
+    import app.models_reporting  # noqa: F401,E402
     from app.database import Base  # noqa: E402
 
     target_metadata = Base.metadata
