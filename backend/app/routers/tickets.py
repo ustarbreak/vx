@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.database import get_db
 from app.core.security import get_current_user
+from app.core.platform_rbac import has_permission, is_platform_role
 from app.models import (
     User, Ticket, TicketEvidence, TicketAuditEntry, TicketApproval, Organization,
 )
@@ -22,11 +23,17 @@ from app.services import ticketing as tk
 router = APIRouter(prefix="/tickets", tags=["Advanced Ticketing"])
 
 
-def _scope_org(user: User, requested_org: int | None) -> int | None:
-    """Returns effective org filter. Raises if a client touches another tenant."""
+async def _scope_org(user: User, requested_org: int | None, db: AsyncSession) -> int | None:
+    """Resolve tenant scope; global platform access requires the security-ops capability."""
     if user.role == "platform_admin":
-        return requested_org  # None => all tenants
+        return requested_org
+    if is_platform_role(user.role):
+        if not await has_permission(user, "platform.security_ops.read", db, org_id=requested_org):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform security-operations permission required")
+        return requested_org
     org = user.org_id
+    if org is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Tenant scope is required")
     if requested_org is not None and requested_org != org:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
     return org
@@ -46,7 +53,10 @@ async def _get_ticket(db: AsyncSession, uid_or_id: str, user: User) -> Ticket:
     t = (await db.execute(stmt)).scalars().first()
     if not t:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ticket not found")
-    if user.role != "platform_admin" and t.org_id != user.org_id:
+    if is_platform_role(user.role):
+        if not await has_permission(user, "platform.security_ops.read", db, org_id=t.org_id):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform security-operations permission required")
+    elif t.org_id != user.org_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Cross-tenant access denied")
     return t
 
@@ -60,7 +70,7 @@ async def list_tickets(
     priority: str | None = None,
     q: str | None = None,
 ):
-    eff_org = _scope_org(current_user, org_id)
+    eff_org = await _scope_org(current_user, org_id, db)
     stmt = select(Ticket).order_by(Ticket.created_at.desc())
     if eff_org is not None:
         stmt = stmt.where(Ticket.org_id == eff_org)
@@ -83,7 +93,7 @@ async def create_ticket(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    org = _scope_org(current_user, body.org_id)
+    org = await _scope_org(current_user, body.org_id, db)
     if org is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Platform admins must specify org_id when creating a ticket")
@@ -278,7 +288,7 @@ async def decide(uid: str, approval_id: int, body: ApprovalDecision,
 @router.get("/ops/workload")
 async def team_workload(current_user: User = Depends(get_current_user),
                         db: AsyncSession = Depends(get_db)):
-    eff_org = _scope_org(current_user, None)
+    eff_org = await _scope_org(current_user, None, db)
     stmt = select(Ticket).where(Ticket.status.notin_(["resolved", "closed"]))
     if eff_org is not None:
         stmt = stmt.where(Ticket.org_id == eff_org)
