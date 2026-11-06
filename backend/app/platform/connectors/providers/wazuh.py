@@ -40,7 +40,7 @@ class WazuhProvider(ConnectorProvider):
     async def probe(self) -> Dict[str, Any]:
         svc = self._svc()
         try:
-            agents = await svc.get_agents()
+            agents = await svc.get_agents(org_id=str(self.config.get("org_id")) if self.config.get("org_id") else None)
             return {"reachable": True, "engine": "Wazuh", "agents_seen": len(agents)}
         except Exception as exc:
             return {"reachable": False, "engine": "Wazuh", "reason": type(exc).__name__}
@@ -51,13 +51,26 @@ class WazuhProvider(ConnectorProvider):
         svc = self._svc()
         out: List[Detection] = []
         try:
+            org_id = int(self.config.get("org_id") or 0)
+            if org_id <= 0:
+                return out
+            # Wazuh integrations are platform-configured; constrain tenant
+            # detections to the Wazuh agent group named with this org_id.
+            agents = await svc.get_agents(org_id=str(org_id))
+            allowed_agent_ids = {str(a.get("id")) for a in agents if a.get("id")}
+            if not allowed_agent_ids:
+                return out
             alerts = await svc.get_alerts(
                 level=int(self.config.get("alert_level", 7)),
                 hours=int(self.config.get("alert_hours", 24)),
             )
-            org_id = int(self.config.get("org_id") or 0)
-            for item in alerts[:max(0, min(int(limit), 500))]:
+            for item in alerts:
                 payload = item.get("_source", item) if isinstance(item, dict) else {}
+                agent_payload = payload.get("agent") if isinstance(payload.get("agent"), dict) else {}
+                if str(agent_payload.get("id") or payload.get("agent_id") or "") not in allowed_agent_ids:
+                    continue
+                if len(out) >= max(0, min(int(limit), 500)):
+                    break
                 agent = payload.get("agent") if isinstance(payload.get("agent"), dict) else {}
                 mitre = payload.get("mitre") if isinstance(payload.get("mitre"), dict) else {}
                 out.append(Detection(
@@ -101,7 +114,7 @@ class WazuhProvider(ConnectorProvider):
         if action == "endpoint.list":
             svc = self._svc()
             try:
-                agents = await svc.get_agents()
+                agents = await svc.get_agents(org_id=str(self.config.get("org_id")) if self.config.get("org_id") else None)
                 return ActionResult(JobState.succeeded, message="Wazuh agents retrieved",
                                     data={"agents": agents[:500], "count": len(agents)})
             except Exception as exc:
