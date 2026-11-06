@@ -36,7 +36,7 @@ func RunDiscovery(cidrs []string, creds []snmpx.Credential, debug bool) *Discove
 	hostJobs := make(chan string, 128)
 	var hostWG sync.WaitGroup
 	var resultMu sync.Mutex
-	for worker := 0; worker < 48; worker++ {
+	for worker := 0; worker < 24; worker++ {
 		hostWG.Add(1)
 		go func() {
 			defer hostWG.Done()
@@ -73,12 +73,12 @@ func RunDiscovery(cidrs []string, creds []snmpx.Credential, debug bool) *Discove
 	if len(creds) > 0 {
 		snmpJobs := make(chan string, 128)
 		var snmpWG sync.WaitGroup
-		for worker := 0; worker < 32; worker++ {
+		for worker := 0; worker < 16; worker++ {
 			snmpWG.Add(1)
 			go func() {
 				defer snmpWG.Done()
 				for ip := range snmpJobs {
-					f, err := snmpx.Probe(ip, creds, 700*time.Millisecond)
+					f, err := snmpx.Probe(ip, creds, 500*time.Millisecond)
 					if err != nil {
 						if debug { log.Printf("[discovery] snmp %s: %v", ip, err) }
 						continue
