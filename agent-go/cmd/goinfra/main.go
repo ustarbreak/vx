@@ -117,6 +117,8 @@ type agent struct {
 	cli   *transport.Client
 	col   *collectors.Collector
 	creds []snmpx.Credential
+	pendingEvents []collectors.SecurityEvent
+	eventCursor time.Time
 
 	agentIDNum int
 }
@@ -138,6 +140,8 @@ func newAgent(cfg *config.Config) (*agent, error) {
 		col: collectors.New(enr.AgentID, cfg.Debug),
 	}
 	a.agentIDNum = aid
+	_ = st.LoadJSON("pending_events.json", &a.pendingEvents)
+	_ = st.LoadJSON("event_cursor.json", &a.eventCursor)
 	return a, nil
 }
 
@@ -198,6 +202,9 @@ func (a *agent) cycle() {
 	} else {
 		log.Printf("inventory reported (%d disks, %d ifaces)", len(inv.Disks), len(inv.Network))
 	}
+
+	a.collectEvents()
+	a.flushEvents()
 
 	disc := collectors.RunDiscovery(a.cfg.ScanCIDRs, a.creds, a.cfg.Debug)
 	devs := make([]transport.DiscoveryDevice, 0, len(disc.Devices))
@@ -289,6 +296,63 @@ func (a *agent) refreshPolicy() {
 		})
 	}
 	log.Printf("policy updated: cidrs=%v snmp_creds=%d", a.cfg.ScanCIDRs, len(a.creds))
+}
+
+
+// collectEvents polls the native OS event source and durably queues events
+// before attempting network delivery. A failed upload never advances data loss.
+func (a *agent) collectEvents() {
+	since := a.eventCursor
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-10 * time.Minute)
+	}
+	events, err := collectors.CollectSystemEvents(since, 250)
+	if err != nil {
+		log.Printf("system event collection failed: %v", err)
+		return
+	}
+	seen := make(map[string]bool, len(a.pendingEvents)+len(events))
+	for _, e := range a.pendingEvents {
+		seen[e.EventID] = true
+	}
+	for _, e := range events {
+		if e.EventID == "" || seen[e.EventID] {
+			continue
+		}
+		seen[e.EventID] = true
+		a.pendingEvents = append(a.pendingEvents, e)
+		if e.Timestamp.After(a.eventCursor) {
+			a.eventCursor = e.Timestamp
+		}
+	}
+	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+		log.Printf("persist event queue failed: %v", err)
+	}
+	if err := a.st.SaveJSON("event_cursor.json", a.eventCursor); err != nil {
+		log.Printf("persist event cursor failed: %v", err)
+	}
+}
+
+// flushEvents sends bounded batches. The durable queue is only truncated
+// after the platform confirms the HTTP request.
+func (a *agent) flushEvents() {
+	for len(a.pendingEvents) > 0 {
+		n := 100
+		if len(a.pendingEvents) < n {
+			n = len(a.pendingEvents)
+		}
+		batch := append([]collectors.SecurityEvent(nil), a.pendingEvents[:n]...)
+		if err := a.cli.ReportEvents(a.agentIDNum, batch); err != nil {
+			log.Printf("event upload failed (%d queued): %v", len(a.pendingEvents), err)
+			return
+		}
+		a.pendingEvents = append([]collectors.SecurityEvent(nil), a.pendingEvents[n:]...)
+		if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+			log.Printf("persist event queue after upload failed: %v", err)
+			return
+		}
+		log.Printf("reported %d security events (%d pending)", n, len(a.pendingEvents))
+	}
 }
 
 // ---------------------------------------------------------------- install --
