@@ -24,6 +24,12 @@ same key for the same organization returns the original event and does not
 double-count it. Events are immutable; corrections should be represented by a
 separate adjustment event with a new key and a traceable source.
 
+Partner billing converts the monthly SIEM GB total to an average GB/day for the
+existing graduated SIEM rate table. Backup billing uses the highest recorded
+backup GB snapshot for the period (not the sum of snapshots). Endpoint and seat
+quantities remain additive usage facts for reporting; contractual ceilings are
+read from the organization/plan records.
+
 ## Reading usage
 
 `GET /api/usage/summary?period=YYYY-MM` returns the current tenant's recorded
