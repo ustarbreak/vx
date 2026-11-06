@@ -217,6 +217,7 @@ function AppRoutes() {
         <Route path="admin/packs" element={<PlatformRoute permission="platform.billing.manage"><PackCustomizerPage /></PlatformRoute>} />
         <Route path="admin/integrations" element={<PlatformRoute permission="platform.integrations.read"><PlatformIntegrationsPage /></PlatformRoute>} />
         <Route path="admin/services-ops" element={<PlatformRoute permission="platform.security_ops.read"><PlatformServicesOverviewPage /></PlatformRoute>} />
+        <Route path="admin/ticketing" element={<PlatformRoute permission="platform.security_ops.read"><AdvancedTicketingPage /></PlatformRoute>} />
         {/* T4.3 (additive): catalog-gated onboarding; empty state when flag off */}
         <Route path="admin/team" element={<PlatformRoute permission="platform.access.manage"><PlatformTeamPage /></PlatformRoute>} />
         <Route path="admin/billing" element={<PlatformRoute permission="platform.billing.read"><PlatformBillingPage /></PlatformRoute>} />
