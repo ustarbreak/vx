@@ -102,7 +102,7 @@ async def list_assignments(
     return [{
         "id": row.id, "user_id": row.user_id, "permission_key": row.permission_key,
         "effect": row.effect, "scope_type": row.scope_type, "scope_id": row.scope_id,
-        "granted_by": row.granted_by, "created_at": row.created_at,
+        "granted_by": row.granted_by, "created_at": row.created_at, "last_login": row.last_login,
         "expires_at": row.expires_at, "revoked_at": row.revoked_at,
     } for row in rows]
 
