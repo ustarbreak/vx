@@ -32,6 +32,7 @@ import PSAPage from './pages/PSAPage';
 import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
 import PlatformBillingPage from './pages/platform/PlatformBillingPage';
 import PlatformTicketOpsPage from './pages/platform/PlatformTicketOpsPage';
+import PlatformIntegrationOpsPage from './pages/platform/PlatformIntegrationOpsPage';
 import PlatformTeamPage from './pages/platform/PlatformTeamPage';
 import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
@@ -196,6 +197,7 @@ function AppRoutes() {
         <Route path="admin/team" element={<PlatformTeamPage />} />
         <Route path="admin/billing" element={<PlatformBillingPage />} />
         <Route path="admin/ticketing" element={<PlatformTicketOpsPage />} />
+        <Route path="admin/integration-ops" element={<PlatformIntegrationOpsPage />} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />
