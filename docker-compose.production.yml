@@ -43,10 +43,13 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set a unique random SECRET_KEY of at least 32 characters}
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      APP_ENV: production
       DEBUG: "false"
       DEMO_SEED_ENABLED: "false"
       CONNECTOR_TLS_VERIFY: "true"
       CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS to your HTTPS app origin}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?Set PLATFORM_ADMIN_EMAIL for initial production bootstrap}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?Set a unique PLATFORM_ADMIN_PASSWORD of at least 16 characters}
     depends_on:
       db:
         condition: service_healthy
