@@ -14,7 +14,7 @@ import {
   HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins, Wallet,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
-  BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
+  BellRing, Radio, PlugZap, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
   MonitorSmartphone
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
@@ -216,6 +216,7 @@ export default function Layout() {
         { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
         { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
         { to: '/admin/ticketing', icon: Ticket, label: 'Global Ticket Operations' },
+        { to: '/admin/integration-ops', icon: PlugZap, label: 'Integration Operations' },
       ],
     },
     {

@@ -1443,3 +1443,16 @@ export const platformTicketOpsApi = {
   overview: () => api.get<PlatformTicketOverview>('/tickets/ops/overview'),
   runEscalations: () => api.post<{ escalated: number }>('/tickets/ops/run-escalations'),
 };
+
+export interface PlatformIntegration {
+  id: number; name: string; service_id: string; integration_type: string;
+  license_type: string; pricing: string; status: string; api_endpoint?: string | null;
+  documentation_url?: string | null; last_sync?: string | null; notes?: string | null;
+  created_at: string; updated_at?: string | null;
+}
+export const platformIntegrationOpsApi = {
+  list: () => api.get<PlatformIntegration[]>('/integrations/'),
+  update: (id: number, data: { status?: string; api_endpoint?: string; documentation_url?: string; notes?: string }) =>
+    api.patch<PlatformIntegration>(`/integrations/${id}`, data),
+  test: (id: number) => api.post<{ success: boolean; message: string; details?: Record<string, unknown> }>(`/integrations/${id}/test`, {}),
+};
