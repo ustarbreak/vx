@@ -35,6 +35,8 @@ async def session_factory():
                             monthly_revenue=1200, plan_tier="STARTER"))
         db.add(User(id=1, email="owner@example.com", hashed_password=get_password_hash("OwnerPassword!123"),
                     name="Owner", role="platform_admin", org_id=None, status="active"))
+        db.add(User(id=2, email="platform-user@example.com", hashed_password=get_password_hash("PlatformPassword!123"),
+                    name="Platform User", role="platform_user", org_id=None, status="active"))
         await db.commit()
     yield factory
     await engine.dispose()
@@ -105,3 +107,10 @@ async def test_platform_admin_overview_billing_and_unconfigured_connector_health
         assert health.status_code == 200, health.text
         assert health.json()["database"]["status"] == "healthy"
         assert health.json()["connectors"]["status"] == "not_configured"
+
+
+@pytest.mark.asyncio
+async def test_platform_user_without_security_ops_grant_cannot_list_global_tickets(session_factory):
+    async with make_client(session_factory, user_id=2) as client:
+        response = await client.get("/api/tickets")
+        assert response.status_code == 403
