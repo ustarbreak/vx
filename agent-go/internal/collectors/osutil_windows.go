@@ -155,9 +155,10 @@ $rows | ConvertTo-Json -Depth 3 -Compress`
 	for _, row := range rows {
 		last := int64(0)
 		if t, err := time.Parse(time.RFC3339, row.LastLogon); err == nil { last = t.Unix() }
+		enabled := row.Enabled
 		out = append(out, UserInfo{
 			Username: row.Name, UID: row.SID, Home: "C:\\Users\\" + row.Name,
-			Shell: "windows", IsAdmin: row.IsAdmin, LastLogin: last,
+			Shell: "windows", IsAdmin: row.IsAdmin, Enabled: &enabled, LastLogin: last,
 		})
 	}
 	return out
