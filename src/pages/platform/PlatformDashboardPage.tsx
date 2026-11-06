@@ -4,7 +4,7 @@ import { ApiError, platformDashboardApi, PlatformDashboardOverview } from '../..
 
 const KPI = [
   { key: 'organizations', label: 'Organizations', icon: Building2 },
-  { key: 'active_tenants', label: 'Active tenants', icon: CheckCircle2 },
+  { key: 'active_tenants', label: 'Active tenants', icon: CheckCircle2 },\n  { key: 'partners', label: 'Partners / MSSPs', icon: Building2 },\n  { key: 'platform_staff', label: 'Platform team', icon: Users },
   { key: 'users', label: 'Platform & tenant users', icon: Users },
   { key: 'integrations', label: 'Configured integrations', icon: PlugZap },
   { key: 'agents', label: 'Enrolled agents', icon: Server },
@@ -101,7 +101,7 @@ export default function PlatformDashboardPage() {
           </div>
 
           <div className="grid lg:grid-cols-2 xl:grid-cols-3 gap-4">
-            <Distribution title="Tenant lifecycle" values={data.distributions.tenant_status} />
+            <Distribution title="Tenant lifecycle" values={data.distributions.tenant_status} />\n            <Distribution title="Tenant country distribution" values={data.distributions.tenant_country} />
             <Distribution title="Integration configuration status" values={data.distributions.integration_status} />
             <Distribution title="Agent reported status" values={data.distributions.agent_status} />
             <Distribution title="Ticket workload" values={data.distributions.ticket_status} />
