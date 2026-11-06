@@ -3,7 +3,9 @@
 Only the Owner (platform_admin) can inspect and mutate grants. The endpoint
 for the current user's effective access is read-only and never exposes secrets.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import hashlib
+import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -14,7 +16,7 @@ from app.core.platform_rbac import (
     PLATFORM_ROLES, ROLE_DEFAULTS, PERMISSION_CATALOG, has_permission, is_platform_role
 )
 from app.database import get_db
-from app.models import User, PlatformPermissionAssignment, AuditLog
+from app.models import User, PlatformPermissionAssignment, AuditLog, PlatformStaffInvitation
 from app.core.security import get_password_hash
 
 router = APIRouter(prefix="/platform/access", tags=["Platform Access"])
@@ -36,6 +38,23 @@ class AssignmentCreate(BaseModel):
     scope_type: str = Field(default="global", pattern="^(global|tenant|partner)$")
     scope_id: int | None = None
     expires_at: datetime | None = None
+
+
+
+class PlatformStaffInviteCreate(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    name: str = Field(min_length=1, max_length=160)
+    role: str = Field(pattern="^(platform_expert|platform_analyst|platform_user)$")
+
+
+class PlatformStaffInviteAccept(BaseModel):
+    token: str = Field(min_length=24, max_length=256)
+    password: str = Field(min_length=12, max_length=256)
+    name: str | None = Field(default=None, max_length=160)
+
+
+class PlatformStaffStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|inactive)$")
 
 @router.get("/me")
 async def effective_access(
@@ -258,3 +277,131 @@ async def update_platform_staff_role(
     await db.commit()
     await db.refresh(target)
     return {"id": target.id, "role": target.role, "auth_version": target.auth_version}
+
+
+@router.post("/invitations", status_code=201)
+async def invite_platform_staff(
+    body: PlatformStaffInviteCreate,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    email = body.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(422, "A valid email address is required")
+    existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "Email already registered")
+    pending = (await db.execute(select(PlatformStaffInvitation).where(
+        PlatformStaffInvitation.email == email,
+        PlatformStaffInvitation.accepted_at.is_(None),
+        PlatformStaffInvitation.expires_at > datetime.now(timezone.utc),
+    ))).scalars().first()
+    if pending:
+        raise HTTPException(409, "A valid invitation already exists for this email")
+    token = secrets.token_urlsafe(32)
+    invitation = PlatformStaffInvitation(
+        email=email, name=body.name.strip(), role=body.role,
+        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        invited_by=owner.id, expires_at=datetime.now(timezone.utc) + timedelta(hours=72),
+    )
+    db.add(invitation)
+    await db.flush()
+    db.add(AuditLog(actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
+        org_id=None, action="platform.staff_invited", resource="PlatformStaffInvitation",
+        resource_id=str(invitation.id), details="Invited platform staff " + email + " as " + body.role,
+        outcome="success"))
+    await db.commit()
+    await db.refresh(invitation)
+    base = __import__("os").getenv("APP_BASE_URL", "http://localhost:5173").rstrip("/")
+    return {"id": invitation.id, "email": invitation.email, "name": invitation.name,
+        "role": invitation.role, "status": "pending", "expires_at": invitation.expires_at,
+        "activation_url": base + "/#/platform-invite?token=" + token,
+        "delivery": "activation_link_created",
+        "note": "Share this single-use activation link securely. The raw token is not stored and cannot be retrieved later."}
+
+
+@router.get("/invitations")
+async def list_platform_staff_invitations(
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    rows = (await db.execute(select(PlatformStaffInvitation).order_by(
+        PlatformStaffInvitation.created_at.desc()))).scalars().all()
+    now = datetime.now(timezone.utc)
+    return [{"id": row.id, "email": row.email, "name": row.name, "role": row.role,
+        "status": "accepted" if row.accepted_at else ("expired" if row.expires_at <= now else "pending"),
+        "created_at": row.created_at, "expires_at": row.expires_at, "accepted_at": row.accepted_at}
+        for row in rows]
+
+
+@router.delete("/invitations/{invitation_id}", status_code=204)
+async def revoke_platform_staff_invitation(
+    invitation_id: int,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    row = await db.get(PlatformStaffInvitation, invitation_id)
+    if not row or row.accepted_at is not None:
+        raise HTTPException(404, "Pending platform invitation not found")
+    db.add(AuditLog(actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
+        org_id=None, action="platform.staff_invitation.revoked", resource="PlatformStaffInvitation",
+        resource_id=str(row.id), details="Revoked invitation for " + row.email, outcome="success"))
+    await db.delete(row)
+    await db.commit()
+
+
+@router.post("/invitations/accept", status_code=201)
+async def accept_platform_staff_invitation(
+    body: PlatformStaffInviteAccept,
+    db: AsyncSession = Depends(get_db),
+):
+    digest = hashlib.sha256(body.token.encode("utf-8")).hexdigest()
+    row = (await db.execute(select(PlatformStaffInvitation).where(
+        PlatformStaffInvitation.token_hash == digest,
+        PlatformStaffInvitation.accepted_at.is_(None),
+    ))).scalars().first()
+    if not row:
+        raise HTTPException(404, "Invalid or already-used platform invitation")
+    expiry = row.expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    if expiry <= datetime.now(timezone.utc):
+        raise HTTPException(410, "Platform invitation has expired")
+    existing = (await db.execute(select(User).where(User.email == row.email))).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "Email already registered; ask the Owner to revoke this invitation")
+    staff = User(email=row.email, name=(body.name or row.name).strip(),
+        hashed_password=get_password_hash(body.password), role=row.role,
+        org_id=None, status="active", auth_version=0)
+    db.add(staff)
+    row.accepted_at = datetime.now(timezone.utc)
+    await db.flush()
+    db.add(AuditLog(actor_id=staff.id, actor_name=staff.email, actor_role=staff.role,
+        org_id=None, action="platform.staff_invitation.accepted", resource="User",
+        resource_id=str(staff.id), details="Accepted platform staff invitation",
+        outcome="success"))
+    await db.commit()
+    return {"ok": True, "email": staff.email, "name": staff.name, "role": staff.role}
+
+
+@router.patch("/users/{user_id}/status")
+async def update_platform_staff_status(
+    user_id: int,
+    body: PlatformStaffStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    target = await db.get(User, user_id)
+    if not target or target.role not in PLATFORM_ROLES - {"platform_admin"}:
+        raise HTTPException(404, "Platform staff account not found")
+    if target.id == owner.id:
+        raise HTTPException(403, "Owner cannot deactivate their own account")
+    before = target.status
+    target.status = body.status
+    target.auth_version = int(target.auth_version or 0) + 1
+    db.add(AuditLog(actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
+        org_id=None, action="platform.staff_status.updated", resource="User",
+        resource_id=str(target.id), details="status: " + str(before) + " -> " + body.status,
+        outcome="success"))
+    await db.commit()
+    return {"id": target.id, "status": target.status, "auth_version": target.auth_version}
