@@ -23,7 +23,7 @@ import uuid
 
 from app.database import get_db
 from app.models import (Organization, User, Ticket, AuditLog, Entitlement,
-                        DiscoveredDevice, MonitoringRule, TenantServiceGrant)
+                        DiscoveredDevice, MonitoringRule, TenantServiceGrant, AgentProbe, AgentToken)
 from app.schemas import (TenantSummaryOut, ClientTicketIn, RuleCreateIn,
                          RuleUpdateIn, RuleOut, GrantIn, GrantOut)
 from app.core.platform_rbac import require_scoped_permission, require_permission
@@ -248,3 +248,96 @@ async def platform_audit_log(
     return [{"id": a.id, "actor": a.actor_name, "role": a.actor_role,
              "action": a.action, "detail": a.details,
              "date": a.timestamp.isoformat() if a.timestamp else None} for a in rows]
+
+
+@router.get("/tenants/{org_id}/devices")
+async def tenant_devices(
+    org_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
+):
+    """Persisted tenant inventory with probe evidence; never infer online state."""
+    await _get_org(db, org_id)
+    devices = (await db.execute(
+        select(DiscoveredDevice).where(DiscoveredDevice.org_id == org_id)
+        .order_by(DiscoveredDevice.created_at.desc()).limit(1000)
+    )).scalars().all()
+    probes = (await db.execute(
+        select(AgentProbe).where(AgentProbe.org_id == org_id)
+    )).scalars().all()
+    result = []
+    for device in devices:
+        probe = next((p for p in probes if (
+            (device.ip and p.ip == device.ip) or
+            (device.hostname and p.hostname and p.hostname.lower() == device.hostname.lower())
+        )), None)
+        result.append({
+            "id": device.id, "hostname": device.hostname, "ip": device.ip,
+            "mac": device.mac, "os": device.os_guess, "device_type": device.device_type,
+            "is_probe": bool(device.is_probe), "imported": bool(device.imported),
+            "monitoring_status": probe.status if probe else "not_monitored",
+            "last_seen": probe.last_seen.isoformat() if probe and probe.last_seen else None,
+            "probe_id": probe.id if probe else None,
+        })
+    return result
+
+
+@router.get("/tenants/{org_id}/members")
+async def tenant_members(
+    org_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
+):
+    """Tenant directory metadata only; password hashes and secrets are never serialized."""
+    await _get_org(db, org_id)
+    rows = (await db.execute(
+        select(User).where(User.org_id == org_id).order_by(User.name).limit(500)
+    )).scalars().all()
+    return [{
+        "id": row.id, "name": row.name, "email": row.email, "role": row.role,
+        "status": row.status, "mfa_enabled": bool(row.mfa_enabled),
+        "last_login": row.last_login.isoformat() if row.last_login else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows]
+
+
+@router.get("/tenants/{org_id}/api-keys")
+async def tenant_api_keys(
+    org_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
+):
+    """Show safe agent-token metadata only. Token hashes and bearer values are never returned."""
+    await _get_org(db, org_id)
+    rows = (await db.execute(
+        select(AgentToken).where(AgentToken.org_id == org_id)
+        .order_by(AgentToken.created_at.desc()).limit(500)
+    )).scalars().all()
+    return [{
+        "id": row.id, "name": row.name, "prefix": row.prefix,
+        "created_by": row.created_by,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "status": "revoked" if row.revoked_at else "active",
+    } for row in rows]
+
+
+@router.get("/tenants/{org_id}/activity")
+async def tenant_activity(
+    org_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_scoped_permission("platform.tenants.read")),
+):
+    """Tenant-scoped audit trail, newest first."""
+    await _get_org(db, org_id)
+    rows = (await db.execute(
+        select(AuditLog).where(AuditLog.org_id == org_id)
+        .order_by(AuditLog.timestamp.desc()).limit(100)
+    )).scalars().all()
+    return [{
+        "id": row.id, "actor": row.actor_name, "actor_role": row.actor_role,
+        "action": row.action, "resource": row.resource, "resource_id": row.resource_id,
+        "details": row.details, "outcome": row.outcome,
+        "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+    } for row in rows]
