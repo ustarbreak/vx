@@ -140,6 +140,7 @@ type UserInfo struct {
 	Shell     string `json:"shell"`
 	Home      string `json:"home"`
 	IsAdmin   bool   `json:"is_admin"`
+	Enabled   *bool  `json:"enabled,omitempty"`
 	LastLogin int64  `json:"last_login,omitempty"`
 }
 
