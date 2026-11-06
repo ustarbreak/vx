@@ -14,7 +14,7 @@ import {
   HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins, Wallet,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
-  BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
+  BellRing, Radio, PlugZap, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
   MonitorSmartphone
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
