@@ -356,6 +356,8 @@ class ReportingScheduler:
         self._task = None
 
     async def start(self):
+        if self._task is not None and not self._task.done():
+            return
         try:
             async with AsyncSessionLocal() as db:
                 await job_h_ingest(db)
