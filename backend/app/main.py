@@ -87,7 +87,9 @@ async def _evidence_retention_loop():
 async def lifespan(app: FastAPI):
     # Startup: create schema, guarantee a platform admin exists, seed demo
     # tenants when DEMO_SEED_ENABLED=true (test phase), start workers
-    await init_db()
+    # Production schema changes are applied explicitly by Alembic before Uvicorn.
+    if str(settings.APP_ENV).lower() != "production":
+        await init_db()
     async with AsyncSessionLocal() as db:
         await ensure_platform_admin(db)
         # Idempotently convert legacy plaintext integration credentials.

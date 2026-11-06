@@ -172,7 +172,7 @@ async def test_integration(
         elif integration.name == "Elastic Security":
             service = ElasticService(
                 url=integration.api_endpoint,
-                api_key=integration.api_key
+                api_key=decrypt_secret(integration.api_key)
             )
             logs = await service.search_logs("error", size=10)
             await service.close()
