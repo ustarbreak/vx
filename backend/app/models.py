@@ -1231,10 +1231,11 @@ class SecurityOpsTask(Base):
     syslog/SNMP/OID extraction, scan run, playbook arming, backup job…).
 
     Honesty rules mirror DeviceAction: the platform never pretends a command
-    ran. `queued` means a real collector/agent can pick it up on its next
-    poll; `manual` means no channel exists for this tenant yet and a human
-    technician must execute it with their own tooling; `failed` means nothing
-    happened. Every dispatch is also written to the audit trail.
+    ran. `queued` means a real collector/agent can pick it up on its next poll;
+    `manual` means no automated channel exists and a human technician must
+    execute it with vendor tooling. `in_progress`, `completed`, and `failed`
+    are technician-reported outcomes, not proof of automated device execution.
+    Every dispatch and transition is written to the audit trail.
     """
     __tablename__ = "security_ops_tasks"
 
@@ -1245,7 +1246,7 @@ class SecurityOpsTask(Base):
     action_id = Column(String(128), nullable=False)                        # ep-isolate, fw-push-config, ...
     label = Column(String, default="")                                     # human-readable button label
     vendor = Column(String(64), nullable=True)                             # fortinet | cisco | paloalto | ...
-    status = Column(String, default="queued", index=True)                  # queued|manual|failed
+    status = Column(String, default="queued", index=True)                  # queued|manual|in_progress|completed|failed
     reason = Column(Text, default="")                                      # honest explanation (no-agent…)
     params = Column(JSON, default=dict)                                    # redacted parameters from the UI
     requested_by = Column(String, nullable=False)
