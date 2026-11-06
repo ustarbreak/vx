@@ -269,6 +269,11 @@ export const entitlementsApi = {
     api.get<BackendEntitlement[]>(`/entitlements/${orgId ? `?org_id=${orgId}` : ''}`),
   check: (serviceId: string) =>
     api.get<{ entitled: boolean; service_id: string }>(`/entitlements/check/${serviceId}`),
+  create: (data: { org_id: number; service_id: string; enabled: boolean; seat_count?: number; notes?: string | null }) =>
+    api.post<BackendEntitlement>('/entitlements/', data),
+  update: (id: number, data: { enabled?: boolean; seat_count?: number; notes?: string | null }) =>
+    api.patch<BackendEntitlement>(`/entitlements/${id}`, data),
+  remove: (id: number) => api.del<void>(`/entitlements/${id}`),
   /** Backend-computed dependency graph (nodes = persisted entitlement rows). */
   graph: (orgId?: number) =>
     api.get<ServiceGraph>(`/entitlements/graph${orgId ? `?org_id=${orgId}` : ''}`),
