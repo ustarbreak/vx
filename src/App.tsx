@@ -125,7 +125,7 @@ function DemoAutoEnter() {
 // Redirect helper that picks the right landing page for the current role.
 function FullAccessRedirect() {
   const { user } = useAuth();
-  const to = user?.role === 'platform_admin' ? '/admin/dashboard'
+  const to = user?.role?.startsWith('platform_') ? '/admin/dashboard'
     : user?.role === 'client_user' ? '/dashboard'
     : '/client-admin/dashboard';
   return <Navigate to={to} replace />;
