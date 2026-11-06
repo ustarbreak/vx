@@ -140,8 +140,8 @@ func newAgent(cfg *config.Config) (*agent, error) {
 		col: collectors.New(enr.AgentID, cfg.Debug),
 	}
 	a.agentIDNum = aid
-	_ = st.LoadJSON("pending_events.json", &a.pendingEvents)
-	_ = st.LoadJSON("event_cursor.json", &a.eventCursor)
+	_, _ = st.LoadJSON("pending_events.json", &a.pendingEvents)
+	_, _ = st.LoadJSON("event_cursor.json", &a.eventCursor)
 	return a, nil
 }
 
