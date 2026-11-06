@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
 from app.models import (
     User, Organization, NotificationRule, Entitlement,
     Alert, Ticket, DiscoveryScan, DiscoveredDevice,
@@ -258,10 +258,14 @@ async def ensure_platform_admin(db: AsyncSession) -> None:
     existing = (await db.execute(
         select(User).where(User.role == "platform_admin").limit(1)
     )).scalars().first()
-    if existing:
-        return
-
     production = os.getenv("APP_ENV", "development").strip().lower() == "production"
+    if existing:
+        if production and verify_password("Admin#2026", existing.hashed_password):
+            raise RuntimeError(
+                "Production bootstrap blocked: the existing platform administrator "
+                "still uses the documented default password. Rotate it before deployment."
+            )
+        return
     configured_email = os.getenv("PLATFORM_ADMIN_EMAIL", "").strip()
     configured_password = os.getenv("PLATFORM_ADMIN_PASSWORD", "")
 

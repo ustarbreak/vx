@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from app.models import User
+from app.core.security import get_password_hash
 from app.services.seed import ensure_platform_admin
 
 
@@ -112,3 +113,18 @@ def test_production_settings_accept_explicit_secure_configuration():
         CONNECTOR_TLS_VERIFY=True,
     )
     assert settings.APP_ENV == "production"
+
+
+@pytest.mark.asyncio
+async def test_production_bootstrap_rejects_existing_default_admin(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    existing = User(
+        email="admin@infracentra.io",
+        name="Platform Administrator",
+        role="platform_admin",
+        hashed_password=get_password_hash("Admin#2026"),
+        status="active",
+        mfa_enabled=False,
+    )
+    with pytest.raises(RuntimeError, match="still uses the documented default password"):
+        await ensure_platform_admin(_Session(existing=existing))
