@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useParams, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import Layout from './components/Layout';
@@ -186,6 +186,9 @@ function AppRoutes() {
         <Route path="network" element={<NetworkPage />} />
         <Route path="psa" element={<PSAPage />} />
 
+        {/* Platform administration routes require the Owner identity in the UI;
+            every mutation/read remains independently enforced by FastAPI RBAC. */}
+        <Route element={<PlatformOwnerRoute><Outlet /></PlatformOwnerRoute>}>
         {/* Platform admin views */}
         <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
         <Route path="admin/team" element={<PlatformOwnerRoute><PlatformTeamPage /></PlatformOwnerRoute>} />
@@ -200,6 +203,7 @@ function AppRoutes() {
         <Route path="admin/services-ops" element={<PlatformServicesOverviewPage />} />
         {/* T4.3 (additive): catalog-gated onboarding; empty state when flag off */}
         <Route path="admin/onboarding" element={<PlatformOnboardingPage />} />
+        </Route>
 
         {/* Project Manager — same page, role-scoped (platform vs client) */}
         <Route path="projects" element={<ProjectsPage />} />
