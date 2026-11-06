@@ -315,11 +315,25 @@ async def _run_step(db: AsyncSession, run: PlaybookRun, step: dict, user: User,
             return "failed", "snmp_query requires a discovery credential context; use the Discovery service directly"
         if action == "snapshot":
             return "failed", "No snapshot provider is configured — no snapshot was created"
-        if action in ("block_ip", "isolate_host"):
-            # No firewall/EDR connector is wired in this deployment. Being
-            # honest: the action did NOT execute.
-            return "failed", ("No firewall/EDR connector configured — action was NOT executed "
-                              "(recorded honestly as failure, not success)")
+        if action == "isolate_host":
+            agent_id = str(params.get("agent_id") or "").strip()
+            if not agent_id:
+                return "failed", "isolate_host requires a Wazuh agent_id; hostname-only targeting is not accepted"
+            from app.services.connectors import load_connector_config
+            from app.platform.connectors import providers as _providers  # noqa: F401
+            from app.platform.connectors.base import get_provider
+            config = await load_connector_config("endpoint-protection", db)
+            config["org_id"] = int(run.org_id or user.org_id or 0)
+            provider = get_provider("wazuh", config)
+            if provider is None:
+                return "failed", "Wazuh provider is not registered; no endpoint action was sent"
+            result = await provider.execute("endpoint.isolate", {"agent_id": agent_id}, dry_run=False)
+            if result.state.value == "succeeded":
+                return "completed", result.message
+            return "failed", result.message or "Wazuh did not confirm host isolation; no success recorded"
+        if action == "block_ip":
+            return "failed", ("No firewall provider is configured for this tenant. "
+                              "The block_ip action was NOT executed.")
     except Exception as e:  # noqa: BLE001 — engine errors become failed steps, never fake successes
         return "failed", f"Engine error: {str(e)[:200]}"
     return "failed", f"Unknown action '{action}'"

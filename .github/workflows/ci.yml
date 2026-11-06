@@ -43,7 +43,7 @@ jobs:
         # gen_catalog.py writes platform/catalog YAMLs from live code sources;
         # any uncommitted diff means seed/connectors/catalog drifted.
         run: |
-          python backend/tools/gen_catalog.py --out backend/app/platform/catalog
+          python backend/tools/gen_catalog.py --out backend/app/platform/catalog/services
           git add -A backend/app/platform/catalog
           # NOTE: `-q` belongs to git-diff, not to the shell; combining it with
           # --exit-code here previously produced exit 129 (usage error) on CI.

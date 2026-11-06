@@ -58,7 +58,15 @@ NATIVE_ACTIONS: dict[str, list[dict]] = {
     "soar": [
         {"name": "playbook.run", "method": "POST", "dangerous": True, "status": "ga"},
     ],
+    "endpoint-protection": [
+        {"name": "endpoint.list", "method": "GET", "dangerous": False, "status": "ga"},
+        {"name": "detection.fetch", "method": "GET", "dangerous": False, "status": "ga"},
+        {"name": "endpoint.isolate", "method": "POST", "dangerous": True, "status": "beta"},
+    ],
 }
+
+# Services delegated to a validated external connector.
+PROVIDER_OVERRIDES = {"endpoint-protection": "hybrid"}
 
 
 def main(argv=None) -> int:
@@ -88,7 +96,7 @@ def main(argv=None) -> int:
             "id": sid,
             "name": sid.replace("-", " ").title(),
             "status": DEFAULT_STATUS.get(sid, "ga"),
-            "provider": "native",              # nothing switches by default (plan §deviations)
+            "provider": PROVIDER_OVERRIDES.get(sid, "native"),  # explicit provider-backed services only
             "engine": meta.get("engine", ""),
             "docs_url": meta.get("docs", ""),
             "endpoints": meta.get("endpoints", {}),

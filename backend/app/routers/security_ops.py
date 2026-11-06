@@ -291,3 +291,63 @@ async def list_tasks(
     query = query.order_by(desc(SecurityOpsTask.id)).limit(limit)
     rows = (await db.execute(query)).scalars().all()
     return list(rows)
+
+
+class TaskStatusUpdate(BaseModel):
+    status: str
+    outcome: str = ""
+
+
+@router.patch("/tasks/{task_uid}/status")
+async def update_task_status(
+    task_uid: str,
+    body: TaskStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Advance a persisted operator task with an auditable human outcome.
+
+    This endpoint records technician acknowledgement only. It never sends a
+    command to an endpoint or vendor system.
+    """
+    allowed = {"in_progress", "completed", "failed"}
+    if body.status not in allowed:
+        raise HTTPException(422, "status must be in_progress, completed, or failed")
+    if current_user.role not in {"client_admin", "platform_admin"}:
+        raise HTTPException(403, "Client administrator access required")
+    task = (await db.execute(
+        select(SecurityOpsTask).where(SecurityOpsTask.uid == task_uid)
+    )).scalars().first()
+    if task is None:
+        raise HTTPException(404, "Security Ops task not found")
+    if current_user.role != "platform_admin" and task.org_id != current_user.org_id:
+        raise HTTPException(404, "Security Ops task not found")
+    if task.status not in {"manual", "queued", "in_progress"}:
+        raise HTTPException(409, f"Task is already terminal ({task.status})")
+    if body.status == "in_progress" and task.status == "in_progress":
+        raise HTTPException(409, "Task is already in progress")
+    note = (body.outcome or "").strip()[:1000]
+    if body.status in {"completed", "failed"} and not note:
+        raise HTTPException(422, "An execution outcome note is required for completed/failed tasks")
+    previous = task.status
+    task.status = body.status
+    task.reason = note or ("Technician acknowledged the task; execution outcome is pending.")
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        actor_name=current_user.email,
+        actor_role=current_user.role,
+        org_id=task.org_id,
+        action=f"security_ops.task_{body.status}",
+        resource="security_ops_task",
+        resource_id=task.uid,
+        details=f"status={previous}->{body.status}; outcome={note or 'acknowledged'}",
+        outcome="success" if body.status != "failed" else "failure",
+    ))
+    await db.commit()
+    await db.refresh(task)
+    return {
+        "uid": task.uid,
+        "status": task.status,
+        "reason": task.reason,
+        "updated_by": current_user.email,
+    }

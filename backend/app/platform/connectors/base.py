@@ -105,10 +105,42 @@ def load_manifests(providers_pkg: str = "app.platform.connectors.providers") -> 
     return out
 
 
+# Canonical service ids may have both a generated legacy adapter and a
+# vendor-native provider. Keep the explicitly selected primary connector here
+# so service-level jobs and SOAR actions resolve to the same real integration.
+PREFERRED_PROVIDER_BY_SERVICE = {
+    "endpoint-protection": "wazuh",
+}
+
+
 def get_provider(connector_id: str, config: Dict[str, Any]) -> Optional[ConnectorProvider]:
-    """Instantiate a registered provider by connector id (module.class lookup)."""
+    """Resolve an explicit connector id or the preferred provider for a service."""
+    providers = []
     for cls in _REGISTRY.values():
-        m = getattr(cls, "manifest", None)
-        if m and m.id == connector_id:
+        manifest = getattr(cls, "manifest", None)
+        if manifest:
+            providers.append((cls, manifest))
+
+    # An explicit vendor connector id always wins.
+    for cls, manifest in providers:
+        if manifest.id == connector_id and manifest.id != manifest.service_id:
             return cls(config)
+
+    # A service id resolves through its configured primary provider.
+    preferred_id = PREFERRED_PROVIDER_BY_SERVICE.get(connector_id)
+    if preferred_id:
+        for cls, manifest in providers:
+            if manifest.id == preferred_id and manifest.service_id == connector_id:
+                return cls(config)
+
+    # Backward-compatible exact id for providers whose id is not a service id.
+    for cls, manifest in providers:
+        if manifest.id == connector_id:
+            return cls(config)
+
+    candidates = [cls for cls, manifest in providers if manifest.service_id == connector_id]
+    if len(candidates) == 1:
+        return candidates[0](config)
+    if len(candidates) > 1:
+        logger.error("ambiguous providers for service %s; configure a preferred provider", connector_id)
     return None
