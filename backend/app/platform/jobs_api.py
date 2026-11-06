@@ -47,30 +47,32 @@ async def _run(job_id: str, service: str, action: str, params: Dict[str, Any],
     if params.get("dry_run", True):
         await jobs.update(job_id, JobState.dry_run,
                           message="Dry-run completed; provider execution was not invoked.",
-                          data={"dry_run": True})
+                          data={"dry_run": True, "executed": False})
         return
     try:
-        provider = get_provider(service, {})
-        if provider is None:
-            await jobs.update(job_id, JobState.unsupported,
-                              message=f"no deployed provider registered for {service!r}")
-            return
-        run_params = dict(params)
         from app.database import AsyncSessionLocal
+        from app.services.connectors import load_connector_config
         async with AsyncSessionLocal() as db:
             user = await db.get(User, user_dict["id"]) if user_dict.get("id") else None
             if user is None:
                 await jobs.update(job_id, JobState.failed, message="job user vanished")
                 return
+            config = await load_connector_config(service, db)
+            config["org_id"] = int(getattr(user, "org_id", 0) or 0)
+            provider = get_provider(service, config)
+            if provider is None:
+                await jobs.update(job_id, JobState.unsupported,
+                                  message=f"no deployed provider registered for service {service!r}")
+                return
+            run_params = dict(params)
             run_params["__user__"] = user
             run_params["__db__"] = db
-            result = await provider.execute(action, run_params)
+            result = await provider.execute(action, run_params, dry_run=False)
             await jobs.update(job_id, result.state,
                               message=result.message, data=result.data)
     except Exception as exc:  # noqa: BLE001 - report honestly, never fake success
         logger.warning("job %s failed: %s", job_id, exc)
-        await jobs.update(job_id, JobState.failed, message=str(exc)[:500])
-
+        await jobs.update(job_id, JobState.failed, message=f"{type(exc).__name__}: {str(exc)[:400]}")
 
 @router.post("/jobs", status_code=202)
 async def create_job(body: JobIn, request: Request,
