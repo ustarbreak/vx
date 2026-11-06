@@ -207,6 +207,7 @@ export default function Layout() {
     {
       group: true, icon: LayoutDashboard, label: 'Overview', items: [
         { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+        { to: '/admin/team', icon: UserCog, label: 'Platform Team & Access' },
       ],
     },
     {
