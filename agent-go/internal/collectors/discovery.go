@@ -68,21 +68,13 @@ func RunDiscovery(cidrs []string, creds []snmpx.Credential, debug bool) *Discove
 	}
 	wg.Wait()
 
-	// SNMP second pass on hosts that answered on 161
+	// SNMP uses UDP/161, not TCP/161. Probe each live host independently
+	// of the TCP port sweep; otherwise normal SNMP-only network equipment is
+	// silently missed because TCP/161 is usually closed.
 	if len(creds) > 0 {
 		for i := range res.Devices {
 			d := &res.Devices[i]
-			hasSNMP := false
-			for _, p := range d.OpenPorts {
-				if p.Port == 161 {
-					hasSNMP = true
-					break
-				}
-			}
-			if !hasSNMP {
-				continue
-			}
-			f, err := snmpx.Probe(d.IP, creds, 2*time.Second)
+			f, err := snmpx.Probe(d.IP, creds, 1200*time.Millisecond)
 			if err != nil {
 				if debug {
 					log.Printf("[discovery] snmp %s: %v", d.IP, err)
