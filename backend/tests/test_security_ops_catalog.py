@@ -154,3 +154,57 @@ async def test_live_dispatch_explicitly_says_no_device_command_was_sent(session_
     assert "No device command was sent" in payload["message"]
     assert "technician execution is required" in payload["message"]
     assert "status=manual" in payload["output"]
+
+
+@pytest.mark.asyncio
+async def test_manual_task_lifecycle_requires_outcome_and_is_tenant_scoped(session_factory):
+    await seed(session_factory)
+    async with client_for(session_factory, 1) as client:
+        created = await client.post("/api/security-ops/actions", json={
+            "service": "email-security", "action_id": "em-header-analysis",
+        })
+        assert created.status_code == 200
+        uid = created.json()["task"]["uid"]
+
+        missing_outcome = await client.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "completed", "outcome": "",
+        })
+        assert missing_outcome.status_code == 422
+
+        acknowledged = await client.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "in_progress",
+        })
+        assert acknowledged.status_code == 200
+        assert acknowledged.json()["status"] == "in_progress"
+
+        completed = await client.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "completed", "outcome": "Verified in vendor console; change applied.",
+        })
+        assert completed.status_code == 200
+        assert completed.json()["status"] == "completed"
+
+        terminal = await client.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "failed", "outcome": "conflicting terminal transition",
+        })
+        assert terminal.status_code == 409
+
+    async with client_for(session_factory, 2) as other:
+        foreign = await other.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "failed", "outcome": "cross-tenant attempt",
+        })
+        assert foreign.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_task_status_update_requires_client_admin(session_factory):
+    await seed(session_factory)
+    async with client_for(session_factory, 1) as admin:
+        created = await admin.post("/api/security-ops/actions", json={
+            "service": "email-security", "action_id": "em-header-analysis",
+        })
+        uid = created.json()["task"]["uid"]
+    async with client_for(session_factory, 3) as analyst:
+        response = await analyst.patch(f"/api/security-ops/tasks/{uid}/status", json={
+            "status": "in_progress",
+        })
+    assert response.status_code == 403
