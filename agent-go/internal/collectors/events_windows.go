@@ -18,7 +18,7 @@ func CollectSystemEvents(since time.Time, limit int) ([]SecurityEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 250
 	}
-	script := `$since = [DateTime]::Parse($args[0]).ToLocalTime()
+	script := `$since = [DateTime]::Parse("__SINCE__").ToLocalTime()
 $logs = @('System','Application','Security')
 $rows = @()
 foreach ($log in $logs) {
@@ -36,7 +36,7 @@ foreach ($log in $logs) {
 }
 $rows | Sort-Object TimeCreated | Select-Object -Last 500 | ConvertTo-Json -Depth 4 -Compress`
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-		"-Command", script, since.UTC().Format(time.RFC3339))
+		"-Command", strings.ReplaceAll(script, "__SINCE__", since.UTC().Format(time.RFC3339)))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
