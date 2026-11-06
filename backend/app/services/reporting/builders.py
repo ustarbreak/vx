@@ -542,7 +542,7 @@ async def build_tickets(tenant: str, period: str) -> list:
                     "= horodatages r\u00eels", "2"]]],
             ["B", "R\u00e9partition par priorit\u00e9",
              [[p.upper(), round(100 * n / len(tk)), pri_cols.get(p, "o")]
-              for p, n in sorted(pris.items())]]]
+              for p, n in sorted(pris.items())]]]]]
         p2 = ["R\u00e9partition", "Cat\u00e9gories et file active.", [
             ["D", "Par cat\u00e9gorie", [[k, v, c] for (k, v), c in
               zip(sorted(cats.items(), key=lambda x: -x[1]), ["1", "2", "3", "w", "b", "o"])]],
