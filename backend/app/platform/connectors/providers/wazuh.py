@@ -1,9 +1,9 @@
-"""Wazuh provider (T2.3): thin wrapper over app/services/wazuh.py WazuhService.
+"""Wazuh provider: verified read operations and fail-closed response actions.
 
-No behavior changes to the underlying service. Note: WazuhService.isolate_agent
-currently sends an agent *restart* with an isolate flag — real host isolation
-needs Wazuh Active Response enabled on the manager, so until that is verified
-the action reports honest partial semantics in its message (ALIGNMENT §E).
+The previous isolate_agent helper uses the Wazuh agent restart endpoint with
+an unsupported "isolate" flag. That does not isolate network traffic. Until a
+custom Wazuh Active Response command is configured and end-to-end verified,
+live endpoint.isolate must not send a restart or report containment success.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, List
 from app.services.wazuh import WazuhService
 
 from ..base import ConnectorProvider, Manifest, register
-from ..models import ActionSpec, ActionResult, Detection, JobState, Severity
+from ..models import ActionResult, Detection, JobState, Severity
 
 
 @register
@@ -24,25 +24,26 @@ class WazuhProvider(ConnectorProvider):
             {"name": "endpoint.list", "dangerous": False},
             {"name": "detection.fetch", "dangerous": False},
             {"name": "endpoint.isolate", "dangerous": True,
-             "description": "Requires Wazuh Active Response on the manager; "
-                            "current impl restarts agent with isolate flag (partial)."},
+             "description": "Fail-closed until a verified custom Wazuh Active Response isolation command is configured."},
             {"name": "vulnerability.fetch", "dangerous": False},
         ],
     )
 
     def _svc(self) -> WazuhService:
         cfg = self.config
-        return WazuhService(cfg.get("api_endpoint", ""),
-                            cfg.get("username") or cfg.get("api_user") or "wazuh",
-                            cfg.get("password") or cfg.get("api_key") or "")
+        return WazuhService(
+            cfg.get("api_endpoint", ""),
+            cfg.get("username") or cfg.get("api_user") or "wazuh",
+            cfg.get("password") or cfg.get("api_key") or "",
+        )
 
     async def probe(self) -> Dict[str, Any]:
         svc = self._svc()
         try:
             agents = await svc.get_agents()
             return {"reachable": True, "engine": "Wazuh", "agents_seen": len(agents)}
-        except Exception as e:  # graceful degradation, same rule as legacy
-            return {"reachable": False, "engine": "Wazuh", "reason": type(e).__name__}
+        except Exception as exc:
+            return {"reachable": False, "engine": "Wazuh", "reason": type(exc).__name__}
         finally:
             await svc.close()
 
@@ -50,22 +51,30 @@ class WazuhProvider(ConnectorProvider):
         svc = self._svc()
         out: List[Detection] = []
         try:
-            alerts = await svc.get_alerts(level=int(self.config.get("alert_level", 7)), hours=int(self.config.get("alert_hours", 24)))
+            alerts = await svc.get_alerts(
+                level=int(self.config.get("alert_level", 7)),
+                hours=int(self.config.get("alert_hours", 24)),
+            )
             org_id = int(self.config.get("org_id") or 0)
-            for a in alerts if isinstance(alerts, list) else []:
-                payload = a.get("_source", a) if isinstance(a, dict) else {}
-                sev = str(payload.get("severity", payload.get("level", "medium")))
+            for item in alerts[:max(0, min(int(limit), 500))]:
+                payload = item.get("_source", item) if isinstance(item, dict) else {}
+                agent = payload.get("agent") if isinstance(payload.get("agent"), dict) else {}
+                mitre = payload.get("mitre") if isinstance(payload.get("mitre"), dict) else {}
                 out.append(Detection(
-                    id=str(payload.get("id", len(out))), org_id=org_id,
-                    service_id="endpoint-protection", source="Wazuh",
+                    id=str(payload.get("id", len(out))),
+                    org_id=org_id,
+                    service_id="endpoint-protection",
+                    source="Wazuh",
                     title=str(payload.get("description", ""))[:200],
-                    severity=Severity.parse(sev),
-                    hostname=payload.get("agent", {}).get("name") if isinstance(payload.get("agent"), dict) else payload.get("hostname"),
-                    mitre_techniques=list((payload.get("mitre") or {}).values())[:8] if isinstance(payload.get("mitre"), dict) else [],
-                    raw=payload, timestamp=str(payload.get("timestamp", "")) or None,
+                    severity=Severity.parse(str(payload.get("severity", payload.get("level", "medium")))),
+                    hostname=agent.get("name") or payload.get("hostname"),
+                    mitre_techniques=list(mitre.get("id", [])) if isinstance(mitre.get("id"), list) else [],
+                    raw=payload,
+                    timestamp=str(payload.get("timestamp", "")) or None,
                 ))
         except Exception:
-            pass  # unreachable manager -> empty, never crash (legacy rule)
+            # An unavailable manager is represented as no live detections.
+            return out
         finally:
             await svc.close()
         return out
@@ -74,18 +83,33 @@ class WazuhProvider(ConnectorProvider):
                       dry_run: bool = False) -> ActionResult:
         if action == "endpoint.isolate":
             if dry_run:
-                return ActionResult(JobState.succeeded, message="dry-run: would restart+flag isolate", data={})
-            agent_id = params.get("agent_id")
-            if not agent_id:
-                return ActionResult(JobState.failed, message="agent_id required")
+                return ActionResult(
+                    JobState.dry_run,
+                    message="dry-run: Wazuh host isolation would be requested; no device request was sent",
+                    data={"dry_run": True, "provider": "wazuh", "executed": False},
+                )
+            # Do not call WazuhService.isolate_agent: it invokes agent restart,
+            # not network isolation. Require verified Active Response support.
+            return ActionResult(
+                JobState.unsupported,
+                message=("Wazuh host isolation is not enabled: no verified custom "
+                         "Active Response isolation command is configured. Agent "
+                         "restart is not host isolation; no device action was sent."),
+                data={"provider": "wazuh", "executed": False,
+                      "requires": "verified_wazuh_active_response"},
+            )
+        if action == "endpoint.list":
             svc = self._svc()
             try:
-                res = await svc.isolate_agent(str(agent_id))
-                return ActionResult(JobState.succeeded,
-                                    message="isolate requested via agent restart (Active Response not verified - TODO_VERIFY)",
-                                    data=res)
-            except Exception as e:
-                return ActionResult(JobState.failed, message=f"{type(e).__name__}: {e}")
+                agents = await svc.get_agents()
+                return ActionResult(JobState.succeeded, message="Wazuh agents retrieved",
+                                    data={"agents": agents[:500], "count": len(agents)})
+            except Exception as exc:
+                return ActionResult(JobState.failed, message=f"Wazuh agent query failed: {type(exc).__name__}")
             finally:
                 await svc.close()
+        if action == "detection.fetch":
+            detections = await self.fetch_detections(limit=int(params.get("limit", 50)))
+            return ActionResult(JobState.succeeded, message="Wazuh detections retrieved",
+                                data={"detections": [d.__dict__ for d in detections], "count": len(detections)})
         return ActionResult(JobState.unsupported, message=f"wazuh: '{action}' not implemented")
