@@ -221,6 +221,8 @@ func (a *agent) cycle() {
 
 	disc := collectors.RunDiscovery(a.cfg.ScanCIDRs, a.creds, a.cfg.Debug)
 	devs := make([]transport.DiscoveryDevice, 0, len(disc.Devices))
+	snmpByIP := make(map[string]interface{}, len(disc.SNMPFacts))
+	for _, fact := range disc.SNMPFacts { snmpByIP[fact.IP] = fact }
 	for _, d := range disc.Devices {
 		ports := make([]int, 0, len(d.OpenPorts))
 		for _, p := range d.OpenPorts {
@@ -228,7 +230,7 @@ func (a *agent) cycle() {
 		}
 		devs = append(devs, transport.DiscoveryDevice{
 			IP: d.IP, Hostname: d.Hostname, OSGuess: d.OSGuess,
-			DeviceType: d.DeviceType, OpenPorts: ports, ViaAgent: a.agentIDNum,
+			DeviceType: d.DeviceType, OpenPorts: ports, ViaAgent: a.agentIDNum, SNMPFacts: snmpByIP[d.IP],
 		})
 	}
 	// enrich with SNMP sysName/sysDescr when available
@@ -236,6 +238,7 @@ func (a *agent) cycle() {
 		for i := range devs {
 			if devs[i].IP == f.IP {
 				devs[i].SysName, devs[i].SysDescr = f.SysName, f.SysDescr
+			devs[i].SNMPFacts = f
 			}
 		}
 	}
