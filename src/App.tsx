@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -41,6 +41,11 @@ import TenantDetailPage from './pages/platform/TenantDetailPage';
 import PlatformSettingsPage from './pages/platform-admin/PlatformSettingsPage';
 import InfracentraThemesPage from './pages/platform-admin/InfracentraThemesPage';
 import PackCustomizerPage from './pages/platform-admin/PackCustomizerPage';
+import PlatformTeamPage from './pages/platform/PlatformTeamPage';
+import PlatformInviteAcceptPage from './pages/platform/PlatformInviteAcceptPage';
+import PlatformBillingPage from './pages/platform/PlatformBillingPage';
+import PlatformOperationsPage from './pages/platform/PlatformOperationsPage';
+import { platformAccessApi } from './services/api';
 import ProjectsPage from './pages/projects/ProjectsPage';
 import {
   PartnerDashboardPage, PartnerClientsPage, PartnerValuePage,
@@ -138,6 +143,27 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function PlatformRoute({ permission, children }: { permission: string; children: React.ReactNode }) {
+  const { user, isAuthenticated } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [allowed, setAllowed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    if (!isAuthenticated || !user) { setAllowed(false); setLoading(false); return; }
+    if (user.role === 'platform_admin') { setAllowed(true); setLoading(false); return; }
+    if (!['platform_expert','platform_analyst','platform_user'].includes(user.role)) {
+      setAllowed(false); setLoading(false); return;
+    }
+    platformAccessApi.me().then((access) => {
+      if (alive) setAllowed(access.owner || access.permissions.some((item) => item.key === permission));
+    }).catch(() => { if (alive) setAllowed(false); }).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [isAuthenticated, user?.id, user?.role, permission]);
+  if (loading) return <div className="p-8 text-sm text-[var(--ic-muted)]">Checking platform permissions…</div>;
+  if (!allowed) return <Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />;
+  return <>{children}</>;
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -162,6 +188,7 @@ function AppRoutes() {
           (guarded — never touches the real backend). */}
       <Route path="/demo" element={<DemoAutoEnter />} />
       <Route path="/login" element={isFastDemo() ? <DemoAutoEnter /> : <LoginPage />} />
+      <Route path="/platform-invite" element={<PlatformInviteAcceptPage />} />
       <Route path="/service/:serviceId" element={<ServiceDetailPage />} />
       <Route path="/coming-soon/:serviceId" element={<ComingSoonPage />} />
       {/* Academy: nav/footer link target — renders the coming-soon experience
@@ -180,18 +207,21 @@ function AppRoutes() {
         <Route path="psa" element={<PSAPage />} />
 
         {/* Platform admin views */}
-        <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
-        <Route path="admin/clients" element={<PlatformClientsPage />} />
-        <Route path="admin/audit" element={<PlatformAuditPage />} />
-        <Route path="admin/partners" element={<PlatformPartnersPage />} />
-        <Route path="admin/tenants/:orgId" element={<TenantDetailPage />} />
-        <Route path="admin/settings" element={<PlatformSettingsPage />} />
-        <Route path="admin/themes" element={<InfracentraThemesPage />} />
-        <Route path="admin/packs" element={<PackCustomizerPage />} />
-        <Route path="admin/integrations" element={<PlatformIntegrationsPage />} />
-        <Route path="admin/services-ops" element={<PlatformServicesOverviewPage />} />
+        <Route path="admin/dashboard" element={<PlatformRoute permission="platform.dashboard.read"><PlatformDashboardPage /></PlatformRoute>} />
+        <Route path="admin/clients" element={<PlatformRoute permission="platform.tenants.read"><PlatformClientsPage /></PlatformRoute>} />
+        <Route path="admin/audit" element={<PlatformRoute permission="platform.audit.read"><PlatformAuditPage /></PlatformRoute>} />
+        <Route path="admin/partners" element={<PlatformRoute permission="platform.partners.read"><PlatformPartnersPage /></PlatformRoute>} />
+        <Route path="admin/tenants/:orgId" element={<PlatformRoute permission="platform.tenants.read"><TenantDetailPage /></PlatformRoute>} />
+        <Route path="admin/settings" element={<PlatformRoute permission="platform.settings.read"><PlatformSettingsPage /></PlatformRoute>} />
+        <Route path="admin/themes" element={<PlatformRoute permission="platform.settings.manage"><InfracentraThemesPage /></PlatformRoute>} />
+        <Route path="admin/packs" element={<PlatformRoute permission="platform.billing.manage"><PackCustomizerPage /></PlatformRoute>} />
+        <Route path="admin/integrations" element={<PlatformRoute permission="platform.integrations.read"><PlatformIntegrationsPage /></PlatformRoute>} />
+        <Route path="admin/services-ops" element={<PlatformRoute permission="platform.security_ops.read"><PlatformServicesOverviewPage /></PlatformRoute>} />
         {/* T4.3 (additive): catalog-gated onboarding; empty state when flag off */}
-        <Route path="admin/onboarding" element={<PlatformOnboardingPage />} />
+        <Route path="admin/team" element={<PlatformRoute permission="platform.access.manage"><PlatformTeamPage /></PlatformRoute>} />
+        <Route path="admin/billing" element={<PlatformRoute permission="platform.billing.read"><PlatformBillingPage /></PlatformRoute>} />
+        <Route path="admin/operations" element={<PlatformRoute permission="platform.integrations.read"><PlatformOperationsPage /></PlatformRoute>} />
+        <Route path="admin/onboarding" element={<PlatformRoute permission="platform.services.read"><PlatformOnboardingPage /></PlatformRoute>} />
 
         {/* Project Manager — same page, role-scoped (platform vs client) */}
         <Route path="projects" element={<ProjectsPage />} />
