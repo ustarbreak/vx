@@ -41,3 +41,8 @@ headers at the proxy.
 
 Run migration, integration, tenant-isolation, security, backup/restore and
 failure-recovery acceptance tests before onboarding customers.
+
+
+## Production database migration lifecycle
+
+The production backend applies the committed Alembic revision chain with `alembic upgrade head` before starting Uvicorn. FastAPI lifespan does not call SQLAlchemy `Base.metadata.create_all()` in production; schema changes must be versioned migrations. Take and verify a database backup before each upgrade. For multi-replica deployments, use one migration job rather than allowing replicas to race migrations. Development/test startup retains existing `create_all()` behavior.
