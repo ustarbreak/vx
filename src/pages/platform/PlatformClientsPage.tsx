@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Building2, Search, Eye, Edit, CheckCircle2, XCircle, Shield, Ban, Users, DollarSign, Key, FileText, Server, Activity, Copy, RefreshCw, Trash2, Plus, ExternalLink } from 'lucide-react';
 import { demoOrganizations, serviceCatalog } from '../../data/mockData';
 import { Organization, ServiceId, ServiceEntitlement } from '../../types';
-import { organizationsApi, ApiError } from '../../services/api';
+import { organizationsApi, entitlementsApi, ApiError } from '../../services/api';
+import { isDemoMode } from '../../services/demoMode';
 import {
   demoApiKeys, demoLicenses, demoDevices, demoTechnicians, demoPlatformAudit,
 } from '../../data/demoWorld';
@@ -223,58 +224,68 @@ export default function PlatformClientsPage() {
   const [entitlements, setEntitlements] = useState<Record<string, ServiceEntitlement[]>>(
     Object.fromEntries(demoOrganizations.map(o => [o.id, [...o.entitlements]]))
   );
-  // Real tenants from the backend (POST/GET /api/organizations/) — merged with demo rows
+  // Real tenant directory. Demo fixtures are isolated to Demo Mode.
   const [backendOrgs, setBackendOrgs] = useState<import('../../types').Organization[]>([]);
   const [showCreate, setShowCreate] = useState(false);
 
-  const loadOrgs = () => {
-    organizationsApi.list()
-      .then(list => setBackendOrgs(list.map(o => ({
-        id: `org-db-${o.id}`,
-        dbId: o.id,
-        name: o.name,
+  const loadOrgs = async () => {
+    try {
+      const [list, entitlementRows] = await Promise.all([organizationsApi.list(), entitlementsApi.list()]);
+      setBackendOrgs(list.map(o => ({
+        id: `org-db-${o.id}`, dbId: o.id, name: o.name,
         tier: (o.tier as any) || 'sme',
         status: (o.status === 'active' ? 'active' : o.status === 'suspended' ? 'suspended' : 'trial') as any,
-        contactEmail: o.contact_email,
-        industry: o.industry ?? undefined,
-        country: o.country ?? undefined,
-        memberCount: o.member_count,
-        assetCount: o.asset_count,
-        riskScore: o.risk_score,
-        complianceScore: o.compliance_score,
-        monthlyRevenue: o.monthly_revenue,
+        contactEmail: o.contact_email, industry: o.industry ?? undefined, country: o.country ?? undefined,
+        memberCount: o.member_count, assetCount: o.asset_count, riskScore: o.risk_score,
+        complianceScore: o.compliance_score, monthlyRevenue: o.monthly_revenue,
         planTier: o.plan_tier, endpointCount: o.endpoint_count, seatLimit: o.seat_limit,
         siemLimitGbDay: o.siem_limit_gb, billingCycle: o.billing_cycle, invoiceDisplay: o.monthly_invoice_display,
-        entitlements: [],
-      } as unknown as import('../../types').Organization))))
-      .catch(() => setBackendOrgs([]));
+        entitlements: entitlementRows.filter(e => e.org_id === o.id).map(e => ({
+          id: String(e.id), serviceId: e.service_id, enabled: e.enabled, seatCount: e.seat_count,
+          activatedAt: e.activated_at ?? undefined, deactivatedAt: e.deactivated_at ?? undefined,
+          notes: e.notes ?? undefined,
+        })),
+      } as unknown as import('../../types').Organization)));
+      setEntitlements(Object.fromEntries(list.map(o => [`org-db-${o.id}`,
+        entitlementRows.filter(e => e.org_id === o.id).map(e => ({
+          id: String(e.id), serviceId: e.service_id, enabled: e.enabled, seatCount: e.seat_count,
+          activatedAt: e.activated_at ?? undefined, deactivatedAt: e.deactivated_at ?? undefined,
+          notes: e.notes ?? undefined,
+        }))])));
+    } catch (e) { setBackendOrgs([]); }
   };
   useEffect(() => { loadOrgs(); }, []);
 
   // entitlements state for backend orgs defaults to empty list
   const getEntitlements = (orgId: string): ServiceEntitlement[] => entitlements[orgId] ?? [];
 
-  const allOrgs = [...demoOrganizations, ...backendOrgs.filter(b => !demoOrganizations.some(d => d.name.toLowerCase() === b.name.toLowerCase()))];
+  const allOrgs = isDemoMode() ? demoOrganizations : backendOrgs;
 
   const filtered = allOrgs.filter(o =>
     o.name.toLowerCase().includes(search.toLowerCase()) ||
     o.contactEmail.toLowerCase().includes(search.toLowerCase())
   );
 
-  const toggleEntitlement = (orgId: string, serviceId: ServiceId) => {
-    setEntitlements(prev => ({
-      ...prev,
-      [orgId]: (prev[orgId] ?? []).map(e =>
-        e.serviceId === serviceId
-          ? {
-              ...e,
-              enabled: !e.enabled,
-              activatedAt: !e.enabled ? new Date().toISOString().split('T')[0] : e.activatedAt,
-              deactivatedAt: !e.enabled ? null : new Date().toISOString().split('T')[0],
-            }
-          : e
-      ),
-    }));
+  const toggleEntitlement = async (orgId: string, serviceId: ServiceId) => {
+    if (isDemoMode()) {
+      setEntitlements(prev => ({ ...prev, [orgId]: (prev[orgId] ?? []).map(e => e.serviceId === serviceId
+        ? { ...e, enabled: !e.enabled, activatedAt: !e.enabled ? new Date().toISOString().split('T')[0] : e.activatedAt,
+            deactivatedAt: !e.enabled ? undefined : new Date().toISOString().split('T')[0] } : e) }));
+      return;
+    }
+    const dbId = Number(orgId.replace('org-db-', ''));
+    if (!Number.isInteger(dbId) || dbId <= 0) return;
+    const existing = (entitlements[orgId] ?? []).find(e => e.serviceId === serviceId);
+    try {
+      if (existing && (existing as any).id && /^\\d+$/.test(String((existing as any).id))) {
+        await entitlementsApi.update(Number((existing as any).id), { enabled: !existing.enabled });
+      } else {
+        await entitlementsApi.create({ org_id: dbId, service_id: serviceId, enabled: true, seat_count: 0 });
+      }
+      await loadOrgs();
+    } catch (e: any) {
+      window.alert(e?.message ?? 'Entitlement update failed');
+    }
   };
 
   return (
