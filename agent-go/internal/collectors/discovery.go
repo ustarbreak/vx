@@ -43,7 +43,9 @@ func RunDiscovery(cidrs []string, creds []snmpx.Credential, debug bool) *Discove
 			for ip := range hostJobs {
 				h := SweepHost(ip, CommonServicePorts, 800*time.Millisecond)
 				if h == nil { continue }
-				if sn, osv, ok := SMBHostInfo(ip); ok {
+				hasSMB := false
+				for _, port := range h.OpenPorts { if port.Port == 445 { hasSMB = true; break } }
+				if sn, osv, ok := func() (string, string, bool) { if hasSMB { return SMBHostInfo(ip) }; return "", "", false }(); ok {
 					if h.Hostname == "" { h.Hostname = sn }
 					if h.OSGuess == "" { h.OSGuess = osv }
 				}
