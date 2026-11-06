@@ -6,6 +6,7 @@ package snmpx
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,15 +35,27 @@ type DeviceFacts struct {
 	UptimeTicks int64           `json:"uptime_ticks"`
 	MatchedCred string          `json:"matched_credential"`
 	Interfaces  []SNMPInterface `json:"interfaces,omitempty"`
-	ARP         []string        `json:"arp,omitempty"` // ip entries seen in ipNetToMediaTable
+	ARP         []SNMPARPEntry  `json:"arp,omitempty"`
 }
 
 type SNMPInterface struct {
+	Index int `json:"if_index"`
 	Descr string `json:"descr"`
-	IP    string `json:"ip"`
-	MAC   string `json:"mac"`
-	Speed string `json:"speed"`
-	State string `json:"state"` // up|down
+	IP string `json:"ip"`
+	MAC string `json:"mac"`
+	Speed string `json:"speed_bps,omitempty"`
+	Type string `json:"type,omitempty"`
+	MTU string `json:"mtu,omitempty"`
+	AdminState string `json:"admin_state,omitempty"`
+	State string `json:"oper_state"`
+	InOctets string `json:"in_octets,omitempty"`
+	OutOctets string `json:"out_octets,omitempty"`
+}
+
+type SNMPARPEntry struct {
+	IfIndex string `json:"if_index"`
+	IP string `json:"ip"`
+	MAC string `json:"mac"`
 }
 
 var oids = map[string]string{
@@ -55,8 +68,15 @@ var oids = map[string]string{
 	"ifSpeed":       "1.3.6.1.2.1.2.2.1.5",
 	"ifPhysAddress": "1.3.6.1.2.1.2.2.1.6",
 	"ifOperStatus":  "1.3.6.1.2.1.2.2.1.8",
-	"ipAdEntAddr":   "1.3.6.1.2.1.4.20.1.1",
-	"arpIp":         "1.3.6.1.2.1.4.22.1.3",
+	"ifAdminStatus": "1.3.6.1.2.1.2.2.1.7",
+	"ifMtu": "1.3.6.1.2.1.2.2.1.4",
+	"ifInOctets": "1.3.6.1.2.1.2.2.1.10",
+	"ifOutOctets": "1.3.6.1.2.1.2.2.1.16",
+	"ipAdEntAddr": "1.3.6.1.2.1.4.20.1.1",
+	"ipAdEntIfIndex": "1.3.6.1.2.1.4.20.1.2",
+	"arpIfIndex": "1.3.6.1.2.1.4.22.1.1",
+	"arpMac": "1.3.6.1.2.1.4.22.1.2",
+	"arpIp": "1.3.6.1.2.1.4.22.1.3",
 }
 
 func buildClient(target string, cred Credential, timeout time.Duration) (*gosnmp.GoSNMP, error) {
@@ -183,36 +203,51 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	if ifres, err := g.WalkAll(oids["ifDescr"]); err == nil {
 		for _, p := range ifres {
 			key := strings.TrimPrefix(p.Name, oids["ifDescr"]+".")
+				idx, _ := strconv.Atoi(key)
 			idxs[key] = len(f.Interfaces)
-			f.Interfaces = append(f.Interfaces, SNMPInterface{Descr: toString(p)})
+			f.Interfaces = append(f.Interfaces, SNMPInterface{Index: idx, Descr: toString(p)})
 		}
 		fillCol(g, oids["ifPhysAddress"], idxs, f, func(s *SNMPInterface, v string) { s.MAC = v })
-		fillCol(g, oids["ifOperStatus"], idxs, f, func(s *SNMPInterface, v string) {
-			if v == "1" {
-				s.State = "up"
-			} else {
-				s.State = "down"
-			}
-		})
+		fillCol(g, oids["ifSpeed"], idxs, f, func(s *SNMPInterface, v string) { s.Speed = v })
+		fillCol(g, oids["ifType"], idxs, f, func(s *SNMPInterface, v string) { s.Type = v })
+		fillCol(g, oids["ifMtu"], idxs, f, func(s *SNMPInterface, v string) { s.MTU = v })
+		fillCol(g, oids["ifInOctets"], idxs, f, func(s *SNMPInterface, v string) { s.InOctets = v })
+		fillCol(g, oids["ifOutOctets"], idxs, f, func(s *SNMPInterface, v string) { s.OutOctets = v })
+		fillCol(g, oids["ifAdminStatus"], idxs, f, func(s *SNMPInterface, v string) { if v == "1" { s.AdminState = "up" } else { s.AdminState = "down" } })
+		fillCol(g, oids["ifOperStatus"], idxs, f, func(s *SNMPInterface, v string) { if v == "1" { s.State = "up" } else { s.State = "down" } })
+	}
+	// ipAdEntAddr table indices are IP octets, not interface indices. Resolve
+	// them through ipAdEntIfIndex instead of treating the final octet as ifIndex.
+	ipToIndex := map[string]string{}
+	if rows, err := g.WalkAll(oids["ipAdEntIfIndex"]); err == nil {
+		for _, p := range rows { ipToIndex[strings.TrimPrefix(p.Name, oids["ipAdEntIfIndex"]+".")] = toString(p) }
 	}
 	if ipres, err := g.WalkAll(oids["ipAdEntAddr"]); err == nil {
 		for _, p := range ipres {
-			idxStr := p.Name[strings.LastIndex(p.Name, ".")+1:]
-			var idx int
-			fmt.Sscanf(idxStr, "%d", &idx)
-			if pos, ok := findIfaceByIndex(idxs, idx); ok {
+			suffix := strings.TrimPrefix(p.Name, oids["ipAdEntAddr"]+".")
+			if pos, ok := idxs[ipToIndex[suffix]]; ok && f.Interfaces[pos].IP == "" {
 				f.Interfaces[pos].IP = toString(p)
 			}
 		}
 	}
-	if arp, err := g.WalkAll(oids["arpIp"]); err == nil {
-		seen := map[string]bool{}
-		for _, p := range arp {
-			ip := toString(p)
-			if ip != "" && !seen[ip] {
-				seen[ip] = true
-				f.ARP = append(f.ARP, ip)
-			}
+	// ARP table suffix contains ifIndex and IPv4 octets; correlate address and
+	// physical-address columns by the complete OID suffix.
+	arpIPs, _ := g.WalkAll(oids["arpIp"])
+	arpMACs := map[string]string{}
+	arpIfs := map[string]string{}
+	if rows, err := g.WalkAll(oids["arpMac"]); err == nil {
+		for _, p := range rows { arpMACs[strings.TrimPrefix(p.Name, oids["arpMac"]+".")] = colValue(p) }
+	}
+	if rows, err := g.WalkAll(oids["arpIfIndex"]); err == nil {
+		for _, p := range rows { arpIfs[strings.TrimPrefix(p.Name, oids["arpIfIndex"]+".")] = toString(p) }
+	}
+	seenARP := map[string]bool{}
+	for _, p := range arpIPs {
+		suffix := strings.TrimPrefix(p.Name, oids["arpIp"]+".")
+		ip := toString(p)
+		if ip != "" && !seenARP[suffix] {
+			seenARP[suffix] = true
+			f.ARP = append(f.ARP, SNMPARPEntry{IfIndex: arpIfs[suffix], IP: ip, MAC: arpMACs[suffix]})
 		}
 	}
 	return f, nil
