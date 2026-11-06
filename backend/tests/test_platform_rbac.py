@@ -640,3 +640,19 @@ async def test_platform_billing_overview_uses_only_persisted_usage_and_is_owner_
     async with client_for(session_factory, 5) as tenant_admin:
         denied = await tenant_admin.get("/api/platform/billing/overview?period=2026-11")
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_ticket_overview_is_global_owner_only(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.get("/api/tickets/ops/overview")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["data_mode"] == "live"
+        assert set(payload["counts"]) >= {"total", "open", "p1_p2", "sla_breached", "unassigned"}
+        assert isinstance(payload["by_organization"], list)
+        assert isinstance(payload["workload"], list)
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/tickets/ops/overview")
+        assert denied.status_code == 403
