@@ -61,9 +61,9 @@ SERVICE_CONNECTORS: Dict[str, Dict[str, Any]] = {
         "endpoints": {"workflows": "/api/v1/workflows", "executions": "/api/v1/executions"},
     },
     "vuln-scanning": {
-        "engine": "OpenVAS / Greenbone Community Edition",
-        "docs": "https://docs.greenbone.net/GSM-Manual/gos-22.04/en/scanning/",
-        "endpoints": {"tasks": "/get_tasks", "info": "/get_version"},
+        "engine": "Wazuh Vulnerability Detector (endpoint-protection integration)",
+        "docs": "https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html",
+        "endpoints": {"agents": "/agents", "vulnerabilities": "/vulnerability/{agent_id}"},
     },
     "patch-management": {
         "engine": "Fleet (osquery) + Wazuh upgrade module",
