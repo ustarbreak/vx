@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
 from app.models import (
     User, Organization, NotificationRule, Entitlement,
     Alert, Ticket, DiscoveryScan, DiscoveredDevice,
@@ -258,10 +258,37 @@ async def ensure_platform_admin(db: AsyncSession) -> None:
     existing = (await db.execute(
         select(User).where(User.role == "platform_admin").limit(1)
     )).scalars().first()
+    production = os.getenv("APP_ENV", "development").strip().lower() == "production"
     if existing:
+        if production and verify_password("Admin#2026", existing.hashed_password):
+            raise RuntimeError(
+                "Production bootstrap blocked: the existing platform administrator "
+                "still uses the documented default password. Rotate it before deployment."
+            )
         return
-    email = os.getenv("PLATFORM_ADMIN_EMAIL", "admin@infracentra.io")
-    password = os.getenv("PLATFORM_ADMIN_PASSWORD", "Admin#2026")
+    configured_email = os.getenv("PLATFORM_ADMIN_EMAIL", "").strip()
+    configured_password = os.getenv("PLATFORM_ADMIN_PASSWORD", "")
+
+    if production:
+        # Never bootstrap a public deployment with the documented demo/default
+        # administrator credentials. Require an operator-supplied first secret.
+        if not configured_email or not configured_password:
+            raise RuntimeError(
+                "Production bootstrap blocked: set PLATFORM_ADMIN_EMAIL and "
+                "PLATFORM_ADMIN_PASSWORD before starting the application."
+            )
+        if len(configured_password) < 16 or configured_password in {
+            "Admin#2026", "admin", "password", "changeme"
+        }:
+            raise RuntimeError(
+                "Production bootstrap blocked: PLATFORM_ADMIN_PASSWORD must be "
+                "at least 16 characters and must not be a known default."
+            )
+        email, password = configured_email, configured_password
+    else:
+        email = configured_email or "admin@infracentra.io"
+        password = configured_password or "Admin#2026"
+
     db.add(User(
         email=email, name="Platform Administrator", role="platform_admin",
         hashed_password=get_password_hash(password), status="active", mfa_enabled=False,
