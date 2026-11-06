@@ -51,7 +51,9 @@ func severityFromSyslogPriority(priority int) string {
 	switch priority {
 	case 0, 1:
 		return "critical"
-	case 2, 3:
+	case 2:
+		return "critical"
+	case 3:
 		return "high"
 	case 4:
 		return "medium"
