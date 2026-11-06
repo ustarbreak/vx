@@ -1428,3 +1428,18 @@ export interface PlatformBillingOverview {
 export const platformBillingApi = {
   overview: (period: string) => api.get<PlatformBillingOverview>(`/platform/billing/overview?period=${encodeURIComponent(period)}`),
 };
+
+export interface PlatformTicketOverview {
+  generated_at: string;
+  data_mode: 'live';
+  counts: { total: number; open: number; resolved: number; closed: number; p1_p2: number; sla_breached: number; unassigned: number };
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  by_organization: { org_id: number; organization: string; total: number; open: number; p1_p2: number }[];
+  workload: { assignee: string; open: number }[];
+  recent: AdvTicket[];
+}
+export const platformTicketOpsApi = {
+  overview: () => api.get<PlatformTicketOverview>('/tickets/ops/overview'),
+  runEscalations: () => api.post<{ escalated: number }>('/tickets/ops/run-escalations'),
+};

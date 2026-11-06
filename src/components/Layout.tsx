@@ -215,6 +215,7 @@ export default function Layout() {
         { to: '/admin/clients', icon: Building2, label: 'Tenant Manager' },
         { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
         { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
+        { to: '/admin/ticketing', icon: Ticket, label: 'Global Ticket Operations' },
       ],
     },
     {
