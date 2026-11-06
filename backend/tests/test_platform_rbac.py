@@ -656,3 +656,10 @@ async def test_platform_ticket_overview_is_global_owner_only(session_factory):
     async with client_for(session_factory, 5) as tenant_admin:
         denied = await tenant_admin.get("/api/tickets/ops/overview")
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_global_service_health_sync_is_owner_only(session_factory):
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.post("/api/services/sync")
+        assert denied.status_code == 403

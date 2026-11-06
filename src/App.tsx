@@ -33,6 +33,7 @@ import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
 import PlatformBillingPage from './pages/platform/PlatformBillingPage';
 import PlatformTicketOpsPage from './pages/platform/PlatformTicketOpsPage';
 import PlatformIntegrationOpsPage from './pages/platform/PlatformIntegrationOpsPage';
+import PlatformServiceHealthPage from './pages/platform/PlatformServiceHealthPage';
 import PlatformTeamPage from './pages/platform/PlatformTeamPage';
 import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
@@ -198,6 +199,7 @@ function AppRoutes() {
         <Route path="admin/billing" element={<PlatformBillingPage />} />
         <Route path="admin/ticketing" element={<PlatformTicketOpsPage />} />
         <Route path="admin/integration-ops" element={<PlatformIntegrationOpsPage />} />
+        <Route path="admin/service-health" element={<PlatformServiceHealthPage />} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />

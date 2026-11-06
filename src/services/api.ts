@@ -1456,3 +1456,12 @@ export const platformIntegrationOpsApi = {
     api.patch<PlatformIntegration>(`/integrations/${id}`, data),
   test: (id: number) => api.post<{ success: boolean; message: string; details?: Record<string, unknown> }>(`/integrations/${id}/test`, {}),
 };
+
+export interface PlatformServiceHealth {
+  service_id: string; engine: string; configured?: boolean; reachable?: boolean;
+  reason?: string; status?: string; latency_ms?: number; lifecycle?: Record<string, unknown>;
+}
+export const platformServiceHealthApi = {
+  catalog: () => api.get<{service_id:string;engine:string;docs:string;endpoints:string[]}[]>('/services/catalog'),
+  sync: () => api.post<{checked:number;results:PlatformServiceHealth[]}>('/services/sync', {}),
+};
