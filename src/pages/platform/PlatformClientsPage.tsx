@@ -230,7 +230,8 @@ export default function PlatformClientsPage() {
 
   const loadOrgs = async () => {
     try {
-      const [list, entitlementRows] = await Promise.all([organizationsApi.list(), entitlementsApi.list()]);
+      const list = await organizationsApi.list();
+      const entitlementRows = await entitlementsApi.list().catch(() => []);
       setBackendOrgs(list.map(o => ({
         id: `org-db-${o.id}`, dbId: o.id, name: o.name,
         tier: (o.tier as any) || 'sme',
