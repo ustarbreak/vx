@@ -328,10 +328,15 @@ async def list_platform_staff_invitations(
     rows = (await db.execute(select(PlatformStaffInvitation).order_by(
         PlatformStaffInvitation.created_at.desc()))).scalars().all()
     now = datetime.now(timezone.utc)
-    return [{"id": row.id, "email": row.email, "name": row.name, "role": row.role,
-        "status": "accepted" if row.accepted_at else ("expired" if row.expires_at <= now else "pending"),
-        "created_at": row.created_at, "expires_at": row.expires_at, "accepted_at": row.accepted_at}
-        for row in rows]
+    result = []
+    for row in rows:
+        expiry = row.expires_at
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        result.append({"id": row.id, "email": row.email, "name": row.name, "role": row.role,
+            "status": "accepted" if row.accepted_at else ("expired" if expiry <= now else "pending"),
+            "created_at": row.created_at, "expires_at": row.expires_at, "accepted_at": row.accepted_at})
+    return result
 
 
 @router.delete("/invitations/{invitation_id}", status_code=204)
