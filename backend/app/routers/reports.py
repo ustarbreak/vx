@@ -130,76 +130,79 @@ async def _render_pages(report_key: str, tenant: str, period: str, demo: bool) -
 
 
 @router.get("")
-async def catalogue(demo: int = Query(0), demo_source: str = Query(""),
-                    period: str = Query("2026-10"),
-                    current_user: User = Depends(get_current_user)):
-    fam_names = dict(dd.FAMILIES)
+async def catalogue(period: str = Query(...), demo: int = Query(0), demo_source: str = Query(""),
+                    org_id: int | None = Query(None), current_user: User = Depends(get_current_user),
+                    db: AsyncSession = Depends(get_db)):
+    _check_period(period)
+    tenant = await _tenant_id(current_user, org_id, db)
     families = [{"id": fid, "name": fname, "reports": []} for fid, fname in dd.FAMILIES]
     idx = {f["id"]: f for f in families}
     for num, key, title, fam, pages in dd.REPORTS:
-        idx[fam]["reports"].append({
-            "number": num, "id": key, "title": title,
-            "pages": pages, "download_levels": ["page", "report", "family", "all"],
-        })
-    return {
-        "demo": _resolve_demo(demo, demo_source),
-        "total_pages": sum(r[4] for r in dd.REPORTS),
-        "families": families,
-        "family_names": fam_names,
-    }
+        idx[fam]["reports"].append({"number": num, "id": key, "title": title, "pages": pages,
+                                    "download_levels": ["page", "report", "family", "all"]})
+    return {"demo": _resolve_demo(demo, demo_source), "tenant_id": tenant,
+            "total_pages": sum(r[4] for r in dd.REPORTS), "families": families,
+            "family_names": dict(dd.FAMILIES)}
 
 
 @router.get("/{report_id}")
-async def report_pages(report_id: str, period: str = Query("2026-10"),
-                       demo: int = Query(0), demo_source: str = Query(""),
-                       current_user: User = Depends(get_current_user)):
+async def report_pages(report_id: str, period: str = Query(...), demo: int = Query(0),
+                       demo_source: str = Query(""), org_id: int | None = Query(None),
+                       current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if report_id not in BY_KEY:
         raise HTTPException(404, "Unknown report")
     _check_period(period)
+    tenant = await _tenant_id(current_user, org_id, db)
     num, title, fam, pages = BY_KEY[report_id]
-    body = await _render_pages(report_id, current_user, period, _resolve_demo(demo, demo_source))
-    return {"number": num, "id": report_id, "title": title,
-            "family": fam, "period": period, "demo": _resolve_demo(demo, demo_source),
-            "pages": body}
+    use_demo = _resolve_demo(demo, demo_source)
+    body = await _render_pages(report_id, tenant, period, use_demo)
+    return {"number": num, "id": report_id, "title": title, "family": fam,
+            "period": period, "demo": use_demo, "tenant_id": tenant, "pages": body}
 
 
 @router.get("/{report_id}/pages/{n}")
-async def one_page(report_id: str, n: int, period: str = Query("2026-10"),
-                   demo: int = Query(0), demo_source: str = Query(""),
-                   current_user: User = Depends(get_current_user)):
+async def one_page(report_id: str, n: int, period: str = Query(...), demo: int = Query(0),
+                   demo_source: str = Query(""), org_id: int | None = Query(None),
+                   current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if report_id not in BY_KEY:
         raise HTTPException(404, "Unknown report")
     _check_period(period)
     num, title, fam, total = BY_KEY[report_id]
     if not 1 <= n <= total:
         raise HTTPException(404, f"Report {num} has {total} pages")
-    body = await _render_pages(report_id, current_user, period, _resolve_demo(demo, demo_source))
+    tenant = await _tenant_id(current_user, org_id, db)
+    body = await _render_pages(report_id, tenant, period, _resolve_demo(demo, demo_source))
     return {"number": num, "id": report_id, "title": title, "family": fam,
             "period": period, "page_no": n, "page": body[n - 1]}
 
 
 @meta_router.get("/meta")
-async def meta(period: str = Query("2026-10"), demo: int = Query(0),
-               demo_source: str = Query(""), current_user: User = Depends(get_current_user)):
-    org = getattr(current_user, "organization", None)
-    name = getattr(org, "name", None) or "Demo Tenant"
-    return {
-        "client": name,
-        "period": _check_period(period),
-        "version": "2026.10-p1",
-        "classification": "CONFIDENTIAL — Infracentra client report",
-        "author": "Infracentra Reporting Engine",
-        "last_updated": dd.now_utc(),
-        "demo": _resolve_demo(demo, demo_source),
-    }
+async def meta(period: str = Query(...), demo: int = Query(0), demo_source: str = Query(""),
+               org_id: int | None = Query(None), current_user: User = Depends(get_current_user),
+               db: AsyncSession = Depends(get_db)):
+    tenant = await _tenant_id(current_user, org_id, db)
+    organization = await db.get(Organization, int(tenant))
+    return {"client": organization.name if organization else "Tenant " + tenant,
+            "tenant_id": tenant, "period": _check_period(period), "version": "2026.11-p5",
+            "classification": "CONFIDENTIAL — Infracentra client report",
+            "author": "Infracentra Reporting Engine", "last_updated": dd.now_utc(),
+            "demo": _resolve_demo(demo, demo_source)}
 
 
 @router.post("/{report_id}/refresh")
-async def refresh(report_id: str, current_user: User = Depends(get_current_user)):
+async def refresh(report_id: str, period: str = Query(...),
+                  current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     if report_id not in BY_KEY:
         raise HTTPException(404, "Unknown report")
-    # PLUG (Phase 3): trigger aggregation job recompute for this report/tenant.
-    return {"status": "queued", "report": report_id}
+    _check_period(period)
+    if current_user.role != "platform_admin":
+        raise HTTPException(403, "Only the platform Owner can run the global reporting refresh")
+    from app.services.reporting.jobs import job_h_ingest, job_h_kpis, job_j_rollup
+    ingestion = await job_h_ingest(db, lookback_hours=48)
+    daily = await job_h_kpis(db)
+    monthly = await job_j_rollup(db, period=period)
+    return {"status": "completed", "report": report_id, "period": period,
+            "ingestion": ingestion, "daily_kpis": daily, "monthly_rollup": monthly}
 
 
 # ------------------------------------------------------------------ export --
