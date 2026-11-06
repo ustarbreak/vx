@@ -220,6 +220,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	// interface table + IPs (best effort, ignore errors)
 	idxs := map[string]int{}
 	if ifres, err := g.WalkAll(oids["ifDescr"]); err == nil {
+		if len(ifres) > 512 { ifres = ifres[:512] }
 		for _, p := range ifres {
 			key := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), oids["ifDescr"]+".")
 				idx, _ := strconv.Atoi(key)
@@ -242,9 +243,11 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	// them through ipAdEntIfIndex instead of treating the final octet as ifIndex.
 	ipToIndex := map[string]string{}
 	if rows, err := g.WalkAll(oids["ipAdEntIfIndex"]); err == nil {
+		if len(rows) > 1024 { rows = rows[:1024] }
 		for _, p := range rows { ipToIndex[strings.TrimPrefix(p.Name, oids["ipAdEntIfIndex"]+".")] = toString(p) }
 	}
 	if ipres, err := g.WalkAll(oids["ipAdEntAddr"]); err == nil {
+		if len(ipres) > 1024 { ipres = ipres[:1024] }
 		for _, p := range ipres {
 			suffix := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), oids["ipAdEntAddr"]+".")
 			if pos, ok := idxs[ipToIndex[suffix]]; ok && f.Interfaces[pos].IP == "" {
@@ -255,6 +258,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	// ARP table suffix contains ifIndex and IPv4 octets; correlate address and
 	// physical-address columns by the complete OID suffix.
 	arpIPs, _ := g.WalkAll(oids["arpIp"])
+	if len(arpIPs) > 4096 { arpIPs = arpIPs[:4096] }
 	arpMACs := map[string]string{}
 	arpIfs := map[string]string{}
 	if rows, err := g.WalkAll(oids["arpMac"]); err == nil {
