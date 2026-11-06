@@ -11,7 +11,7 @@ import {
   Shield, LayoutDashboard, AlertTriangle, Target, FileCheck, FileBarChart2,
   Activity, Settings, LogOut, ChevronLeft, ChevronRight,
   Bell, Search, Menu, Zap, Users, Building2, Network,
-  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins,
+  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins, Wallet,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
