@@ -35,14 +35,14 @@ async def register(
             detail="Email already registered"
         )
     
-    # If org_id provided, check if organization exists
-    if user_data.org_id:
-        result = await db.execute(select(Organization).where(Organization.id == user_data.org_id))
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Organization not found"
-            )
+    # Public registration must never let an unauthenticated caller attach
+    # themselves to an arbitrary customer tenant by guessing its numeric ID.
+    # Membership must be provisioned by an authorized tenant administrator.
+    if user_data.org_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant membership must be provisioned by an authorized tenant administrator"
+        )
     
     # Create user
     hashed_password = get_password_hash(user_data.password)
