@@ -35,7 +35,6 @@ async def session_factory():
                             monthly_revenue=1200, plan_tier="STARTER"))
         db.add(User(id=1, email="owner@example.com", hashed_password=get_password_hash("OwnerPassword!123"),
                     name="Owner", role="platform_admin", org_id=None, status="active"))
-        db.commit()
         await db.commit()
     yield factory
     await engine.dispose()
