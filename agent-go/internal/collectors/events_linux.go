@@ -24,7 +24,7 @@ func CollectSystemEvents(since time.Time, limit int) ([]SecurityEvent, error) {
 		limit = 250
 	}
 	cmd := exec.Command(bin, "--since", "@"+strconv.FormatInt(since.Unix(), 10),
-		"--priority=4", "--output=json", "--no-pager", "-n", strconv.Itoa(limit))
+		"--output=json", "--no-pager", "-n", strconv.Itoa(limit))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
