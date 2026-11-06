@@ -88,6 +88,16 @@ func parseSyslog(line, remote string) (SecurityEvent, bool) {
 		}
 	}
 	now := time.Now().UTC()
+	if strings.HasPrefix(message, "1 ") {
+		fields := strings.Fields(message)
+		if len(fields) >= 2 && fields[1] != "-" { if parsed, err := time.Parse(time.RFC3339Nano, fields[1]); err == nil { now = parsed.UTC() } }
+	} else {
+		fields := strings.Fields(message)
+		if len(fields) >= 5 {
+			if parsed, err := time.ParseInLocation("Jan 2 15:04:05", strings.Join(fields[:3], " "), time.Local); err == nil { now = time.Date(time.Now().Year(), parsed.Month(), parsed.Day(), parsed.Hour(), parsed.Minute(), parsed.Second(), 0, time.Local).UTC() }
+			host, provider, body = fields[3], strings.TrimSuffix(fields[4], ":"), strings.Join(fields[5:], " ")
+		}
+	}
 	identity := remote + "|" + now.Format(time.RFC3339Nano) + "|" + line
 	return SecurityEvent{
 		EventID: stableEventID("syslog", identity), Timestamp: now,
