@@ -275,7 +275,7 @@ export default function Layout() {
     '/admin/audit':'platform.audit.read', '/admin/integrations':'platform.integrations.read',
     '/admin/onboarding':'platform.services.read', '/admin/settings':'platform.settings.read',
     '/admin/themes':'platform.settings.manage', '/admin/packs':'platform.billing.manage',
-    '/admin/services-ops':'platform.security_ops.read', '/client-admin/advanced-tickets':'platform.security_ops.read',
+    '/admin/services-ops':'platform.security_ops.read', '/admin/ticketing':'platform.security_ops.read', '/client-admin/advanced-tickets':'platform.security_ops.read',
     '/client-admin/notifications':'platform.notifications.read', '/client-admin/monitored-devices':'platform.infrastructure.read',
     '/client-admin/scan-history':'platform.infrastructure.read', '/client-admin/agents':'platform.infrastructure.read',
     '/client-admin/playbooks':'platform.security_ops.read', '/client-admin/automation/scripts':'platform.security_ops.read',
