@@ -908,6 +908,7 @@ class AgentDiscoveredDevice(Base):
     open_ports = Column(JSON, default=list)
     sys_name = Column(String, nullable=True)
     sys_desc = Column(String, nullable=True)
+    snmp_facts = Column(JSON, default=dict)
     first_seen = Column(DateTime(timezone=True), server_default=func.now())
     last_seen = Column(DateTime(timezone=True), nullable=True)
     imported = Column(Boolean, default=False)
