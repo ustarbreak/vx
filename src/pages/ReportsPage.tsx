@@ -1,12 +1,13 @@
-// Advanced Reporting portal page (Phase 1 skeleton of the 20-report system).
+// Advanced Reporting portal — 20 reports, 62 pages, six report families.
 // Navigation: 3 levels — family bar -> report tabs -> numbered page pills.
-// Downloads: page / report / family-as-report-list / all (CSV now, PDF Phase 6).
+// Downloads: page / report / family ZIP / full catalogue ZIP / PDF.
 // Data: reportsApi — demo generator when Demo Mode ON, real API when OFF.
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { isDemoMode } from '../services/demoMode';
 import { demoTenants } from '../data/demoWorld';
+import { organizationsApi, BackendOrganization } from '../services/api';
 import {
   reportsApi, Block, Page, ReportBody, Meta, FAMILY_ORDER, REPORT_CATALOG,
 } from '../services/reportsApi';
@@ -232,11 +233,13 @@ export default function ReportsPage() {
   const { user } = useAuth();
   const nav = useNavigate();
   // Access model: client admin sees only its own tenant (orgId locked);
-  // platform_admin & partner_admin may switch tenants via the filter below.
-  const canSwitchTenant = user?.role === 'platform_admin' || user?.role === 'partner_admin';
+  // Only platform Owner can switch tenants; partner/client users remain scoped.
+  const canSwitchTenant = user?.role === 'platform_admin';
   const [tenantOverride, setTenantOverride] = React.useState<string>('');
-  const tenant = canSwitchTenant ? (tenantOverride || String(user?.orgId ?? '1')) : (user?.orgId ?? 'unknown');
-  const [period, setPeriod] = React.useState('2026-10');
+  const [availableTenants, setAvailableTenants] = React.useState<BackendOrganization[]>([]);
+  const [tenantLoadError, setTenantLoadError] = React.useState<string | null>(null);
+  const tenant = canSwitchTenant ? (tenantOverride || (isDemoMode() ? '1' : String(user?.orgId ?? availableTenants[0]?.id ?? ''))) : String(user?.orgId ?? '');
+  const [period, setPeriod] = React.useState(new Date().toISOString().slice(0, 7));
   const [family, setFamily] = React.useState(FAMILY_ORDER[0][0]);
   const [reportId, setReportId] = React.useState(REPORT_CATALOG[0][1]);
   const [pageNo, setPageNo] = React.useState<number | null>(null); // null = all pages
@@ -244,11 +247,15 @@ export default function ReportsPage() {
   const [meta, setMeta] = React.useState<Meta | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  React.useEffect(() => { if (!canSwitchTenant || isDemoMode()) return; let alive = true; organizationsApi.list().then((items) => { if (!alive) return; setAvailableTenants(items); if (!tenantOverride && items.length) setTenantOverride(String(items[0].id)); }).catch((e: any) => { if (alive) setTenantLoadError(e?.message ?? 'Unable to load live tenant directory'); }); return () => { alive = false; }; }, [canSwitchTenant]);
 
   // deep link: #/{reportId}/{pageNo} handled through hash already owned by router;
   // keep simple internal state instead (route registered at /reports).
   React.useEffect(() => {
     let alive = true;
+    if (!tenant) { setLoading(false); setError('Select a tenant before opening reports.'); return; }
     setLoading(true); setError(null);
     Promise.all([reportsApi.report(reportId, tenant, period), reportsApi.meta(period, String(tenant))])
       .then(([r, m]) => { if (alive) { setBody(r); setMeta(m); } })
@@ -257,15 +264,30 @@ export default function ReportsPage() {
     return () => { alive = false; };
   }, [reportId, period, tenant]);
 
+  async function refreshCurrentReport() {
+    setRefreshing(true); setError(null);
+    try {
+      await reportsApi.refresh(reportId, period);
+      const [freshBody, freshMeta] = await Promise.all([
+        reportsApi.report(reportId, tenant, period), reportsApi.meta(period, String(tenant)),
+      ]);
+      setBody(freshBody); setMeta(freshMeta);
+    } catch (e: any) {
+      setError(e?.message ?? 'Reporting refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const famReports = REPORT_CATALOG.filter((x) => x[3] === family);
   const currentPages = body?.pages ?? [];
   const totalPages = REPORT_CATALOG.reduce((a, x) => a + x[4], 0);
 
-  async function dl(scope: 'page' | 'report' | 'all') {
+  async function dl(scope: 'page' | 'report' | 'family' | 'all') {
     setError(null);
     try {
-      if (scope === 'all') {
-        for (const [, id] of REPORT_CATALOG) await reportsApi.downloadCsv(id, tenant, period);
+      if (scope === 'all' || scope === 'family') {
+        await reportsApi.downloadBundle(scope, scope === 'family' ? family : undefined, tenant, period);
       } else if (scope === 'report') {
         await reportsApi.downloadCsv(reportId, tenant, period);
       } else if (pageNo) {
@@ -282,6 +304,7 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-bold">Advanced Reporting</h1>
           <p className="text-xs text-[var(--ic-muted)] mt-1">
             {meta ? `${meta.client} · ${meta.classification} · v${meta.version} · updated ${meta.last_updated}` : 'Loading meta…'}
+            {!isDemoMode() && body?.source_status && <span className={`ml-2 text-[10px] ${body.source_status === 'live' ? 'text-emerald-400' : 'text-amber-400'}`}>{body.source_status === 'live' ? 'LIVE DATA' : 'PARTIAL / SOURCE UNAVAILABLE'}</span>}
             {isDemoMode() && <span className="ml-2 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold">DEMO DATA</span>}
           </p>
         </div>
@@ -290,16 +313,22 @@ export default function ReportsPage() {
             <label className="text-xs text-[var(--ic-muted)] flex items-center gap-1.5">Tenant
               <select value={String(tenant)} onChange={(e) => setTenantOverride(e.target.value)}
                 className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded px-2 py-1 text-sm">
-                {demoTenants.map((t) => <option key={t.id} value={String(t.id)}>{t.name}</option>)}
+                {(isDemoMode() ? demoTenants.map((t) => ({ id: t.id, name: t.name })) : availableTenants).map((t) => <option key={t.id} value={String(t.id)}>{t.name}</option>)}
               </select>
             </label>
           )}
           <label className="text-xs text-[var(--ic-muted)]">Period</label>
           <input type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)}
             className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded px-2 py-1 text-sm" />
-          <button onClick={() => dl('all')} className="text-xs px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 font-medium">⬇ All ({totalPages} pages)</button>
+          <button onClick={() => dl('all')} disabled={!tenant} className="text-xs px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 font-medium disabled:opacity-40">⬇ All ({totalPages} pages · ZIP)</button>
+          {user?.role === 'platform_admin' && <button onClick={refreshCurrentReport} disabled={refreshing || !tenant}
+            className="text-xs px-3 py-1.5 rounded border border-[var(--ic-border)] disabled:opacity-40">
+            {refreshing ? 'Refreshing…' : '↻ Refresh live data'}
+          </button>}
         </div>
       </div>
+
+      {tenantLoadError && <div className="mb-3 text-xs text-rose-400">{tenantLoadError}</div>}
 
       {/* level 1: families */}
       <div className="flex flex-wrap gap-1 border-b border-[var(--ic-border)] mb-3">
@@ -329,12 +358,14 @@ export default function ReportsPage() {
           <button key={i} onClick={() => setPageNo(i + 1)}
             className={`w-7 h-7 rounded-full text-xs border ${pageNo === i + 1 ? 'bg-cyan-600/30 border-cyan-500 text-[var(--ic-heading)]' : 'border-[var(--ic-border)] text-[var(--ic-muted)] hover:border-slate-500'}`}>{i + 1}</button>
         ))}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
+          <button onClick={() => dl('family')} className="text-xs px-2.5 py-1 rounded border border-[var(--ic-border)] hover:border-slate-500">⬇ Family ZIP</button>
           <button disabled={!pageNo} onClick={() => dl('page')}
             className="text-xs px-2.5 py-1 rounded border border-[var(--ic-border)] disabled:opacity-40 hover:border-slate-500">⬇ This page CSV</button>
           <button onClick={() => dl('report')} className="text-xs px-2.5 py-1 rounded border border-[var(--ic-border)] hover:border-slate-500">⬇ Report CSV</button>
-          <button title="PDF export arrives with Phase 6" disabled
-            className="text-xs px-2.5 py-1 rounded border border-[var(--ic-border)] opacity-40 cursor-not-allowed">PDF (Phase 6)</button>
+          <button disabled={isDemoMode()} onClick={() => reportsApi.downloadPdf(reportId, tenant, period, pageNo ?? undefined).catch((e) => setError(e?.message ?? 'PDF export failed'))}
+            title={isDemoMode() ? 'PDF export requires Live Mode' : 'Download PDF'}
+            className="text-xs px-2.5 py-1 rounded border border-[var(--ic-border)] disabled:opacity-40 hover:border-slate-500">⬇ PDF</button>
         </div>
       </div>
 

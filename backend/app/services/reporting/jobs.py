@@ -25,13 +25,13 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func as safunc, select
+from sqlalchemy import delete, func as safunc, select, or_
 
 from app.database import AsyncSessionLocal
-from app.models import Alert, Ticket
+from app.models import Alert, Ticket, Incident, VulnerabilityFinding, AgentProbe, AuditLog, PlaybookRun, Playbook
 from app.models_reporting import (
     KpiDaily, KpiMonthly, PlatformMetric, RptAlert, RptIncident,
-    RptTicketFact, RptExportLog,
+    RptTicketFact, RptExportLog, RptAsset, RptVulnerability, RptAuditEvent, RptPlaybookRun,
 )
 from app.services.reporting import kpi_defs as K
 
@@ -53,54 +53,166 @@ def _month_bounds(period: str) -> tuple[datetime, datetime]:
 
 
 async def _tenants(db) -> list[str]:
-    a = (await db.execute(select(RptAlert.tenant_id).distinct())).scalars().all()
-    t = (await db.execute(select(RptTicketFact.tenant_id).distinct())).scalars().all()
-    i = (await db.execute(select(RptIncident.tenant_id).distinct())).scalars().all()
-    return sorted(set(map(str, list(a) + list(t) + list(i))))
+    sources = [RptAlert, RptTicketFact, RptIncident, RptAsset, RptVulnerability,
+               RptAuditEvent, RptPlaybookRun]
+    values = []
+    for model in sources:
+        values.extend((await db.execute(select(model.tenant_id).distinct())).scalars().all())
+    return sorted(set(map(str, values)))
 
 
 # ---------------------------------------------------------------- job H ---
 async def job_h_ingest(db, lookback_hours: int = 2) -> dict:
-    """Incremental ETL: alerts -> rpt_alerts (+ incidents derived from tickets
-    linked to security alerts), tickets -> rpt_ticket_facts. Deduplicated by
-    natural key so re-runs are idempotent."""
+    """Idempotent ETL from live operational tables into reporting facts."""
     since = _utcnow() - timedelta(hours=lookback_hours)
-    stats = {"alerts": 0, "tickets": 0}
+    stats = {"alerts": 0, "tickets": 0, "incidents": 0, "vulnerabilities": 0,
+             "assets": 0, "audit_events": 0, "playbook_runs": 0}
 
-    alerts = (await db.execute(
-        select(Alert).where(Alert.created_at >= since))).scalars().all()
-    existing_a = set((await db.execute(
-        select(RptAlert.id, RptAlert.rule_name, RptAlert.detected_at)
-        .where(RptAlert.recorded_at >= since - timedelta(days=1)))).all())
-    for a in alerts:
-        sev = {"critical": "crit", "high": "high", "medium": "med",
-               "low": "low", "info": "low"}.get(a.severity, "low")
-        rp = a.raw_payload or {}
-        db.add(RptAlert(
-            tenant_id=str(a.org_id), severity=sev,
-            category=rp.get("category") or a.source,
-            source_zone=rp.get("zone") or "platform",
-            rule_name=a.title[:128], attack_id=rp.get("attack_id"),
-            qualified=bool(a.acked_by or a.ticket_uid),
-            false_positive=rp.get("disposition") == "benign",
-            detected_at=a.created_at, recorded_at=_utcnow(), source="platform"))
+    alerts = (await db.execute(select(Alert).where(Alert.created_at >= since))).scalars().all()
+    existing_alerts = set((await db.execute(select(
+        RptAlert.tenant_id, RptAlert.rule_name, RptAlert.detected_at
+    ).where(RptAlert.detected_at >= since - timedelta(days=1)))).all())
+    for item in alerts:
+        key = (str(item.org_id), item.title[:128], item.created_at)
+        if key in existing_alerts:
+            continue
+        severity = {"critical": "crit", "high": "high", "medium": "med",
+                    "low": "low", "info": "low"}.get(item.severity, "low")
+        raw = item.raw_payload or {}
+        db.add(RptAlert(tenant_id=str(item.org_id), severity=severity,
+            category=raw.get("category") or item.source, source_zone=raw.get("zone") or "platform",
+            rule_name=item.title[:128], attack_id=raw.get("attack_id"),
+            qualified=bool(item.acked_by or item.ticket_uid),
+            false_positive=raw.get("disposition") == "benign",
+            detected_at=item.created_at, recorded_at=_utcnow(), source="platform"))
+        existing_alerts.add(key)
         stats["alerts"] += 1
 
-    tickets = (await db.execute(
-        select(Ticket).where(Ticket.updated_at >= since) |
-        select(Ticket).where(Ticket.created_at >= since))).unique().scalars().all()
-    for t in tickets:
-        breached = bool(t.due_resolve_at and
-                        (t.resolved_at or _utcnow()) > t.due_resolve_at)
-        db.add(RptTicketFact(
-            tenant_id=str(t.org_id), ref=t.uid, category=t.category,
-            priority=t.priority, status=t.status, opened_at=t.created_at,
-            resolved_at=t.resolved_at, sla_breached=breached,
-            assignee=t.assignee, source="ticketing", recorded_at=_utcnow()))
+    tickets = (await db.execute(select(Ticket).where(or_(
+        Ticket.updated_at >= since, Ticket.created_at >= since)))).scalars().all()
+    ticket_refs = set((await db.execute(select(RptTicketFact.tenant_id, RptTicketFact.ref))).all())
+    for item in tickets:
+        tenant, ref = str(item.org_id), item.uid
+        breached = bool(item.due_resolve_at and (item.resolved_at or _utcnow()) > item.due_resolve_at)
+        existing = (await db.execute(select(RptTicketFact).where(
+            RptTicketFact.tenant_id == tenant, RptTicketFact.ref == ref))).scalars().first()
+        if existing:
+            existing.category, existing.priority, existing.status = item.category, item.priority, item.status
+            existing.opened_at, existing.resolved_at = item.created_at, item.resolved_at
+            existing.sla_breached, existing.assignee = breached, item.assignee
+            existing.recorded_at = _utcnow()
+        else:
+            db.add(RptTicketFact(tenant_id=tenant, ref=ref, category=item.category,
+                priority=item.priority, status=item.status, opened_at=item.created_at,
+                resolved_at=item.resolved_at, sla_breached=breached, assignee=item.assignee,
+                source="ticketing", recorded_at=_utcnow()))
         stats["tickets"] += 1
 
+    incidents = (await db.execute(select(Incident).where(or_(
+        Incident.updated_at >= since, Incident.created_at >= since)))).scalars().all()
+    for item in incidents:
+        tenant, ref = str(item.org_id), item.uid
+        severity = {"critical": "crit", "high": "high", "medium": "med",
+                    "low": "low", "info": "low"}.get(item.severity, "med")
+        existing = (await db.execute(select(RptIncident).where(
+            RptIncident.tenant_id == tenant, RptIncident.ref == ref))).scalars().first()
+        values = {"title": item.title, "severity": severity, "status": item.status,
+            "category": item.category, "scope": str(item.site_org_id or item.org_id),
+            "description": item.description, "started_at": item.created_at,
+            "detected_at": item.created_at, "closed_at": item.closed_at or item.resolved_at,
+            "source": "incident-response", "recorded_at": _utcnow()}
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            db.add(RptIncident(tenant_id=tenant, ref=ref, **values))
+        stats["incidents"] += 1
+
+    findings = (await db.execute(select(VulnerabilityFinding).where(
+        VulnerabilityFinding.last_seen_at >= since))).scalars().all()
+    changed_vulns = {(row.org_id, row.cve) for row in findings if row.cve}
+    for org_id, cve in changed_vulns:
+        all_rows = (await db.execute(select(VulnerabilityFinding).where(
+            VulnerabilityFinding.org_id == org_id, VulnerabilityFinding.cve == cve))).scalars().all()
+        if not all_rows:
+            continue
+        tenant = str(org_id)
+        asset_ids = {row.asset_id for row in all_rows if row.asset_id}
+        worst = max(all_rows, key=lambda row: float(row.cvss or 0))
+        all_resolved = all(row.status == "resolved" for row in all_rows)
+        existing = (await db.execute(select(RptVulnerability).where(
+            RptVulnerability.tenant_id == tenant, RptVulnerability.cve == cve))).scalars().first()
+        values = {
+            "severity": {"critical":"crit","high":"high","medium":"med","low":"low"}.get(worst.severity, "med"),
+            "cvss": max((float(row.cvss) for row in all_rows if row.cvss is not None), default=None),
+            "assets_affected": len(asset_ids) if asset_ids else len(all_rows),
+            "found_at": min((row.first_seen_at for row in all_rows if row.first_seen_at is not None), default=None),
+            "fixed_at": max(row.last_seen_at for row in all_rows if row.last_seen_at is not None) if all_resolved else None,
+            "perimeter": "endpoint",
+            "exploited_in_wild": next((row.raw.get("exploited_in_wild") for row in all_rows if isinstance(row.raw, dict) and isinstance(row.raw.get("exploited_in_wild"), bool)), None),
+            "patch_available": next((row.raw.get("patch_available") for row in all_rows if isinstance(row.raw, dict) and isinstance(row.raw.get("patch_available"), bool)), None),
+            "source": "vulnerability-management", "recorded_at": _utcnow(),
+        }
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            db.add(RptVulnerability(tenant_id=tenant, cve=cve, **values))
+        stats["vulnerabilities"] += 1
+
+
+    probes = (await db.execute(select(AgentProbe))).scalars().all()
+    for item in probes:
+        tenant, name = str(item.org_id), item.hostname
+        existing = (await db.execute(select(RptAsset).where(
+            RptAsset.tenant_id == tenant, RptAsset.name == name))).scalars().first()
+        values = {"asset_type": "endpoint", "managed": True, "monitored": True,
+                  "last_seen_at": item.last_seen, "source": "endpoint-agent", "recorded_at": _utcnow()}
+        if existing:
+            for key, value in values.items():
+                setattr(existing, key, value)
+        else:
+            db.add(RptAsset(tenant_id=tenant, name=name, **values))
+        stats["assets"] += 1
+
+    audit_rows = (await db.execute(select(AuditLog).where(AuditLog.timestamp >= since))).scalars().all()
+    for item in audit_rows:
+        tenant = str(item.org_id or "platform")
+        obj = str(item.resource_id or "")
+        existing = (await db.execute(select(RptAuditEvent).where(
+            RptAuditEvent.tenant_id == tenant, RptAuditEvent.actor == item.actor_name,
+            RptAuditEvent.action == item.action, RptAuditEvent.object_ref == obj,
+            RptAuditEvent.occurred_at == item.timestamp))).scalars().first()
+        if existing:
+            continue
+        db.add(RptAuditEvent(tenant_id=tenant, actor=item.actor_name, action=item.action,
+            object_ref=obj, severity="critical" if item.outcome == "blocked" else (
+                "warn" if item.outcome == "failure" else "info"),
+            ip=item.ip_address, occurred_at=item.timestamp, source="platform-audit",
+            recorded_at=_utcnow()))
+        stats["audit_events"] += 1
+
+    runs = (await db.execute(select(PlaybookRun, Playbook).join(
+        Playbook, Playbook.id == PlaybookRun.playbook_id
+    ).where(PlaybookRun.created_at >= since, PlaybookRun.org_id.is_not(None)))).all()
+    for run, playbook in runs:
+        tenant = str(run.org_id)
+        existing = (await db.execute(select(RptPlaybookRun).where(
+            RptPlaybookRun.tenant_id == tenant, RptPlaybookRun.playbook == playbook.name,
+            RptPlaybookRun.ran_at == (run.finished_at or run.created_at)))).scalars().first()
+        if existing:
+            continue
+        db.add(RptPlaybookRun(tenant_id=tenant, playbook=playbook.name,
+            trigger=run.incident_uid, actions=str(run.total_steps),
+            success=run.status == "completed", duration_s=(
+                (run.finished_at - run.started_at).total_seconds()
+                if run.finished_at and run.started_at else None),
+            manual_minutes_saved=None, ran_at=run.finished_at or run.created_at,
+            source="soar-execution", recorded_at=_utcnow()))
+        stats["playbook_runs"] += 1
+
     await db.commit()
-    logger.info("job H ingest: %s", stats)
+    logger.info("reporting ETL completed: %s", stats)
     return stats
 
 
@@ -144,8 +256,9 @@ async def job_h_kpis(db, day: str | None = None) -> dict:
         auto = K.automation_rate([(i.status, i.auto_closed) for i in inc]) if inc else None
         if auto is not None:
             vals["automation_pct"] = (auto, "%")
-        crit = sum(1 for i in inc if i.severity == "crit")
-        vals["incidents_crit"] = (crit, "count")
+        if inc:
+            crit = sum(1 for i in inc if i.severity == "crit")
+            vals["incidents_crit"] = (crit, "count")
         if tk:
             vals["tickets_opened"] = (len(tk), "count")
             br = sum(1 for t in tk if t.sla_breached)
@@ -225,12 +338,12 @@ async def job_m_freeze(db) -> dict:
         # posture snapshot from monthly components
         comps = {r.kpi: r.value for r in (await db.execute(select(KpiMonthly).where(
             KpiMonthly.tenant_id == ten, KpiMonthly.month == prev))).scalars().all()}
+        # Composite posture is published only when its component scores are
+        # measured. Alert FP rate and incident counts are not posture scores.
         vuln_sub = None
-        if "fp_rate" in comps:  # detection quality proxy until scanner wired
-            vuln_sub = max(0.0, 100.0 - comps.get("fp_rate", 0.0) * 2)
         cov = comps.get("coverage_pct")
         comp = comps.get("compliance_pct")
-        inc_sub = max(0.0, 100.0 - comps.get("incidents_crit", 0.0) * 5.0)
+        inc_sub = None
         ps = K.posture_score(vuln_sub, cov, comp, inc_sub)
         if ps is not None:
             await db.execute(delete(KpiMonthly).where(
@@ -258,6 +371,8 @@ class ReportingScheduler:
         self._task = None
 
     async def start(self):
+        if self._task is not None and not self._task.done():
+            return
         try:
             async with AsyncSessionLocal() as db:
                 await job_h_ingest(db)
@@ -283,6 +398,15 @@ class ReportingScheduler:
                             await job_m_freeze(db)
             except Exception as e:  # noqa: BLE001
                 logger.warning("reporting scheduled pass failed: %s", e)
+
+    async def stop(self):
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
 
 
 scheduler = ReportingScheduler()

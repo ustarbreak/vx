@@ -216,7 +216,7 @@ async def build_threatintel(tenant: str, period: str) -> list:
         if alerts:
             mx = alerts[0][1] or 1
             for tid, n in alerts:
-                heat.append([TACT.get(tid, tid), max(1, round(100 * n / mx))])
+                heat.append([TACT.get(tid, tid), round(100 * n / mx) if mx else 0])
         p2blocks = [["H", "Tactiques observ\u00e9es", heat]] if heat else \
             [_note("Aucune alerte cartographi\u00e9e sur la p\u00e9riode.")]
         if alerts:
@@ -413,7 +413,7 @@ async def build_incident(tenant: str, period: str) -> list:
                          [["D\u00e9but activit\u00e9", i.started_at.strftime("%H:%M") if i.started_at else NA, NA,
                            "horloge technique"],
                           ["D\u00e9tection", i.detected_at.strftime("%H:%M") if i.detected_at else NA,
-                           since(i.started_at, i.detected_at), i.detection_method or "corrélation plateforme"],
+                           since(i.started_at, i.detected_at), i.detection_method or NA],
                           ["Confinement", i.contained_at.strftime("%H:%M") if i.contained_at else NA,
                            since(i.detected_at, i.contained_at),
                            "playbook automatique" if i.auto_closed else "action analyste"],
@@ -453,7 +453,8 @@ async def build_soar(tenant: str, period: str) -> list:
                     _empty_unavailable("Performance par sc\u00e9nario"),
                     _empty_unavailable("Fiabilit\u00e9")]
         ok = [r for r in runs if r.success]
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs])
+        measured_runs = [r for r in runs if r.manual_minutes_saved is not None]
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
         auto = K.automation_rate([(i.status, i.auto_closed) for i in inc]) if inc else None
         by_pb = {}
         for r in runs:
@@ -463,10 +464,11 @@ async def build_soar(tenant: str, period: str) -> list:
             e["ok"] += 1 if r.success else 0
             if r.duration_s:
                 e["dur"].append(r.duration_s)
-            e["saved"] += r.manual_minutes_saved or 0
+            if r.manual_minutes_saved is not None:
+                e["saved"] += r.manual_minutes_saved
         all_durs = [d for e in by_pb.values() for d in e["dur"]]
         avg_dur = sum(all_durs) / len(all_durs) if all_durs else None
-        saved_min_total = hours * 60 if hours else 0
+        saved_min_total = hours * 60 if hours is not None else None
         p1 = ["Automatisation op\u00e9rationnelle", "Playbooks ex\u00e9cut\u00e9s et temps \u00e9conomis\u00e9.", [
             ["K", [["Ex\u00e9cutions", f"{len(runs):,}", "= tous playbooks", "3"],
                    ["Succ\u00e8s", f"{round(100*len(ok)/max(len(runs),1),1)} %",
@@ -477,10 +479,10 @@ async def build_soar(tenant: str, period: str) -> list:
                     "= comparaison temps manuel estim\u00e9", "2"]]],
             (["G", "Part d'incidents automatis\u00e9e", round(auto)] if auto is not None else
              _note("Aucun incident clos sur la p\u00e9riode pour mesurer l'automatisation."))]]
-        bars = [[name, max(1, round(100 * e["saved"] / max(saved_min_total, 1))), c,
-                 f"{e['saved']/60:.0f} h"]
-                for (name, e), c in zip(sorted(by_pb.items(), key=lambda x: -x[1]["saved"])[:6],
-                                        ["3", "1", "2", "w", "o", "b"])]
+        measured_pb = [(name, e) for name, e in by_pb.items() if e["saved"] > 0]
+        bars = [[name, round(100 * e["saved"] / saved_min_total), color, f"{e['saved']/60:.1f} h"]
+                for (name, e), color in zip(sorted(measured_pb, key=lambda x: -x[1]["saved"])[:6],
+                                             ["3", "1", "2", "w", "o", "b"])] if saved_min_total else []
         p2 = ["Performance par sc\u00e9nario", "R\u00e9partition du gain op\u00e9rationnel.", [
             ["B", "Temps gagn\u00e9 par playbook", bars],
             ["T", "Playbooks", ["Nom", "D\u00e9clencheur", "Actions", "Ex\u00e9c.", "Succ\u00e8s", "Dur\u00e9e moy."],
@@ -542,7 +544,7 @@ async def build_tickets(tenant: str, period: str) -> list:
                     "= horodatages r\u00eels", "2"]]],
             ["B", "R\u00e9partition par priorit\u00e9",
              [[p.upper(), round(100 * n / len(tk)), pri_cols.get(p, "o")]
-              for p, n in sorted(pris.items())]]]
+              for p, n in sorted(pris.items())]]]]
         p2 = ["R\u00e9partition", "Cat\u00e9gories et file active.", [
             ["D", "Par cat\u00e9gorie", [[k, v, c] for (k, v), c in
               zip(sorted(cats.items(), key=lambda x: -x[1]), ["1", "2", "3", "w", "b", "o"])]],
@@ -621,7 +623,7 @@ async def build_vuln(tenant: str, period: str) -> list:
              [[k, v, c] for (k, v), c in zip(sorted(per.items(), key=lambda x: -x[1]),
                                              ["b", "h", "w", "1", "2", "3"])]],
             ["T", "Top critiques ouvertes", ["CVE", "CVSS", "Actifs", "D\u00e9couverte", "\u00c9ch\u00e9ance SLA"],
-             [[v.cve, f"{v.cvss:.1f}" if v.cvss else NA, str(v.assets_affected or 1),
+             [[v.cve, f"{v.cvss:.1f}" if v.cvss else NA, str(v.assets_affected) if v.assets_affected is not None else NA,
                v.found_at.strftime("%d/%m") if v.found_at else NA,
                v.sla_due_at.strftime("%d/%m") if v.sla_due_at else NA] for v in crit_open[:10]]]
             if crit_open else _note("Aucune vuln\u00e9rabilit\u00e9 critique ouverte.", "o")]]
@@ -717,61 +719,63 @@ async def build_cloud(tenant: str, period: str) -> list:
 # ==================================================================== 5 INFRA
 async def build_infra(tenant: str, period: str) -> list:
     async with AsyncSessionLocal() as db:
-        plats = (await db.execute(select(PlatformMetric).where(
+        metrics = (await db.execute(select(PlatformMetric).where(
             PlatformMetric.tenant_id == tenant,
             PlatformMetric.bucket.like(period + "%")).order_by(PlatformMetric.bucket)
         )).scalars().all()
         assets = (await db.execute(select(RptAsset).where(
-            RptAsset.tenant_id == tenant)).scalars().all())
-        conn_up = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.asset_type == "connector",
-            RptAsset.agent_uptime_pct >= 99))).scalar() or 0
-        conn_tot = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.asset_type == "connector"))).scalar() or 0
-        if not plats and not assets:
-            return [_empty_unavailable("Capacit\u00e9 & performance"),
+            RptAsset.tenant_id == tenant))).scalars().all()
+        if not metrics and not assets:
+            return [_empty_unavailable("Capacité & performance"),
                     _empty_unavailable("Composants"),
-                    _empty_unavailable("S\u00e9curit\u00e9 interne")]
-        last = plats[-1] if plats else None
-        p1 = ["Capacit\u00e9 & performance", "Mesures agr\u00e9g\u00e9es de la plateforme.", [
-            ["K", [["Ingestion", f"{last.ingestion_eps:,.0f} EPS" if last and last.ingestion_eps else NA,
-                    "= moyenne p\u00e9riode", "1"],
-                   ["Latence de collecte", f"{last.collect_latency_s:.1f} s" if last and last.collect_latency_s else NA,
-                    "= capteur \u2192 stockage", "o"],
-                   ["Interrogations p95", f"{last.query_p95_s:.1f} s" if last and last.query_p95_s else NA,
-                    "= exp\u00e9rience utilisateur", "2"],
-                   ["Connecteurs actifs", f"{conn_up}/{conn_tot}" if conn_tot else NA,
-                    "= collecte temps r\u00e9el", "3" if conn_tot else "w"],
-                   ["R\u00e9tention", f"{last.retention_months} mois" if last and last.retention_months else NA,
-                    "= politique contractuelle", "o"]]],
+                    _empty_unavailable("Sécurité interne")]
+        last = metrics[-1] if metrics else None
+        p1 = ["Capacité & performance", "Télémétrie réellement enregistrée pour la période.", [
+            ["K", [["Ingestion", f"{last.ingestion_eps:,.0f} EPS" if last and last.ingestion_eps is not None else NA,
+                    "= mesure enregistrée", "1"],
+                   ["Latence de collecte", f"{last.collect_latency_s:.1f} s" if last and last.collect_latency_s is not None else NA,
+                    "= mesure enregistrée", "o"],
+                   ["Interrogations p95", f"{last.query_p95_s:.1f} s" if last and last.query_p95_s is not None else NA,
+                    "= mesure enregistrée", "2"],
+                   ["Connecteurs déclarés", f"{last.connectors_up}/{last.connectors_total}"
+                    if last and last.connectors_up is not None and last.connectors_total is not None else NA,
+                    "= télémétrie de connecteurs", "3"],
+                   ["Rétention", f"{last.retention_months} mois" if last and last.retention_months is not None else NA,
+                    "= valeur de configuration mesurée", "o"]]],
             (["B", "Utilisation des ressources",
-              [["Calcul", round(last.compute_used_pct or 0), "1"],
-               ["M\u00e9moire", round(last.memory_used_pct or 0), "2"],
-               ["Stockage", round(last.storage_used_pct or 0), "3"],
-               ["R\u00e9seau", round(last.network_used_pct or 0), "o"]]] if last else
-             _note("T\u00e9l\u00e9m\u00e9trie plateforme non disponible pour la p\u00e9riode."))]]
-        avail = f"{last.availability_pct:.2f} %" if last and last.availability_pct is not None else NA
-        p2 = ["Composants", "Disponibilit\u00e9 par fonction de la plateforme.", [
-            ["T", "\u00c9tat", ["Fonction", "R\u00f4le", "Disponibilit\u00e9", "\u00c9tat"],
-             [["Collecte", "Ingestion des flux", avail,
-               "@low:OK" if last and (last.availability_pct or 0) >= 99.9 else "@med:\u00e0 surveiller"],
-              ["Normalisation", "Standardisation & enrichissement", NA, "@low:OK"],
-              ["D\u00e9tection", "Corrélation & alertes", NA, "@low:OK"],
-              ["Orchestration", "Ex\u00e9cution des playbooks", NA, "@low:OK"],
-              ["Interface", "Visualisation & exports", NA, "@low:OK"]]]]]
-        p3 = ["S\u00e9curit\u00e9 interne", "Contr\u00f4les appliqu\u00e9s \u00e0 la plateforme elle-m\u00eame.", [
-            ["T", "Contr\u00f4les", ["Contr\u00f4le", "Description", "Statut"],
-             [["Chiffrement de bout en bout", "Donn\u00e9es en transit et au repos",
-               "@low:Conforme" if last and last.encryption_ok else "@med:\u00e0 v\u00e9rifier"],
-              ["Authentification forte", "Double facteur sur tous les acc\u00e8s",
-               "@low:Conforme" if last and last.mfa_enforced else "@med:Partiel"],
-              ["Journal d'audit", "Actions administratrices trac\u00e9es",
-               "@low:Conforme" if last and last.audit_logged else "@med:Partiel"],
-              ["Moindre privil\u00e8ge", "R\u00f4les et droits revus p\u00e9riodiquement", "@low:Conforme"]]],
-            ["L", "Continuit\u00e9", [
-                "Architecture redond\u00e9e sans point de d\u00e9faillance unique.",
-                "Sauvegardes v\u00e9rifi\u00e9es par tests de restauration p\u00e9riodiques.",
-                "Objectifs de reprise (RTO/RPO) contractualis\u00e9s par niveau de service."]]]]
+              [[label, round(value), color] for label, value, color in [
+                  ("Calcul", last.compute_used_pct, "1"), ("Mémoire", last.memory_used_pct, "2"),
+                  ("Stockage", last.storage_used_pct, "3"), ("Réseau", last.network_used_pct, "o")]
+               if value is not None]] if last and any(value is not None for value in [
+                   last.compute_used_pct, last.memory_used_pct, last.storage_used_pct, last.network_used_pct])
+             else _note("Télémétrie de capacité non disponible pour la période."))
+        ]]
+        availability = f"{last.availability_pct:.2f} %" if last and last.availability_pct is not None else NA
+        p2 = ["Composants", "État des composants uniquement si une mesure existe.", [
+            ["T", "État", ["Fonction", "Rôle", "Disponibilité", "État"], [
+                ["Collecte", "Ingestion des flux", availability,
+                 "@low:Mesuré" if last and last.availability_pct is not None else "@med:Non mesuré"],
+                ["Normalisation", "Standardisation & enrichissement", NA, "@med:Non mesuré"],
+                ["Détection", "Corrélation & alertes", NA, "@med:Non mesuré"],
+                ["Orchestration", "Exécution des playbooks", NA, "@med:Non mesuré"],
+                ["Interface", "Visualisation & exports", NA, "@med:Non mesuré"]
+            ]]]
+        ]
+        controls = []
+        if last:
+            controls = [
+                ["Chiffrement", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.encryption_ok else "non_compliant")],
+                ["MFA", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.mfa_enforced else "non_compliant")],
+                ["Journal d'audit", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.audit_logged else "non_compliant")]
+            ]
+        p3 = ["Sécurité interne", "Contrôles et preuves disponibles.", [
+            (["T", "Contrôles", ["Contrôle", "Source", "Statut"], controls]
+             if controls else _note("Aucune télémétrie de contrôle de sécurité plateforme disponible.")),
+            _note("La redondance, les sauvegardes et les objectifs RTO/RPO ne sont pas déclarés conformes sans preuves de tests.")
+        ]]
         return [p1, p2, p3]
 
 
@@ -799,29 +803,31 @@ async def build_network(tenant: str, period: str) -> list:
             sites.setdefault(m.site or "si\u00e8ge", []).append(m)
         p1 = ["Qualit\u00e9 de service", "Moyennes p\u00e9riodiques consolid\u00e9es.", [
             ["K", [["Latence moyenne", f"{lat:.1f} ms" if lat is not None else NA, "= seuil 30 ms",
-                    "o" if (lat or 1e9) < 30 else "w"],
+                    "o" if lat is not None and lat < 30 else "w"],
                    ["Gigue", f"{jit:.1f} ms" if jit is not None else NA, "= voix & visio",
-                    "o" if (jit or 1e9) < 15 else "w"],
+                    "o" if jit is not None and jit < 15 else "w"],
                    ["Perte de paquets", f"{loss:.2f} %" if loss is not None else NA, "= qualit\u00e9 r\u00e9elle",
-                    "o" if (loss or 1) < 0.5 else "b"],
+                    "o" if loss is not None and loss < 0.5 else "b"],
                    ["Bande utilis\u00e9e", f"{bw:.0f} %" if bw is not None else NA, "= pic de charge",
-                    "w" if (bw or 0) > 80 else "1"]]]]]
+                    "w" if bw is not None and bw > 80 else "1"]]]]]
         rows = []
         for site, mm in sorted(sites.items()):
             l = [x.avg_value for x in mm if x.metric == "latency_ms" and x.avg_value is not None]
             u = [x.avg_value for x in mm if x.metric == "uptime_pct" and x.avg_value is not None]
             rows.append([site, str(len(mm)), f"{sum(l)/len(l):.1f} ms" if l else NA,
                          f"{sum(u)/len(u):.2f} %" if u else NA,
-                         "@low:OK" if u and sum(u) / len(u) >= 99.5 else "@med:D\u00e9gradation"])
+                         "@med:Non mesur\u00e9" if not u else ("@low:OK" if sum(u) / len(u) >= 99.5 else "@med:D\u00e9gradation")])
         p2 = ["Sites & \u00e9quipements", "Vue consolid\u00e9e par implantation.", [
             ["T", "Sites", ["Site", "Mesures", "Latence moy.", "Disponibilit\u00e9", "\u00c9tat"], rows]]]
         trend = {}
         for m in ms:
             if m.metric == "latency_ms":
-                trend.setdefault(m.bucket, []).append(m.avg_value or 0)
+                if m.avg_value is not None:
+                    trend.setdefault(m.bucket, []).append(m.avg_value)
         spark = [round(sum(v) / len(v)) for _, v in sorted(trend.items())][-14:]
         p3 = ["Tendances", "\u00c9volution quotidienne.", [
-            ["S", "Latence moyenne par jour", spark if len(spark) > 1 else [0, 0]],
+            (["S", "Latence moyenne par jour", spark] if len(spark) > 1 else
+             _note("Historique insuffisant pour calculer une tendance fiable.")),
             ["L", "Actions recommand\u00e9es", [
                 "Qualifier le lien des sites sous 99,5 % de disponibilit\u00e9.",
                 "Dimensionner les liens satur\u00e9s au-del\u00e0 de 80 % d'utilisation r\u00e9currente.",
@@ -887,7 +893,9 @@ async def build_endpoint(tenant: str, period: str) -> list:
                     _empty_unavailable("Sant\u00e9 des agents"),
                     _empty_unavailable("D\u00e9tections & quarantaine")]
         last = eh[-1]
-        tot = max(last.total_endpoints or 1, 1)
+        tot = last.total_endpoints or 0
+        if tot <= 0:
+            return [_empty_unavailable("Protection des postes"), _empty_unavailable("Santé des agents"), _empty_unavailable("Détections & quarantaine")]
         prot_pct = round(100 * (last.protected or 0) / tot)
         out_pct = round(100 * (last.outdated_agent or 0) / tot)
         p1 = ["Protection des postes", "Parc sous agent de s\u00e9curit\u00e9.", [
@@ -897,17 +905,17 @@ async def build_endpoint(tenant: str, period: str) -> list:
                    ["Agents obsol\u00e8tes", str(last.outdated_agent or 0), "= mise \u00e0 jour requise",
                     "w" if (last.outdated_agent or 0) else "o"],
                    ["Chiffrement disque", f"{last.disk_encrypted_pct:.0f} %" if last.disk_encrypted_pct is not None else NA,
-                    "= objectif 100 %", "o" if (last.disk_encrypted_pct or 0) >= 95 else "w"]]],
+                    "= objectif 100 %", "o" if last.disk_encrypted_pct is not None and last.disk_encrypted_pct >= 95 else "w"]]],
             ["G", "Couverture de protection", prot_pct]]]
-        trend = [round(100 * (x.protected or 0) / max(x.total_endpoints or 1, 1)) for x in eh]
+        trend = [round(100 * (x.protected or 0) / x.total_endpoints) for x in eh if x.total_endpoints and x.total_endpoints > 0]
         p2 = ["Sant\u00e9 des agents", "\u00c9volution de la couverture.", [
-            ["S", "Postes prot\u00e9g\u00e9s (%)", trend[-14:] if len(trend) > 1 else [prot_pct, prot_pct]],
+            ["S", "Postes prot\u00e9g\u00e9s (%)", trend[-14:] if len(trend) > 1 else []],
             ["B", "R\u00e9partition par \u00e9tat",
              [["Sains", prot_pct, "o"], ["Agents \u00e0 mettre \u00e0 jour", out_pct, "w"],
-              ["Hors ligne", max(0, 100 - prot_pct - out_pct), "b"]]]]]
+              ["Non protégés / état non vérifié", max(0, 100 - prot_pct - out_pct), "b"]]]]]
         p3 = ["D\u00e9tections & quarantaine", "Menaces neutralis\u00e9es sur les postes.", [
             ["K", [["D\u00e9tections p\u00e9riode", str(sum(x.detections or 0 for x in eh)), "= malware/pua", "h"],
-                   ["Items en quarantaine", str(last.quarantined_items or 0), "= en attente d'analyse",
+                   ["Items en quarantaine", str(last.quarantined_items) if last.quarantined_items is not None else NA, "= en attente d'analyse",
                     "w" if (last.quarantined_items or 0) > 20 else "o"]]],
             ["L", "Bons r\u00e9flexes", [
                 "Purger les quarantaines apr\u00e8s analyse, jamais en aveugle.",
@@ -976,7 +984,7 @@ async def build_regulatory(tenant: str, period: str) -> list:
         for f in sorted(by_fw):
             sc = K.compliance_score([c.status for c in by_fw[f]])
             kpis.append([f, f"{round(sc)} %" if sc is not None else NA,
-                         f"= {len(by_fw[f])} exigences", "o" if (sc or 0) >= 80 else "w"])
+                         f"= {len(by_fw[f])} exigences", "o" if sc is not None and sc >= 80 else "w"])
         p1 = ["Obligations r\u00e9glementaires", "Exigences suivies par cadre l\u00e9gal ou sectoriel.", [
             ["T", "Cartographie", ["Cadre", "Exigence suivie", "R\u00e9f.", "Contr\u00f4le Infracentra", "Statut"],
              [[f, c.requirement[:60], c.ref, c.control_name or NA, badge(c.status)]
@@ -1054,118 +1062,108 @@ async def build_audit(tenant: str, period: str) -> list:
 
 # ======================================================================== 9 ROI
 async def build_roi(tenant: str, period: str) -> list:
+    """ROI uses only measured execution savings and configured commercial inputs."""
     async with AsyncSessionLocal() as db:
         params = (await db.execute(select(RptROIParameter).where(
             RptROIParameter.tenant_id == tenant))).scalars().first()
-        cur = await _kpi(db, tenant, period)
         start, end = _month_range(period)
         runs = (await db.execute(select(RptPlaybookRun).where(
             RptPlaybookRun.tenant_id == tenant,
             RptPlaybookRun.ran_at >= start, RptPlaybookRun.ran_at < end))).scalars().all()
-        inc = (await db.execute(select(RptIncident).where(
-            RptIncident.tenant_id == tenant,
-            RptIncident.detected_at >= start, RptIncident.detected_at < end))).scalars().all()
+        measured_runs = [r for r in runs if r.success and r.manual_minutes_saved is not None]
         if params is None:
-            return [_empty_unavailable("Gains \u00e9conomiques"),
-                    _empty_unavailable("D\u00e9tails des gains"),
-                    _empty_unavailable("Hypoth\u00e8ses financi\u00e8res")]
-        hourly = params.hourly_cost or 65.0
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs]) or 0.0
-        labor_saved = hours * hourly
-        avoided = sum(1 for i in inc if i.auto_closed) * (params.incident_avg_cost or 0) / 12.0
-        downtime_avoided = 0.0  # requires asset inventory mapping (Phase 3 job M)
-        insurance = (params.insurance_discount_pct or 0) * 120.0  # monthly premium delta proxy
-        total_gain = labor_saved + avoided + insurance
-        cost = (params.platform_cost_month or 0)
-        roi_pct = round(100 * (total_gain - cost) / max(cost, 1)) if cost else None
-        payback_m = round(cost / max(total_gain / 12.0, 0.01), 1) if total_gain else None
-        p1 = ["Gains \u00e9conomiques", f"P\u00e9riode {period} \u2014 param\u00e8tres financiers valid\u00e9s par administration (jamais saisis par le client).", [
-            ["K", [["Temps analyste \u00e9vit\u00e9", f"{hours:.0f} h", f"= {labor_saved:,.0f} \u20ac", "1"],
-                   ["Incidents \u00e9vit\u00e9s", str(sum(1 for i in inc if i.auto_closed)),
-                    f"= {avoided:,.0f} \u20ac/mois amortis", "2"],
-                   ["Gain assurance", f"{insurance:,.0f} \u20ac", "= remise prime annualis\u00e9e", "3"],
-                   ["Coût plateforme", f"{cost:,.0f} \u20ac/mois", "= abonnement", "w"],
-                   ["ROI p\u00e9riode", f"{roi_pct:+.0f} %" if roi_pct is not None else NA,
-                    "= (gains-co\u00fbts)/co\u00fbts", "o" if (roi_pct or 0) > 0 else "b"],
-                   ["Retour \u00e0 l'\u00e9quilibre", f"{payback_m} mois" if payback_m is not None else NA,
-                    "= co\u00fbt / gain mensuel", "o"]]],
-            ["B", "Composition du gain (\u20ac/mois)",
-             [["Temps \u00e9vit\u00e9", round(labor_saved / 12), "1"],
-              ["Incidents \u00e9vit\u00e9s", round(avoided), "2"],
-              ["Assurance", round(insurance / 12), "3"],
-              ["Co\u00fbt plateforme", -round(cost), "b"]]]]]
-        p2 = ["D\u00e9tails des gains", "Ventilation par source mesurable.", [
-            ["T", "Source de valeur", ["Origine", "Volume", "Gain mensuel", "Hypoth\u00e8se"],
-             [["Automatisation des t\u00e2ches", f"{len(runs)} executions", f"{labor_saved/12:,.0f} \u20ac",
-               f"taux horaire {hourly:.0f} \u20ac"],
-              ["Incidents clos sans action humaine",
-               f"{sum(1 for i in inc if i.auto_closed)}/mois", f"{avoided:,.0f} \u20ac",
-               f"co\u00fbt moyen \u00e9vit\u00e9 {params.incident_avg_cost:,.0f} \u20ac amorti"],
-              ["Prime d'assurance", "=/remise accord\u00e9e", f"{insurance/12:,.0f} \u20ac",
-               f"remise {params.insurance_discount_pct:.0f}% sur prime de r\u00e9f\u00e9rence"]]],
-            ["M", "Pr\u00e9cision", [[
-                "Les gains reposent sur des hypoth\u00e8ses financi\u00e8res param\u00e9tr\u00e9es c\u00f4t\u00e9 plateforme ; ils ne constituent pas un engagement contractuel.", "w"]]]]]
-        p3 = ["Hypoth\u00e8ses financi\u00e8res", "Transparence compl\u00e8te du calcul.", [
-            ["T", "Param\u00e8tres", ["Param\u00e8tre", "Valeur", "Mis \u00e0 jour"],
-             [["Taux horaire analyste", f"{hourly:.0f} \u20ac/h",
-               params.updated_at.strftime("%d/%m/%Y") if params.updated_at else NA],
-              ["Co\u00fbt moyen d'un incident", f"{params.incident_avg_cost:,.0f} \u20ac", ""],
-              ["Co\u00fbt heure d'indisponibilit\u00e9", f"{params.downtime_cost_hr:,.0f} \u20ac", ""],
-              ["Prime de base", f"{params.insurance_base_pct:.0f} %", ""],
-              ["Remise li\u00e9e aux services", f"{params.insurance_discount_pct:.0f} %", ""],
-              ["Abonnement mensuel", f"{cost:,.0f} \u20ac", ""]]],
-            ["L", "Gouvernance", [
-                "Ces valeurs sont modifiables uniquement par l'administration Infracentra.",
-                "Chaque recalcul est horodat\u00e9 et auditable.",
-                "Le client peut demander une revue des hypoth\u00e8ses \u00e0 chaque \u00e9ch\u00e9ance."]]]]
+            return [_empty_unavailable("Gains économiques"),
+                    _empty_unavailable("Détails des gains"),
+                    _empty_unavailable("Hypothèses financières")]
+        hourly = params.hourly_cost
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
+        labor_saved = hours * hourly if hours is not None and hourly is not None else None
+        cost = params.platform_cost_month
+        roi_pct = round(100 * (labor_saved - cost) / cost) if labor_saved is not None and cost and cost > 0 else None
+        payback_m = round(cost / labor_saved, 1) if labor_saved and cost and labor_saved > 0 else None
+        p1 = ["Gains économiques", f"Période {period} — calcul limité aux économies directement mesurées.", [
+            ["K", [["Temps analyste économisé", f"{hours:.1f} h" if hours is not None else NA,
+                   "= uniquement runs avec temps manuel documenté", "1"],
+                  ["Valeur du temps mesuré", f"{labor_saved:,.0f} €" if labor_saved is not None else NA,
+                   "= heures mesurées × taux configuré", "2"],
+                  ["Coût plateforme", f"{cost:,.0f} €/mois" if cost is not None and cost > 0 else NA,
+                   "= valeur commerciale configurée", "w"],
+                  ["ROI mesuré", f"{roi_pct:+.0f} %" if roi_pct is not None else NA,
+                   "= gains de temps mesurés uniquement", "o" if roi_pct is not None and roi_pct > 0 else "b"],
+                  ["Retour à l'équilibre", f"{payback_m} mois" if payback_m is not None else NA,
+                   "= coût / économie mensuelle mesurée", "o"]]],
+            _note("Les coûts d'incident évités et remises d'assurance sont exclus tant qu'ils ne sont pas appuyés par des données vérifiables.")
+        ]]
+        p2 = ["Détails des gains", "Ventilation des économies réellement mesurées.", [
+            ["T", "Automatisations mesurées", ["Playbook", "Volume", "Temps manuel évité", "Taux horaire"],
+             [[r.playbook, "1 exécution", f"{r.manual_minutes_saved:.1f} min",
+               f"{hourly:.2f} €/h" if hourly is not None else NA] for r in measured_runs[:20]]]
+             if measured_runs else _note("Aucune exécution ne contient de temps manuel évité validé.")]]
+        p3 = ["Hypothèses financières", "Paramètres contrôlés par l'administration Infracentra.", [
+            ["T", "Paramètres", ["Paramètre", "Valeur", "Mis à jour"], [
+                ["Taux horaire analyste", f"{hourly:.2f} €/h" if hourly is not None else NA,
+                 params.updated_at.strftime("%d/%m/%Y") if params.updated_at else NA],
+                ["Coût moyen incident", f"{params.incident_avg_cost:,.0f} €" if params.incident_avg_cost is not None else NA, ""],
+                ["Coût heure indisponibilité", f"{params.downtime_cost_hr:,.0f} €" if params.downtime_cost_hr is not None else NA, ""],
+                ["Coût mensuel plateforme", f"{cost:,.0f} €" if cost is not None else NA, ""]]],
+            _note("Les hypothèses financières ne sont pas assimilées à des économies réalisées.")
+        ]]
         return [p1, p2, p3]
 
 
 # ===================================================================== 19 VALUE
 async def build_value(tenant: str, period: str) -> list:
+    """Client value summary; every outcome is backed by a reporting fact."""
     async with AsyncSessionLocal() as db:
         start, end = _month_range(period)
         cur = await _kpi(db, tenant, period)
         runs = (await db.execute(select(RptPlaybookRun).where(
             RptPlaybookRun.tenant_id == tenant,
             RptPlaybookRun.ran_at >= start, RptPlaybookRun.ran_at < end))).scalars().all()
-        inc = (await db.execute(select(RptIncident).where(
+        incidents = (await db.execute(select(RptIncident).where(
             RptIncident.tenant_id == tenant,
             RptIncident.detected_at >= start, RptIncident.detected_at < end))).scalars().all()
-        vuln_fixed = (await db.execute(select(safunc.count()).select_from(RptVulnerability).where(
-            RptVulnerability.tenant_id == tenant,
-            RptVulnerability.fixed_at >= start, RptVulnerability.fixed_at < end))).scalar() or 0
-        assets = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.monitored.is_(True)))).scalar() or 0
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs]) or 0.0
+        vuln_rows = (await db.execute(select(RptVulnerability).where(
+            RptVulnerability.tenant_id == tenant))).scalars().all()
+        assets = (await db.execute(select(RptAsset).where(
+            RptAsset.tenant_id == tenant, RptAsset.monitored.is_(True)))).scalars().all()
+        fixed = [v for v in vuln_rows if v.fixed_at and start <= v.fixed_at < end]
+        measured_runs = [r for r in runs if r.success and r.manual_minutes_saved is not None]
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
         mttd, mttr = cur.get("mttd_min"), cur.get("mttr_min")
-        p1 = ["Valeur livr\u00e9e", "Ce que les services ont concr\u00e8tement apport\u00e9 sur la p\u00e9riode.", [
-            ["K", [["Actifs sous surveillance", str(assets) if assets else NA, "= p\u00e9rim\u00e8tre couvert", "1"],
-                   ["Heures \u00e9conomis\u00e9es", f"{hours:.0f} h" if hours else NA,
-                    "= automatisations utiles", "2"],
-                   ["Vuln\u00e9rabilit\u00e9s corrig\u00e9es", str(vuln_fixed), "= preuves horodat\u00e9es", "3"],
-                   ["Incidents trait\u00e9s", str(len(inc)) if inc else NA,
-                    f"= {sum(1 for i in inc if i.auto_closed)} automatis\u00e9s", "o"]]],
-            ["B", "R\u00e9partition des heures \u00e9conomis\u00e9es",
-             [[r.playbook[:30], round(100 * (r.manual_minutes_saved or 0) / max(hours * 60, 1)), c]
-              for r, c in zip(sorted(runs, key=lambda x: -(x.manual_minutes_saved or 0))[:6],
-                              ["1", "2", "3", "o", "w", "b"])]]
-            if runs else _note("Aucune automatisation mesur\u00e9e sur la p\u00e9riode.")]]
-        deliv = [["Supervision continue", f"{assets} actifs surveill\u00e9s", badge("active")],
-                 ["R\u00e9ponse \u00e0 incident", f"MTTD {K.fmt_min(mttd)} / MTTR {K.fmt_min(mttr)}",
-                  badge("active")],
-                 ["Gestion des vuln\u00e9rabilit\u00e9s", f"{vuln_fixed} corrections d\u00e9montr\u00e9es", badge("active")],
-                 ["Automatisation", f"{len(runs)} executions, {hours:.0f} h \u00e9vit\u00e9es", badge("active")]]
-        p2 = ["Services rendus", "Par produit contractualis\u00e9.", [
-            ["T", "Produits", ["Service", "Livrable p\u00e9riode", "\u00c9tat"], deliv]]]
-        p3 = ["Trajectoire", "Am\u00e9lioration continue mesur\u00e9e.", [
-            ["S", "Heures \u00e9conomis\u00e9es (cumul hebdo)", [max(1, round(hours / 4 + i)) for i in range(8)]],
-            ["L", "Engagements maintenus", [
-                "Aucun incident critique non notifié dans les d\u00e9lais contractuels." if not [
-                    i for i in inc if i.severity == "crit" and not i.contained_at] else
-                "Un incident critique reste \u00e0 confiner : action prioritaire en cours.",
-                "Rapports mensuels disponibles avant le 5 de chaque mois.",
-                "R\u00e9vision annuelle des seuils de corrélation r\u00e9alis\u00e9e."]]]]
+        p1 = ["Valeur livrée", "Résultats observés et mesurés sur la période.", [
+            ["K", [["Actifs sous surveillance", str(len(assets)) if assets else NA,
+                   "= agents enregistrés et synchronisés", "1"],
+                  ["Heures économisées", f"{hours:.1f} h" if hours is not None else NA,
+                   "= runs avec temps manuel évité documenté", "2"],
+                  ["Vulnérabilités corrigées", str(len(fixed)) if vuln_rows else NA,
+                   "= findings avec statut résolu et date", "3"],
+                  ["Incidents traités", str(len(incidents)) if incidents else NA,
+                   "= incidents enregistrés dans la période", "o"]]],
+            ["T", "Automatisations avec preuve de gain", ["Playbook", "Exécutions", "Minutes évitées", "Résultat"],
+             [[r.playbook, "1", f"{r.manual_minutes_saved:.1f}", "Réussi"]
+              for r in measured_runs[:12]]] if measured_runs else
+            _note("Aucune économie automatisée quantifiable : les exécutions sans temps manuel de référence ne sont pas converties en gains.")
+        ]]
+        services = [
+            ["Supervision continue", str(len(assets)) if assets else NA, "Mesuré" if assets else "Non mesuré"],
+            ["Réponse à incident", "MTTD " + K.fmt_min(mttd) + " / MTTR " + K.fmt_min(mttr),
+             "Mesuré" if incidents else "Non mesuré"],
+            ["Gestion des vulnérabilités", str(len(fixed)) if vuln_rows else NA,
+             "Mesuré" if vuln_rows else "Non mesuré"],
+            ["Automatisation", str(len(runs)) + " exécutions" if runs else NA,
+             "Mesuré" if measured_runs else "Non mesuré"],
+        ]
+        p2 = ["Services rendus", "Livrables visibles uniquement lorsqu'une source les mesure.", [
+            ["T", "Produits", ["Service", "Livrable période", "État"], services]]]
+        p3 = ["Trajectoire", "Aucune courbe historique n'est interpolée ou inventée.", [
+            _note("La tendance apparaîtra lorsque les agrégats historiques quotidiens seront disponibles."),
+            ["L", "Indicateurs à suivre", [
+                "Maintenir la couverture des agents enregistrés.",
+                "Documenter le temps manuel de référence avant de valoriser les automatisations.",
+                "Conserver les dates de résolution des vulnérabilités et incidents pour mesurer les progrès."
+            ]]
+        ]]
         return [p1, p2, p3]
 
 

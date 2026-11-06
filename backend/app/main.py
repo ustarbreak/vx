@@ -111,11 +111,14 @@ async def lifespan(app: FastAPI):
     task = asyncio.get_event_loop().create_task(_escalation_loop())
     ev_task = asyncio.get_event_loop().create_task(_evidence_retention_loop())
     soar_task = asyncio.get_event_loop().create_task(_soar_recovery_loop())
+    from app.services.reporting.jobs import scheduler as reporting_scheduler
+    await reporting_scheduler.start()
     yield
     # Shutdown
     task.cancel()
     ev_task.cancel()
     soar_task.cancel()
+    await reporting_scheduler.stop()
 
 app = FastAPI(
     title=settings.APP_NAME,
