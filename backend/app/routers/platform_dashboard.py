@@ -50,7 +50,6 @@ async def platform_dashboard_overview(
     probes = await _count(db, AgentProbe)
     probe_status = await _group_counts(db, AgentProbe.status)
     alerts = await _count(db, Alert)
-    open_alerts = await _count(db, Alert, Alert.status == "open") if hasattr(Alert, "status") else None
     tickets = await _count(db, Ticket)
     open_tickets = await _count(db, Ticket, Ticket.status.notin_(("resolved", "closed")))
     incidents = await _count(db, Incident)
