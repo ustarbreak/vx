@@ -312,14 +312,16 @@ func colValue(p gosnmp.SnmpPDU) string {
 }
 
 func toString(p gosnmp.SnmpPDU) string {
-	if ip, ok := p.Value.([]byte); ok && (len(ip) == net.IPv4len || len(ip) == net.IPv6len) && strings.HasPrefix(p.Name, "."+oids["ipAdEntAddr"]) || strings.Contains(p.Name, oids["arpIp"]) {
-		return net.IP(ip).String()
+	if value, ok := p.Value.([]byte); ok {
+		oid := strings.TrimPrefix(p.Name, ".")
+		if (strings.HasPrefix(oid, oids["ipAdEntAddr"]) || strings.HasPrefix(oid, oids["arpIp"])) &&
+			(len(value) == net.IPv4len || len(value) == net.IPv6len) {
+			return net.IP(value).String()
+		}
+		return string(value)
 	}
-	if s, ok := p.Value.(string); ok {
-		return s
-	}
-	if b, ok := p.Value.([]byte); ok {
-		return string(b)
+	if value, ok := p.Value.(string); ok {
+		return value
 	}
 	return fmt.Sprint(p.Value)
 }
