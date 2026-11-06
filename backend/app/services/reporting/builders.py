@@ -908,7 +908,7 @@ async def build_endpoint(tenant: str, period: str) -> list:
             ["S", "Postes prot\u00e9g\u00e9s (%)", trend[-14:] if len(trend) > 1 else []],
             ["B", "R\u00e9partition par \u00e9tat",
              [["Sains", prot_pct, "o"], ["Agents \u00e0 mettre \u00e0 jour", out_pct, "w"],
-              ["Hors ligne", max(0, 100 - prot_pct - out_pct), "b"]]]]]
+              ["Non protégés / état non vérifié", max(0, 100 - prot_pct - out_pct), "b"]]]]]
         p3 = ["D\u00e9tections & quarantaine", "Menaces neutralis\u00e9es sur les postes.", [
             ["K", [["D\u00e9tections p\u00e9riode", str(sum(x.detections or 0 for x in eh)), "= malware/pua", "h"],
                    ["Items en quarantaine", str(last.quarantined_items or 0), "= en attente d'analyse",
