@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     # Certificate verification is secure by default. Disable only for a trusted
     # lab using self-signed certificates; never disable it in public production.
     CONNECTOR_TLS_VERIFY: bool = True
+    # Dedicated Fernet key for integration credentials stored in the database.
+    INTEGRATION_ENCRYPTION_KEY: str = ""
     VELOCIRAPTOR_URL: str = ""
     VELOCIRAPTOR_TOKEN: str = ""
     ALLOW_LIVE_RESPONSE: bool = False
@@ -71,6 +73,14 @@ class Settings(BaseSettings):
             problems.append("CORS_ORIGINS must explicitly list trusted application origins")
         if not self.CONNECTOR_TLS_VERIFY:
             problems.append("CONNECTOR_TLS_VERIFY must be true")
+        if not self.INTEGRATION_ENCRYPTION_KEY:
+            problems.append("INTEGRATION_ENCRYPTION_KEY must be configured for production")
+        else:
+            try:
+                from cryptography.fernet import Fernet
+                Fernet(self.INTEGRATION_ENCRYPTION_KEY.encode("utf-8"))
+            except Exception:
+                problems.append("INTEGRATION_ENCRYPTION_KEY must be a valid Fernet key")
         if problems:
             raise ValueError("Invalid production configuration: " + "; ".join(problems))
         return self
