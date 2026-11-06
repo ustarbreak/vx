@@ -619,4 +619,4 @@ async def web_discovered_devices(org_id: int | None = None,
     return [{"id": d.id, "probe_id": d.probe_id, "ip": d.ip, "mac": d.mac,
              "hostname": d.hostname, "os_guess": d.os_guess, "device_type": d.device_type,
              "sys_name": d.sys_name, "snmp": bool(d.sys_desc or d.sys_name),
-             "open_ports": d.open_ports or [], "last_seen": d.last_seen} for d in rows]
+             "snmp_facts": d.snmp_facts or {}, "open_ports": d.open_ports or [], "last_seen": d.last_seen} for d in rows]
