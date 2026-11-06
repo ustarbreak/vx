@@ -1,12 +1,12 @@
 id: vuln-scanning
 name: Vuln Scanning
-status: roadmap
-provider: native
-engine: OpenVAS / Greenbone Community Edition
-docs_url: https://docs.greenbone.net/GSM-Manual/gos-22.04/en/scanning/
+status: beta
+provider: connector
+engine: Wazuh Vulnerability Detector (endpoint-protection integration)
+docs_url: https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html
 endpoints:
-  tasks: /get_tasks
-  info: /get_version
+  agents: /agents
+  vulnerabilities: /vulnerability/{agent_id}
 resources:
   cpu: '2'
   memory: 2G
@@ -16,7 +16,11 @@ dependencies:
   rationale: Le scanneur cible l'inventaire produit par la découverte automatique
     ; hors inventaire = hors périmètre.
 in_seed: true
-actions: []
+actions:
+- name: vulnerability.fetch
+  method: GET
+  dangerous: false
+  status: beta
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES
