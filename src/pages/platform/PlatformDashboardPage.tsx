@@ -113,7 +113,7 @@ export default function PlatformDashboardPage() {
           </div>
 
           <section className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-5">
-            <h2 className="text-sm font-semibold text-[var(--ic-heading)] flex items-center gap-2 mb-3"><CircleHelp className="w-4 h-4 text-cyan-500" /> Data integrity & coverage</h2>
+            <h2 className="text-sm font-semibold text-[var(--ic-heading)] flex items-center gap-2 mb-3"><HelpCircle className="w-4 h-4 text-cyan-500" /> Data integrity & coverage</h2>
             <div className="grid md:grid-cols-2 gap-3">
               {Object.entries(data.limitations).map(([key, value]) => (
                 <div key={key} className="rounded-lg bg-[var(--ic-surface-2)] p-3">
