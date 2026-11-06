@@ -2,11 +2,11 @@ id: vuln-scanning
 name: Vuln Scanning
 status: beta
 provider: connector
-engine: OpenVAS / Greenbone Community Edition
-docs_url: https://docs.greenbone.net/GSM-Manual/gos-22.04/en/scanning/
+engine: Wazuh Vulnerability Detector (endpoint-protection integration)
+docs_url: https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html
 endpoints:
-  tasks: /get_tasks
-  info: /get_version
+  agents: /agents
+  vulnerabilities: /vulnerability/{agent_id}
 resources:
   cpu: '2'
   memory: 2G
