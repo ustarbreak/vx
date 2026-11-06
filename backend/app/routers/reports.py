@@ -145,6 +145,45 @@ async def catalogue(period: str = Query(...), demo: int = Query(0), demo_source:
             "family_names": dict(dd.FAMILIES)}
 
 
+@router.get("/bundle")
+async def export_bundle(scope: str = Query("all", pattern="^(all|family)$"),
+                        family: str | None = Query(None), period: str = Query(...),
+                        org_id: int | None = Query(None), demo: int = Query(0),
+                        current_user: User = Depends(get_current_user),
+                        db: AsyncSession = Depends(get_db)):
+    tenant = await _tenant_id(current_user, org_id, db)
+    _check_period(period)
+    if scope == "family" and family not in {fid for fid, _ in dd.FAMILIES}:
+        raise HTTPException(422, "A valid family is required for family export")
+    selected = [r for r in dd.REPORTS if scope == "all" or r[3] == family]
+    use_demo = _resolve_demo(demo, "")
+    output = io.BytesIO()
+    manifest = []
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for num, key, title, fam, total in selected:
+            pages = await _render_pages(key, tenant, period, use_demo)
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["Infracentra report #" + str(num) + ": " + title, "period=" + period, "tenant=" + tenant])
+            writer.writerows(_blocks_to_rows(pages))
+            payload = ("\\ufeff" + buf.getvalue()).encode("utf-8")
+            archive.writestr(fam + "/report" + str(num).zfill(2) + "_" + key + "_" + period + ".csv", payload)
+            manifest.append({"number": num, "id": key, "family": fam, "pages": total})
+            if not use_demo:
+                db.add(RptExportLog(tenant_id=tenant, user_id=str(current_user.id), report_id=key,
+                    period=period, fmt="csv", sha256=hashlib.sha256(payload).hexdigest(),
+                    exported_at=datetime.now(timezone.utc)))
+        archive.writestr("manifest.json", __import__("json").dumps(
+            {"tenant_id": tenant, "period": period, "scope": scope, "family": family,
+             "reports": manifest}, ensure_ascii=False, indent=2))
+    if not use_demo:
+        await db.commit()
+    output.seek(0)
+    filename = "infracentra_" + scope + "_" + (family or "all") + "_" + period + ".zip"
+    return StreamingResponse(output, media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="' + filename + '"'})
+
+
 @router.get("/{report_id}")
 async def report_pages(report_id: str, period: str = Query(...), demo: int = Query(0),
                        demo_source: str = Query(""), org_id: int | None = Query(None),
