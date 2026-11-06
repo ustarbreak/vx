@@ -80,7 +80,7 @@ def test_real_requests_never_resolve_to_demo_from_server_environment(monkeypatch
 @pytest.mark.asyncio
 async def test_tenant_cannot_request_another_tenants_report(session_factory, monkeypatch):
     async def live_builder(*args):
-        return [["Overview", "Live", [["M", "Source", [["ok", "o"]]]]]
+        return [["Overview", "Live", [["M", "Source", [["ok", "o"]]]]]]
     monkeypatch.setattr(reports, "_real_pages", live_builder)
     async with client_for(session_factory, 5) as client:
         response = await client.get("/api/v1/reports/tickets?period=2026-11&org_id=2")
@@ -93,7 +93,7 @@ async def test_tenant_cannot_request_another_tenants_report(session_factory, mon
 @pytest.mark.asyncio
 async def test_owner_can_select_tenant_and_export_family_bundle(session_factory, monkeypatch):
     async def live_builder(*args):
-        return [["Overview", "Live source", [["M", "Source", [["verified", "o"]]]]]
+        return [["Overview", "Live source", [["M", "Source", [["verified", "o"]]]]]]
     monkeypatch.setattr(reports, "_real_pages", live_builder)
     async with client_for(session_factory, 1) as client:
         response = await client.get("/api/v1/reports/bundle?scope=family&family=inc&period=2026-11&org_id=2")
