@@ -18,6 +18,7 @@ import {
   MonitorSmartphone
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
+import { platformAccessApi } from '../services/api';
 
 // ---------------------------------------------------------------------------
 // PushDemoButton — visible ONLY while Demo Mode is ON.
@@ -168,6 +169,16 @@ function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void 
 
 export default function Layout() {
   const { user, organization, logout } = useAuth();
+  const [platformPermissions, setPlatformPermissions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!user?.role?.startsWith('platform_')) { setPlatformPermissions([]); return; }
+    let alive = true;
+    platformAccessApi.me().then((access) => {
+      if (alive) setPlatformPermissions(access.owner ? ['*'] : access.permissions.map((p) => p.key));
+    }).catch(() => { if (alive) setPlatformPermissions([]); });
+    return () => { alive = false; };
+  }, [user?.id, user?.role]);
+
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(false);
@@ -257,9 +268,36 @@ export default function Layout() {
     },
   ];
 
+  const permissionForRoute: Record<string, string> = {
+    '/admin/dashboard':'platform.dashboard.read', '/admin/operations':'platform.integrations.read',
+    '/admin/clients':'platform.tenants.read', '/admin/partners':'platform.partners.read',
+    '/admin/team':'platform.access.manage', '/admin/billing':'platform.billing.read',
+    '/admin/audit':'platform.audit.read', '/admin/integrations':'platform.integrations.read',
+    '/admin/onboarding':'platform.services.read', '/admin/settings':'platform.settings.read',
+    '/admin/themes':'platform.settings.manage', '/admin/packs':'platform.billing.manage',
+    '/admin/services-ops':'platform.security_ops.read', '/client-admin/advanced-tickets':'platform.security_ops.read',
+    '/client-admin/notifications':'platform.notifications.read', '/client-admin/monitored-devices':'platform.infrastructure.read',
+    '/client-admin/scan-history':'platform.infrastructure.read', '/client-admin/agents':'platform.infrastructure.read',
+    '/client-admin/playbooks':'platform.security_ops.read', '/client-admin/automation/scripts':'platform.security_ops.read',
+    '/client-admin/automation/runbooks':'platform.security_ops.read', '/projects':'platform.dashboard.read',
+    '/reports':'platform.reports.read',
+  };
+  const filterPlatformNav = (entries: NavEntry[]): NavEntry[] => entries.flatMap((entry: any) => {
+    if (entry.group) {
+      const items = filterPlatformNav(entry.items ?? []);
+      return items.length ? [{ ...entry, items }] : [];
+    }
+    const permission = permissionForRoute[entry.to];
+    return permission && (platformPermissions.includes('*') || platformPermissions.includes(permission)) ? [entry] : [];
+  });
+
   if (user?.role === 'platform_admin') {
     operationsNav = PLATFORM_ADMIN_GROUPS;
     adminNav = [];
+  } else if (['platform_expert','platform_analyst','platform_user'].includes(user?.role ?? '')) {
+    operationsNav = filterPlatformNav(PLATFORM_ADMIN_GROUPS);
+    adminNav = [];
+    servicesNav = [];
   } else if (user?.role === 'partner_admin') {
     // MSP Partner Portal — white-label. Partners manage THEIR OWN end-clients;
     // they never see Infracentra's direct clients nor other partners.
