@@ -267,6 +267,27 @@ class AuditLog(Base):
 # Advanced Ticketing System (Service A)
 # ============================================================================
 
+class VulnerabilityFinding(Base):
+    """Tenant-scoped CVE/finding inventory synchronized from a configured scanner."""
+    __tablename__ = "vulnerability_findings"
+    id = Column(Integer, primary_key=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    finding_key = Column(String(200), nullable=False)
+    scanner = Column(String(80), nullable=False)
+    asset_id = Column(String(160), nullable=False)
+    asset_name = Column(String(255))
+    cve = Column(String(40), index=True)
+    title = Column(String(500), nullable=False)
+    severity = Column(String(16), nullable=False, default="medium")
+    cvss = Column(Float)
+    status = Column(String(20), nullable=False, default="open")
+    first_seen_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True), server_default=func.now())
+    ticket_uid = Column(String(40))
+    raw = Column(JSON, nullable=False, default=dict)
+    __table_args__ = (UniqueConstraint("org_id", "finding_key", name="uq_vuln_finding_org_key"),)
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
