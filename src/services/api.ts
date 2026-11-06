@@ -178,10 +178,10 @@ export interface OrganizationCreatePayload {
 // Demo Mode: answered by demoMode.ts stores seeded from demoRulesSeed.
 // ---------------------------------------------------------------------------
 export interface TenantSummary {
-  id: number; name: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
+  id: number; name: string; tier: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
   plan_tier: 'STARTER' | 'PRO' | 'SOUVERAIN'; billing_cycle: 'MONTHLY' | 'ANNUAL';
   endpoints: number; members: number; services_active: number; open_incidents: number;
-  probes: { id: string; hostname: string; ip: string; status: string }[];
+  probes: { id: number; hostname: string; ip: string; status: string }[];
   children: { id: number; name: string; org_type: string }[];
 }
 export interface MonitoringRuleOut {
@@ -190,6 +190,25 @@ export interface MonitoringRuleOut {
   action: 'create_ticket' | 'notify' | 'suppress_alert' | 'none'; ticket_priority: string;
   notify_channels: string[]; enabled: boolean; created_by: string; created_at: string;
 }
+export interface TenantDeviceRow {
+  id: number; hostname: string | null; ip: string; mac: string | null; os: string | null;
+  device_type: string | null; is_probe: boolean; imported: boolean;
+  monitoring_status: string; last_seen: string | null; probe_id: number | null;
+}
+export interface TenantMemberRow {
+  id: number; name: string; email: string; role: string; status: string;
+  mfa_enabled: boolean; last_login: string | null; created_at: string | null;
+}
+export interface TenantApiKeyRow {
+  id: number; name: string; prefix: string; created_by: string | null;
+  created_at: string | null; last_used_at: string | null; revoked_at: string | null;
+  status: 'active' | 'revoked';
+}
+export interface TenantActivityRow {
+  id: number; actor: string; actor_role: string; action: string; resource: string;
+  resource_id: string; details: string | null; outcome: string; timestamp: string | null;
+}
+
 export interface ServiceGrantOut { enabled: boolean; override_plan: boolean; granted_by: string; updated_at: string }
 
 export const tenantManagerApi = {
@@ -205,6 +224,10 @@ export const tenantManagerApi = {
   setGrant: (orgId: number | string, data: { service_id: string; enabled: boolean; override_plan?: boolean }) =>
     api.post<ServiceGrantOut>(`/admin/tenants/${orgId}/grants`, data),
   grants: (orgId: number | string) => api.get<Record<string, ServiceGrantOut>>(`/admin/tenants/${orgId}/grants`),
+  devices: (orgId: number | string) => api.get<TenantDeviceRow[]>(`/admin/tenants/${orgId}/devices`),
+  members: (orgId: number | string) => api.get<TenantMemberRow[]>(`/admin/tenants/${orgId}/members`),
+  apiKeys: (orgId: number | string) => api.get<TenantApiKeyRow[]>(`/admin/tenants/${orgId}/api-keys`),
+  activity: (orgId: number | string) => api.get<TenantActivityRow[]>(`/admin/tenants/${orgId}/activity`),
   platformAudit: () => api.get<{ id: number; action: string; detail: string; actor: string; created_at: string }[]>('/admin/audit-platform'),
 };
 

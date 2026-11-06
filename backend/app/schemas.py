@@ -740,6 +740,7 @@ class TenantSummaryOut(BaseModel):
     name: str
     org_type: str = "HQ"
     location: Optional[str] = None
+    tier: str = "sme"
     plan_tier: str = "STARTER"
     billing_cycle: str = "MONTHLY"
     endpoints: int = 0

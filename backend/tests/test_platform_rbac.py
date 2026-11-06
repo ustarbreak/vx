@@ -20,7 +20,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.core.platform_rbac import has_permission
-from app.models import Organization, User, SnmpCredential
+from app.models import Organization, User, SnmpCredential, AgentToken, AuditLog
 from app.main import app
 
 @pytest_asyncio.fixture()
@@ -565,4 +565,50 @@ async def test_non_owner_cannot_manage_platform_staff_status(session_factory):
         assert denied.status_code == 403
     async with client_for(session_factory, 2) as expert:
         denied = await expert.patch("/api/platform/access/users/3/status", json={"status": "inactive"})
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_detail_subresources_return_persisted_scoped_data_only(session_factory):
+    async with session_factory() as db:
+        db.add(AgentToken(
+            org_id=1, name="Tenant collector", token_hash="a" * 64,
+            prefix="icag_safe", created_by="owner@example.com",
+        ))
+        db.add(AuditLog(
+            actor_id=1, actor_name="Owner", actor_role="platform_admin", org_id=1,
+            action="tenant.test_event", resource="Tenant", resource_id="1",
+            details="Persisted test audit event", outcome="success",
+        ))
+        await db.commit()
+
+    async with client_for(session_factory, 1) as owner:
+        members = await owner.get("/api/admin/tenants/1/members")
+        devices = await owner.get("/api/admin/tenants/1/devices")
+        keys = await owner.get("/api/admin/tenants/1/api-keys")
+        activity = await owner.get("/api/admin/tenants/1/activity")
+        assert members.status_code == devices.status_code == keys.status_code == activity.status_code == 200
+        assert any(row["email"] == "tenant@example.com" for row in members.json())
+        assert devices.json() == []
+        assert keys.json()[0]["prefix"] == "icag_safe"
+        assert "token_hash" not in keys.json()[0] and "token" not in keys.json()[0]
+        assert activity.json()[0]["details"] == "Persisted test audit event"
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/admin/tenants/2/members")
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_detail_subresources_honor_explicit_tenant_deny(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        deny = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.tenants.read",
+            "effect": "deny", "scope_type": "tenant", "scope_id": 2,
+        })
+        assert deny.status_code == 201, deny.text
+    async with client_for(session_factory, 2, version=1) as expert:
+        allowed = await expert.get("/api/admin/tenants/1/members")
+        denied = await expert.get("/api/admin/tenants/2/members")
+        assert allowed.status_code == 200
         assert denied.status_code == 403

@@ -10,8 +10,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Ticket, Server, Shield, Users, Key, FileText, Activity, Zap, Loader2, PlusCircle, Trash2, Radar } from 'lucide-react';
-import { tenantManagerApi, type TenantSummary, type MonitoringRuleOut, type ServiceGrantOut } from '../../services/api';
-import { demoDevices, demoTechnicians } from '../../data/demoWorld';
+import { tenantManagerApi, type TenantSummary, type MonitoringRuleOut, type ServiceGrantOut, type TenantDeviceRow, type TenantMemberRow, type TenantApiKeyRow, type TenantActivityRow } from '../../services/api';
+import { demoDevices, demoTechnicians, demoApiKeys, demoPlatformAudit } from '../../data/demoWorld';
+import { isDemoMode } from '../../services/demoMode';
 import { serviceCatalog } from '../../data/mockData';
 
 const TABS = ['summary', 'services', 'devices', 'members', 'api-keys', 'license', 'activity', 'rules'] as const;
@@ -101,12 +102,12 @@ export default function TenantDetailPage() {
       </div>
 
       {tab === 'summary' && <div className="text-sm text-[var(--ic-muted)] p-6 bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl">Le résumé est affiché en haut de page. Sélectionnez un onglet pour gérer le client en détail.</div>}
-      {tab === 'services' && <ServicesTab orgId={numericId} />}
+      {tab === 'services' && <ServicesTab orgId={numericId} tenantTier={sum.tier} />}
       {tab === 'devices' && <DevicesTab orgId={numericId} />}
       {tab === 'members' && <MembersTab orgId={numericId} />}
-      {tab === 'api-keys' && <PlaceholderTab label="API Keys — création/révocation via Settings → Intégrations (existant)." />}
+      {tab === 'api-keys' && <ApiKeysTab orgId={numericId} />}
       {tab === 'license' && <PlaceholderTab label="License & facturation Bundle — détail complet dans Tenant Manager → colonne Invoice et /client-admin/plans." />}
-      {tab === 'activity' && <PlaceholderTab label="Activity Log — journal immuable consultable dans Audit Log (chaque grant, règle et ticket créés ici y sont tracés)." />}
+      {tab === 'activity' && <ActivityTab orgId={numericId} />}
       {tab === 'rules' && <RulesTab orgId={numericId} />}
     </div>
   );
@@ -147,50 +148,145 @@ function TicketModal({ orgId, orgName, onClose }: { orgId: string; orgName: stri
 
 /* ---------- Devices tab with the PROBE concept ---------- */
 function DevicesTab({ orgId }: { orgId: string }) {
-  const id = Number(orgId);
-  const devices = demoDevices.filter(d => d.orgId === id);
+  const [devices, setDevices] = useState<TenantDeviceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError('');
+    if (isDemoMode()) {
+      const rows = demoDevices.filter(d => d.orgId === Number(orgId)).map((d, i) => ({
+        id: i + 1, hostname: d.hostname, ip: d.ip, mac: null, os: d.os,
+        device_type: d.type, is_probe: !!d.isProbe, imported: true,
+        monitoring_status: d.status, last_seen: null, probe_id: null,
+      }));
+      setDevices(rows); setLoading(false);
+    } else {
+      tenantManagerApi.devices(orgId).then(rows => { if (alive) setDevices(rows); })
+        .catch(e => { if (alive) setError(e?.message ?? 'Unable to load tenant inventory'); })
+        .finally(() => { if (alive) setLoading(false); });
+    }
+    return () => { alive = false; };
+  }, [orgId]);
+
+  if (loading) return <div className="p-6 text-sm text-[var(--ic-muted)]">Loading persisted inventory…</div>;
+  if (error) return <div role="alert" className="p-4 text-sm text-red-400">{error}</div>;
   return (
     <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl overflow-hidden">
-      <table className="w-full text-sm">
+      <div className="overflow-x-auto"><table className="w-full text-sm">
         <thead><tr className="border-b border-[var(--ic-border)] text-left text-xs text-[var(--ic-muted)]">
-          <th className="px-4 py-2">Hostname</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">OS</th><th className="px-4 py-2">Statut</th><th className="px-4 py-2">Fonction</th></tr></thead>
-        <tbody>
-          {devices.map(d => (
-            <tr key={d.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
-              <td className="px-4 py-2.5 font-mono text-[var(--ic-heading)]">{d.hostname}</td>
-              <td className="px-4 py-2.5 text-[var(--ic-muted)] capitalize">{d.type}</td>
-              <td className="px-4 py-2.5 font-mono text-[var(--ic-muted)]">{d.ip}</td>
-              <td className="px-4 py-2.5 text-[var(--ic-muted)]">{d.os}</td>
-              <td className="px-4 py-2.5"><span className={`text-xs font-medium ${d.status === 'online' ? 'text-emerald-400' : d.status === 'degraded' ? 'text-amber-400' : 'text-red-400'}`}>{d.status}</span></td>
-              <td className="px-4 py-2.5">
-                {d.isProbe
-                  ? <span title="Machine hôte de l'agent INFRAvx : découverte automatique et scans SNMP lancés depuis cette machine, supervisée comme tout autre device."
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[11px] font-bold"><Radar className="w-3 h-3" /> PROBE</span>
-                  : <span className="text-xs text-[var(--ic-muted)]">supervisé{devices.find(x => x.isProbe && x.orgId === d.orgId) ? ' via probe' : ''}</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <p className="px-4 py-3 text-[11px] text-[var(--ic-muted)] border-t border-[var(--ic-border)]">💡 La <b>probe</b> est la machine sur laquelle l'agent collecteur est installé : c'est depuis elle que partent l'auto-discovery et les scans. Elle est monitorée (CPU, heartbeat agent, uptime) exactement comme les autres devices — si elle tombe, les devices découverts deviennent « unreachable ».</p>
+          <th className="px-4 py-2">Hostname</th><th className="px-4 py-2">Type</th><th className="px-4 py-2">IP</th><th className="px-4 py-2">OS</th><th className="px-4 py-2">Reported status</th><th className="px-4 py-2">Role</th><th className="px-4 py-2">Last seen</th>
+        </tr></thead>
+        <tbody>{devices.map(d => (
+          <tr key={d.id} className="border-b border-[var(--ic-border)] hover:bg-[var(--ic-surface-2)]">
+            <td className="px-4 py-2.5 font-mono text-[var(--ic-heading)]">{d.hostname || '—'}</td>
+            <td className="px-4 py-2.5 text-[var(--ic-muted)] capitalize">{d.device_type || 'unknown'}</td>
+            <td className="px-4 py-2.5 font-mono text-[var(--ic-muted)]">{d.ip}</td>
+            <td className="px-4 py-2.5 text-[var(--ic-muted)]">{d.os || '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-[var(--ic-muted)]">{d.monitoring_status}</td>
+            <td className="px-4 py-2.5">{d.is_probe ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[11px] font-bold"><Radar className="w-3 h-3" /> PROBE</span> : <span className="text-xs text-[var(--ic-muted)]">Asset</span>}</td>
+            <td className="px-4 py-2.5 text-xs text-[var(--ic-muted)]">{d.last_seen ? new Date(d.last_seen).toLocaleString() : 'No heartbeat recorded'}</td>
+          </tr>
+        ))}{!devices.length && <tr><td colSpan={7} className="p-8 text-center text-sm text-[var(--ic-muted)]">No persisted devices for this tenant.</td></tr>}</tbody>
+      </table></div>
+      <p className="px-4 py-3 text-[11px] text-[var(--ic-muted)] border-t border-[var(--ic-border)]">Status is sourced from a matching enrolled probe. An inventory record without heartbeat evidence is not labelled online.</p>
     </div>
   );
 }
 
 function MembersTab({ orgId }: { orgId: string }) {
-  const id = Number(orgId);
-  const techs = demoTechnicians.filter(t => t.orgId === id);
+  const [members, setMembers] = useState<TenantMemberRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError('');
+    if (isDemoMode()) {
+      setMembers(demoTechnicians.filter(t => t.orgId === Number(orgId)).map((t, i) => ({
+        id: i + 1, name: t.name, email: t.email, role: t.role, status: 'active',
+        mfa_enabled: false, last_login: null, created_at: null,
+      })));
+      setLoading(false);
+    } else {
+      tenantManagerApi.members(orgId).then(rows => { if (alive) setMembers(rows); })
+        .catch(e => { if (alive) setError(e?.message ?? 'Unable to load tenant members'); })
+        .finally(() => { if (alive) setLoading(false); });
+    }
+    return () => { alive = false; };
+  }, [orgId]);
+  if (loading) return <div className="p-6 text-sm text-[var(--ic-muted)]">Loading tenant members…</div>;
+  if (error) return <div role="alert" className="p-4 text-sm text-red-400">{error}</div>;
   return (
     <div className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 space-y-2">
-      {techs.map(t => (
-        <div key={t.email} className="flex items-center justify-between py-2 border-b border-[var(--ic-border)] last:border-0">
-          <div><div className="text-sm text-[var(--ic-heading)] font-medium">{t.name}</div><div className="text-xs text-[var(--ic-muted)] font-mono">{t.email}</div></div>
-          <div className="text-right"><span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300">{t.role}</span><div className="text-[11px] text-[var(--ic-muted)] mt-1">{t.skills}</div></div>
-        </div>
-      ))}
-      {techs.length === 0 && <p className="text-sm text-[var(--ic-muted)]">Aucun membre — utilisez « Invite Member » depuis le Tenant Manager.</p>}
+      {members.map(m => <div key={m.id} className="flex flex-wrap items-center justify-between gap-3 py-2 border-b border-[var(--ic-border)] last:border-0">
+        <div><div className="text-sm text-[var(--ic-heading)] font-medium">{m.name}</div><div className="text-xs text-[var(--ic-muted)] font-mono">{m.email}</div></div>
+        <div className="text-right"><span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300">{m.role}</span><div className="text-[11px] text-[var(--ic-muted)] mt-1">{m.status} · MFA {m.mfa_enabled ? 'enabled' : 'not enabled'} · Last login {m.last_login ? new Date(m.last_login).toLocaleString() : 'never'}</div></div>
+      </div>)}
+      {!members.length && <p className="text-sm text-[var(--ic-muted)]">No persisted members for this tenant.</p>}
     </div>
   );
+}
+
+function ApiKeysTab({ orgId }: { orgId: string }) {
+  const [rows, setRows] = useState<TenantApiKeyRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (isDemoMode()) {
+      setRows(demoApiKeys.filter(k => k.orgId === Number(orgId)).map((k, i) => ({
+        id: i + 1, name: k.label, prefix: String(k.key).slice(0, 8), created_by: null,
+        created_at: k.createdAt, last_used_at: k.lastUsed, revoked_at: null,
+        status: k.status === 'revoked' ? 'revoked' : 'active',
+      })));
+      setLoading(false);
+    } else {
+      tenantManagerApi.apiKeys(orgId).then(data => { if (alive) setRows(data); })
+        .catch(e => { if (alive) setError(e?.message ?? 'Unable to load token metadata'); })
+        .finally(() => { if (alive) setLoading(false); });
+    }
+    return () => { alive = false; };
+  }, [orgId]);
+  if (loading) return <div className="p-6 text-sm text-[var(--ic-muted)]">Loading API key metadata…</div>;
+  if (error) return <div role="alert" className="p-4 text-sm text-red-400">{error}</div>;
+  return <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4 space-y-3">
+    <p className="text-xs text-[var(--ic-muted)]">Only token metadata is shown. Full bearer tokens and stored hashes are never exposed in this view.</p>
+    {rows.map(row => <div key={row.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ic-border)] pb-3">
+      <div><p className="text-sm font-medium text-[var(--ic-heading)]">{row.name}</p><p className="text-xs font-mono text-[var(--ic-muted)]">{row.prefix}… · {row.created_by || 'creator unavailable'}</p></div>
+      <div className="text-right text-xs text-[var(--ic-muted)]"><p>{row.status}</p><p>Last used: {row.last_used_at ? new Date(row.last_used_at).toLocaleString() : 'Never'}</p></div>
+    </div>)}
+    {!rows.length && <p className="text-sm text-[var(--ic-muted)]">No API tokens recorded for this tenant.</p>}
+  </div>;
+}
+
+function ActivityTab({ orgId }: { orgId: string }) {
+  const [rows, setRows] = useState<TenantActivityRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (isDemoMode()) {
+      setRows(demoPlatformAudit.filter(a => a.detail.toLowerCase().includes(String(orgId))).map(a => ({
+        id: a.id, actor: a.actor, actor_role: 'demo', action: a.action, resource: 'platform',
+        resource_id: String(a.id), details: a.detail, outcome: 'success', timestamp: a.created_at,
+      })));
+      setLoading(false);
+    } else {
+      tenantManagerApi.activity(orgId).then(data => { if (alive) setRows(data); })
+        .catch(e => { if (alive) setError(e?.message ?? 'Unable to load tenant audit activity'); })
+        .finally(() => { if (alive) setLoading(false); });
+    }
+    return () => { alive = false; };
+  }, [orgId]);
+  if (loading) return <div className="p-6 text-sm text-[var(--ic-muted)]">Loading tenant audit trail…</div>;
+  if (error) return <div role="alert" className="p-4 text-sm text-red-400">{error}</div>;
+  return <div className="rounded-xl border border-[var(--ic-border)] bg-[var(--ic-surface)] p-4 space-y-2">
+    {rows.map(row => <div key={row.id} className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--ic-border)] pb-3">
+      <div><p className="text-sm font-medium text-[var(--ic-heading)]">{row.action}</p><p className="text-xs text-[var(--ic-muted)]">{row.details || row.resource} · {row.actor}</p></div>
+      <div className="text-right text-xs text-[var(--ic-muted)]"><p>{row.outcome}</p><p>{row.timestamp ? new Date(row.timestamp).toLocaleString() : '—'}</p></div>
+    </div>)}
+    {!rows.length && <p className="text-sm text-[var(--ic-muted)]">No audit events recorded for this tenant.</p>}
+  </div>;
 }
 
 function PlaceholderTab({ label }: { label: string }) {
@@ -198,7 +294,7 @@ function PlaceholderTab({ label }: { label: string }) {
 }
 
 /* ---------- Services + Grant Access (override plan) ---------- */
-function ServicesTab({ orgId }: { orgId: string }) {
+function ServicesTab({ orgId, tenantTier }: { orgId: string; tenantTier: string }) {
   const [grants, setGrants] = useState<Record<string, ServiceGrantOut>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   useEffect(() => { tenantManagerApi.grants(orgId).then(setGrants).catch(() => {}); }, [orgId]);
@@ -219,7 +315,7 @@ function ServicesTab({ orgId }: { orgId: string }) {
       <div className="grid md:grid-cols-2 gap-3">
         {serviceCatalog.map(s => {
           const g = grants[s.id];
-          const enabled = g ? g.enabled : s.availableTiers.length > 0; // default from plan unless overridden
+          const enabled = g ? g.enabled : s.availableTiers.some(tier => String(tier) === tenantTier); // default from the selected tenant's actual plan
           return (
             <div key={s.id} className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
@@ -284,7 +380,16 @@ function RulesTab({ orgId }: { orgId: string }) {
   };
 
   const inputCls = 'w-full px-3 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)]';
-  const devices = demoDevices.filter(d => d.orgId === Number(orgId));
+  const [devices, setDevices] = useState<{ id: string | number; hostname: string; isProbe: boolean }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    if (isDemoMode()) {
+      setDevices(demoDevices.filter(d => d.orgId === Number(orgId)).map(d => ({ id: d.id, hostname: d.hostname, isProbe: !!d.isProbe })));
+    } else {
+      tenantManagerApi.devices(orgId).then(rows => { if (alive) setDevices(rows.map(d => ({ id: d.id, hostname: d.hostname || d.ip, isProbe: d.is_probe }))); }).catch(() => { if (alive) setDevices([]); });
+    }
+    return () => { alive = false; };
+  }, [orgId]);
 
   return (
     <div className="space-y-3">
