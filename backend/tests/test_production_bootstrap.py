@@ -110,6 +110,7 @@ def test_production_settings_reject_insecure_transport_and_wildcard_cors():
 
 
 def test_production_settings_accept_explicit_secure_configuration():
+    from cryptography.fernet import Fernet
     from app.core.config import Settings
 
     settings = Settings(
@@ -118,6 +119,7 @@ def test_production_settings_accept_explicit_secure_configuration():
         DATABASE_URL="postgresql+asyncpg://user:password@db:5432/app",
         CORS_ORIGINS=["https://app.example.com"],
         CONNECTOR_TLS_VERIFY=True,
+        INTEGRATION_ENCRYPTION_KEY=Fernet.generate_key().decode("utf-8"),
     )
     assert settings.APP_ENV == "production"
 
