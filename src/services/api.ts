@@ -1366,4 +1366,39 @@ export const platformAccessApi = {
   revokeAssignment: (id: number) => api.del<void>(`/platform/access/assignments/${id}`),
   updateRole: (userId: number, role: Exclude<PlatformStaffRole, 'platform_admin'>) =>
     api.patch<{ id: number; role: PlatformStaffRole; auth_version: number }>(`/platform/access/users/${userId}/role`, { role }),
+  updateStatus: (userId: number, status: 'active' | 'inactive') =>
+    api.patch<{ id: number; status: string; auth_version: number }>(`/platform/access/users/${userId}/status`, { status }),
+  inviteStaff: (data: { email: string; name: string; role: Exclude<PlatformStaffRole, 'platform_admin'> }) =>
+    api.post<{ id: number; email: string; role: PlatformStaffRole; activation_url: string; expires_at: string }>('/platform/access/invitations', data),
+  invitations: () => api.get<any[]>('/platform/access/invitations'),
+  revokeInvitation: (id: number) => api.del<void>(`/platform/access/invitations/${id}`),
+  acceptInvitation: (data: { token: string; password: string; name?: string }) =>
+    api.post<any>('/platform/access/invitations/accept', data),
+};
+
+
+export interface PlatformOverviewResponse {
+  generated_at: string;
+  currency: string;
+  kpis: Record<string, number>;
+  tenant_countries: { country: string; count: number }[];
+  audit_activity_14d: { date: string; events: number }[];
+  recent_activity: { id: number; actor: string; role: string; action: string; resource: string;
+    resource_id: string; outcome: string; timestamp: string | null }[];
+}
+export interface PlatformBillingResponse {
+  period: string;
+  currency: string;
+  summary: Record<string, number>;
+  usage: Record<string, { quantity: number; events: number }>;
+  organizations: { id: number; name: string; status: string; is_partner: boolean;
+    plan_tier: string; billing_cycle: string; monthly_revenue: number;
+    endpoint_count: number; seat_limit: number; contract_end: string | null }[];
+  invoice_system: string;
+}
+export const platformAdminApi = {
+  overview: () => api.get<PlatformOverviewResponse>('/platform/admin/overview'),
+  health: () => api.get<any>('/platform/admin/health'),
+  connectors: () => api.get<any>('/platform/admin/connectors'),
+  billing: (period: string) => api.get<PlatformBillingResponse>('/platform/admin/billing?period=' + encodeURIComponent(period)),
 };
