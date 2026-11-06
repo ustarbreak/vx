@@ -19,15 +19,22 @@ never from a query parameter.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import os
 import re
+import zipfile
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.responses import StreamingResponse
 
 from app.core.security import get_current_user
-from app.models import User
+from app.core.platform_rbac import has_permission, is_platform_role
+from app.database import get_db
+from app.models import User, Organization
+from app.models_reporting import RptExportLog
 from app.services.reporting import demo_data as dd
 
 router = APIRouter(prefix="/v1/reports", tags=["Reporting"])
@@ -53,28 +60,34 @@ def _flag_demo() -> bool:
     return os.getenv("REPORTING_DEMO", "1") == "1"
 
 
-def _tenant_id(user: User) -> str:
-    return str(user.org_id or user.id)
+async def _tenant_id(user: User, requested_org: int | None, db: AsyncSession) -> str:
+    if requested_org is not None:
+        if not is_platform_role(user.role):
+            if user.org_id != requested_org:
+                raise HTTPException(403, "Cross-tenant report access denied")
+        elif not await has_permission(user, "platform.reports.read", db, org_id=requested_org):
+            raise HTTPException(403, "Platform report permission required for this tenant")
+        if await db.get(Organization, requested_org) is None:
+            raise HTTPException(404, "Report tenant not found")
+        return str(requested_org)
+    if user.org_id is not None:
+        return str(user.org_id)
+    if is_platform_role(user.role):
+        raise HTTPException(422, "org_id is required when a platform user requests tenant reports")
+    raise HTTPException(403, "No tenant scope is available for reporting")
 
 
 async def _real_pages(report_key: str, tenant: str, period: str) -> list | None:
-    """Build a report from REAL platform data (Demo Mode OFF path).
-
-    Returns None when no real builder exists yet for this report — the caller
-    then answers honestly with 'Donnee indisponible' (never fake numbers,
-    never silent demo data). PLUG points per report family:
-      - incident / tickets / soar : Postgres tables live today
-        (app/services/reporting/real_builders.py)
-      - threatintel               : connectors MISP/OTX (Phase 2)
-      - others                    : Phase 2 adapters
-    """
+    """Build from the unified reporting fact schema. No demo fallback."""
     try:
-        if report_key in ("incident", "tickets", "soar"):
-            from app.services.reporting import real_builders
-            return await real_builders.build(report_key, tenant, period)
-    except Exception:  # pragma: no cover - degrade honestly on any failure
+        from app.services.reporting import builders
+        return await builders.build(report_key, tenant, period)
+    except Exception:
+        import logging
+        logging.getLogger("infracentra.reporting").exception(
+            "report builder failed: report=%s tenant=%s period=%s", report_key, tenant, period
+        )
         return None
-    return None
 
 
 def _unavailable_pages(report_key: str) -> list:
@@ -86,7 +99,7 @@ def _unavailable_pages(report_key: str) -> list:
             for i in range(total)]
 
 
-def _resolve_demo(demo_param: int, demo_source: int) -> bool:
+def _resolve_demo(demo_param: int, demo_source: str) -> bool:
     """Decide whether to serve deterministic demo content for THIS request.
 
     Rule agreed with the product owner (Oct 2026): the backend always exists,
@@ -106,8 +119,7 @@ def _resolve_demo(demo_param: int, demo_source: int) -> bool:
     return False
 
 
-async def _render_pages(report_key: str, user: User, period: str, demo: bool) -> list:
-    tenant = _tenant_id(user)
+async def _render_pages(report_key: str, tenant: str, period: str, demo: bool) -> list:
     if demo:
         return dd.build_demo_report(report_key, tenant, period)
     real = await _real_pages(report_key, tenant, period)
