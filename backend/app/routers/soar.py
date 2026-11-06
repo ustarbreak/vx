@@ -320,6 +320,7 @@ async def _run_step(db: AsyncSession, run: PlaybookRun, step: dict, user: User,
             if not agent_id:
                 return "failed", "isolate_host requires a Wazuh agent_id; hostname-only targeting is not accepted"
             from app.services.connectors import load_connector_config
+            from app.platform.connectors import providers as _providers  # noqa: F401
             from app.platform.connectors.base import get_provider
             config = await load_connector_config("endpoint-protection", db)
             config["org_id"] = int(run.org_id or user.org_id or 0)
