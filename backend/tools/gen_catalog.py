@@ -26,7 +26,7 @@ OUT_DIR = BACKEND / "app" / "platform" / "catalog" / "services"
 
 # Lifecycle/status vocabulary (ALIGNMENT.md legend): ga | beta | roadmap
 DEFAULT_STATUS = {
-    "vuln-scanning": "roadmap",   # Greenbone deferred to Phase 6 T6.0 (owner decision #8)
+    "vuln-scanning": "beta",      # Wazuh CVE inventory is available; active Greenbone scans remain gated
     "sd-wan": "roadmap",
     "cloud-security": "beta",
     "dns-filtering": "beta",
@@ -58,6 +58,9 @@ NATIVE_ACTIONS: dict[str, list[dict]] = {
     "soar": [
         {"name": "playbook.run", "method": "POST", "dangerous": True, "status": "ga"},
     ],
+    "vuln-scanning": [
+        {"name": "vulnerability.fetch", "method": "GET", "dangerous": False, "status": "beta"},
+    ],
     "endpoint-protection": [
         {"name": "endpoint.list", "method": "GET", "dangerous": False, "status": "ga"},
         {"name": "detection.fetch", "method": "GET", "dangerous": False, "status": "ga"},
@@ -66,7 +69,7 @@ NATIVE_ACTIONS: dict[str, list[dict]] = {
 }
 
 # Services delegated to a validated external connector.
-PROVIDER_OVERRIDES = {"endpoint-protection": "hybrid"}
+PROVIDER_OVERRIDES = {"endpoint-protection": "hybrid", "vuln-scanning": "connector"}
 
 
 def main(argv=None) -> int:
