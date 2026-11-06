@@ -413,7 +413,7 @@ async def build_incident(tenant: str, period: str) -> list:
                          [["D\u00e9but activit\u00e9", i.started_at.strftime("%H:%M") if i.started_at else NA, NA,
                            "horloge technique"],
                           ["D\u00e9tection", i.detected_at.strftime("%H:%M") if i.detected_at else NA,
-                           since(i.started_at, i.detected_at), i.detection_method or "corrélation plateforme"],
+                           since(i.started_at, i.detected_at), i.detection_method or NA],
                           ["Confinement", i.contained_at.strftime("%H:%M") if i.contained_at else NA,
                            since(i.detected_at, i.contained_at),
                            "playbook automatique" if i.auto_closed else "action analyste"],
@@ -453,7 +453,8 @@ async def build_soar(tenant: str, period: str) -> list:
                     _empty_unavailable("Performance par sc\u00e9nario"),
                     _empty_unavailable("Fiabilit\u00e9")]
         ok = [r for r in runs if r.success]
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs])
+        measured_runs = [r for r in runs if r.manual_minutes_saved is not None]
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
         auto = K.automation_rate([(i.status, i.auto_closed) for i in inc]) if inc else None
         by_pb = {}
         for r in runs:
@@ -463,7 +464,8 @@ async def build_soar(tenant: str, period: str) -> list:
             e["ok"] += 1 if r.success else 0
             if r.duration_s:
                 e["dur"].append(r.duration_s)
-            e["saved"] += r.manual_minutes_saved or 0
+            if r.manual_minutes_saved is not None:
+                e["saved"] += r.manual_minutes_saved
         all_durs = [d for e in by_pb.values() for d in e["dur"]]
         avg_dur = sum(all_durs) / len(all_durs) if all_durs else None
         saved_min_total = hours * 60 if hours else 0
@@ -814,16 +816,18 @@ async def build_network(tenant: str, period: str) -> list:
             u = [x.avg_value for x in mm if x.metric == "uptime_pct" and x.avg_value is not None]
             rows.append([site, str(len(mm)), f"{sum(l)/len(l):.1f} ms" if l else NA,
                          f"{sum(u)/len(u):.2f} %" if u else NA,
-                         "@low:OK" if u and sum(u) / len(u) >= 99.5 else "@med:D\u00e9gradation"])
+                         "@med:Non mesur\u00e9" if not u else ("@low:OK" if sum(u) / len(u) >= 99.5 else "@med:D\u00e9gradation")])
         p2 = ["Sites & \u00e9quipements", "Vue consolid\u00e9e par implantation.", [
             ["T", "Sites", ["Site", "Mesures", "Latence moy.", "Disponibilit\u00e9", "\u00c9tat"], rows]]]
         trend = {}
         for m in ms:
             if m.metric == "latency_ms":
-                trend.setdefault(m.bucket, []).append(m.avg_value or 0)
+                if m.avg_value is not None:
+                    trend.setdefault(m.bucket, []).append(m.avg_value)
         spark = [round(sum(v) / len(v)) for _, v in sorted(trend.items())][-14:]
         p3 = ["Tendances", "\u00c9volution quotidienne.", [
-            ["S", "Latence moyenne par jour", spark if len(spark) > 1 else [0, 0]],
+            (["S", "Latence moyenne par jour", spark] if len(spark) > 1 else
+             _note("Historique insuffisant pour calculer une tendance fiable.")),
             ["L", "Actions recommand\u00e9es", [
                 "Qualifier le lien des sites sous 99,5 % de disponibilit\u00e9.",
                 "Dimensionner les liens satur\u00e9s au-del\u00e0 de 80 % d'utilisation r\u00e9currente.",
