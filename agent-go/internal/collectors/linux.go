@@ -80,10 +80,8 @@ func (c *Collector) collectSMART(inv *Inventory) {
 		if !strings.HasPrefix(dev, "/dev/") {
 			continue
 		}
-		out, err := exec.Command(bin, "-i", "-A", "-H", "--json", dev).Output()
-		if err != nil {
-			continue // smartctl exits non-zero on degraded health; JSON still valid
-		}
+		out, _ := exec.Command(bin, "-i", "-A", "-H", "--json", dev).CombinedOutput()
+		if len(out) == 0 { continue } // smartctl uses non-zero health bitmasks; JSON can still be valid
 		if sm := parseSmartJSON(out); sm != nil {
 			inv.Disks[i].Smart = sm
 		}

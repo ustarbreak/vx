@@ -1,9 +1,11 @@
 package collectors
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -263,7 +265,17 @@ func (c *Collector) collectNetwork(inv *Inventory) {
 }
 
 func defaultRouteIfaces() map[string]bool {
-	out := map[string]bool{}
+	outMap := map[string]bool{}
+	if runtime.GOOS == "windows" {
+		cmd := "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | ForEach-Object { (Get-NetIPInterface -InterfaceIndex $_.InterfaceIndex).InterfaceAlias } | Sort-Object -Unique"
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd).Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				if name := strings.TrimSpace(line); name != "" { outMap[strings.ToLower(name)] = true }
+			}
+		}
+	}
 	if runtime.GOOS == "linux" {
 		// parse /proc/net/route (hex 00000000 destination)
 		b, err := os.ReadFile("/proc/net/route")
@@ -271,12 +283,12 @@ func defaultRouteIfaces() map[string]bool {
 			for _, line := range strings.Split(string(b), "\n")[1:] {
 				f := strings.Fields(line)
 				if len(f) >= 3 && f[1] == "00000000" {
-					out[strings.ToLower(f[0])] = true
+					outMap[strings.ToLower(f[0])] = true
 				}
 			}
 		}
 	}
-	return out
+	return outMap
 }
 
 // ------------------------------------------------------------- processes ----

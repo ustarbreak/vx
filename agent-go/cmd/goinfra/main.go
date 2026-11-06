@@ -117,6 +117,8 @@ type agent struct {
 	cli   *transport.Client
 	col   *collectors.Collector
 	creds []snmpx.Credential
+	pendingEvents []collectors.SecurityEvent
+	eventCursor time.Time
 
 	agentIDNum int
 }
@@ -138,6 +140,8 @@ func newAgent(cfg *config.Config) (*agent, error) {
 		col: collectors.New(enr.AgentID, cfg.Debug),
 	}
 	a.agentIDNum = aid
+	_, _ = st.LoadJSON("pending_events.json", &a.pendingEvents)
+	_, _ = st.LoadJSON("event_cursor.json", &a.eventCursor)
 	return a, nil
 }
 
@@ -161,6 +165,17 @@ func runAgent(args []string, once bool) error {
 		log.Printf("hello failed: %v", err)
 	}
 
+	var syslogEvents <-chan collectors.SecurityEvent
+	if cfg.SyslogListen != "" {
+		ch, err := collectors.StartSyslogListener(cfg.SyslogListen)
+		if err != nil { return err }
+		syslogEvents = ch
+		log.Printf("syslog listener active on %s (UDP/TCP)", cfg.SyslogListen)
+	}
+
+	// Load tenant scan policy before the first collection cycle so SNMP
+	// credentials and approved CIDRs are available from the outset.
+	a.refreshPolicy()
 	// initial cycles immediately, then ticker
 	a.cycle()
 	if once {
@@ -185,6 +200,8 @@ func runAgent(args []string, once bool) error {
 			a.pushMetrics()
 		case <-policyTick.C:
 			a.refreshPolicy()
+		case ev, ok := <-syslogEvents:
+			if ok { a.enqueueEvent(ev); a.flushEvents() } else { syslogEvents = nil }
 		}
 	}
 }
@@ -199,8 +216,13 @@ func (a *agent) cycle() {
 		log.Printf("inventory reported (%d disks, %d ifaces)", len(inv.Disks), len(inv.Network))
 	}
 
+	a.collectEvents()
+	a.flushEvents()
+
 	disc := collectors.RunDiscovery(a.cfg.ScanCIDRs, a.creds, a.cfg.Debug)
 	devs := make([]transport.DiscoveryDevice, 0, len(disc.Devices))
+	snmpByIP := make(map[string]interface{}, len(disc.SNMPFacts))
+	for _, fact := range disc.SNMPFacts { snmpByIP[fact.IP] = fact }
 	for _, d := range disc.Devices {
 		ports := make([]int, 0, len(d.OpenPorts))
 		for _, p := range d.OpenPorts {
@@ -208,7 +230,7 @@ func (a *agent) cycle() {
 		}
 		devs = append(devs, transport.DiscoveryDevice{
 			IP: d.IP, Hostname: d.Hostname, OSGuess: d.OSGuess,
-			DeviceType: d.DeviceType, OpenPorts: ports, ViaAgent: a.agentIDNum,
+			DeviceType: d.DeviceType, OpenPorts: ports, ViaAgent: a.agentIDNum, SNMPFacts: snmpByIP[d.IP],
 		})
 	}
 	// enrich with SNMP sysName/sysDescr when available
@@ -216,6 +238,7 @@ func (a *agent) cycle() {
 		for i := range devs {
 			if devs[i].IP == f.IP {
 				devs[i].SysName, devs[i].SysDescr = f.SysName, f.SysDescr
+			devs[i].SNMPFacts = f
 			}
 		}
 	}
@@ -291,6 +314,83 @@ func (a *agent) refreshPolicy() {
 	log.Printf("policy updated: cidrs=%v snmp_creds=%d", a.cfg.ScanCIDRs, len(a.creds))
 }
 
+
+// collectEvents polls the native OS event source and durably queues events
+// before attempting network delivery. A failed upload never advances data loss.
+func (a *agent) collectEvents() {
+	since := a.eventCursor
+	if since.IsZero() {
+		since = time.Now().UTC().Add(-10 * time.Minute)
+	}
+	events, err := collectors.CollectSystemEvents(since, 250)
+	if err != nil {
+		log.Printf("system event collection failed: %v", err)
+		return
+	}
+	nextCursor := a.eventCursor
+	seen := make(map[string]bool, len(a.pendingEvents)+len(events))
+	for _, e := range a.pendingEvents {
+		seen[e.EventID] = true
+	}
+	for _, e := range events {
+		if e.EventID == "" || seen[e.EventID] {
+			continue
+		}
+		seen[e.EventID] = true
+		a.pendingEvents = append(a.pendingEvents, e)
+		if e.Timestamp.After(nextCursor) {
+			nextCursor = e.Timestamp
+		}
+	}
+	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+		log.Printf("persist event queue failed: %v", err)
+		return
+	}
+	a.eventCursor = nextCursor
+	if err := a.st.SaveJSON("event_cursor.json", a.eventCursor); err != nil {
+		log.Printf("persist event cursor failed: %v", err)
+	}
+}
+
+// enqueueEvent adds forwarded syslog to the same durable queue as local logs.
+func (a *agent) enqueueEvent(ev collectors.SecurityEvent) {
+	if ev.EventID == "" { return }
+	for _, existing := range a.pendingEvents {
+		if existing.EventID == ev.EventID { return }
+	}
+	a.pendingEvents = append(a.pendingEvents, ev)
+	if len(a.pendingEvents) > 100000 {
+		a.pendingEvents = a.pendingEvents[:100000]
+		log.Printf("event queue reached 100000-event safety cap; new syslog event was dropped")
+		return
+	}
+	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+		log.Printf("persist syslog event failed: %v", err)
+	}
+}
+
+// flushEvents sends bounded batches. The durable queue is only truncated
+// after the platform confirms the HTTP request.
+func (a *agent) flushEvents() {
+	for len(a.pendingEvents) > 0 {
+		n := 100
+		if len(a.pendingEvents) < n {
+			n = len(a.pendingEvents)
+		}
+		batch := append([]collectors.SecurityEvent(nil), a.pendingEvents[:n]...)
+		if err := a.cli.ReportEvents(a.agentIDNum, batch); err != nil {
+			log.Printf("event upload failed (%d queued): %v", len(a.pendingEvents), err)
+			return
+		}
+		a.pendingEvents = append([]collectors.SecurityEvent(nil), a.pendingEvents[n:]...)
+		if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+			log.Printf("persist event queue after upload failed: %v", err)
+			return
+		}
+		log.Printf("reported %d security events (%d pending)", n, len(a.pendingEvents))
+	}
+}
+
 // ---------------------------------------------------------------- install --
 
 func runInstall(args []string) error {
@@ -316,8 +416,19 @@ RestartSec=10
 DynamicUser=no
 ProtectHome=read-only
 NoNewPrivileges=false
-AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
 
 [Install]
 WantedBy=multi-user.target

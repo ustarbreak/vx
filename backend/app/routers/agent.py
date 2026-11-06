@@ -306,6 +306,7 @@ class AgentDevice(BaseModel):
     open_ports: list[int] = []
     sys_name: str | None = None
     sys_descr: str | None = None
+    snmp_facts: dict | None = None
     via_agent: int = 0
 
 
@@ -387,6 +388,7 @@ async def report_discovery(agent_id: int, body: DiscoveryBody,
         ad.mac, ad.hostname, ad.os_guess, ad.device_type = d.mac, d.hostname, os_guess, dtype
         ad.open_ports = d.open_ports or []
         ad.sys_name, ad.sys_desc = d.sys_name, d.sys_descr
+        ad.snmp_facts = d.snmp_facts or {}
         ad.last_seen = now_utc()
 
         # SNMP-managed device found -> SAME shared processing pipeline as the
@@ -438,6 +440,91 @@ async def report_discovery(agent_id: int, body: DiscoveryBody,
     await db.commit()
     return {"ok": True, "scan_id": scan.id, "stored": new_devs}
 
+
+
+# ---------------------------------------------------------------------------
+# Normalized host and forwarded syslog event ingestion
+# ---------------------------------------------------------------------------
+
+class AgentEventsBody(BaseModel):
+    events: list[dict] = []
+
+
+@router.post("/{agent_id}/events", status_code=202)
+async def ingest_agent_events(agent_id: int, body: AgentEventsBody,
+                              token: AgentToken = Depends(get_agent_token),
+                              db: AsyncSession = Depends(get_db)):
+    """Persist agent events as durable evidence, then run the canonical pipeline.
+    Event IDs are scoped by probe and source; transport retries are idempotent.
+    """
+    probe = await _get_probe(agent_id, token, db)
+    from app.services import evidence as ev_service
+    from app.services import pipeline as shared_pipeline
+
+    accepted = 0
+    duplicates = 0
+    rejected = 0
+    for event in body.events[:250]:
+        if not isinstance(event, dict):
+            rejected += 1
+            continue
+        message = str(event.get("message") or "").strip()
+        source = str(event.get("source") or "agent").strip()[:80]
+        event_id = str(event.get("event_id") or "").strip()[:255]
+        if not message or not event_id:
+            rejected += 1
+            continue
+        occurred = None
+        raw_ts = event.get("timestamp")
+        if isinstance(raw_ts, str):
+            try:
+                occurred = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+            except ValueError:
+                occurred = None
+        severity = str(event.get("severity") or "info").lower()
+        if severity not in {"critical", "high", "medium", "low", "info"}:
+            severity = "info"
+        payload = {
+            "event": event,
+            "probe_id": probe.id,
+            "probe_hostname": probe.hostname,
+        }
+        try:
+            rec = await ev_service.store_event_evidence(
+                db, org_id=probe.org_id, payload=payload,
+                source_system="agent:" + source,
+                source_event_id=f"probe-{probe.id}:{event_id}",
+                source_occurred_at=occurred,
+                provenance={"actor": f"agent:{probe.hostname}",
+                            "endpoint": "/api/agent/events"},
+            )
+            await db.commit()
+            was_processed = rec.processing_status == "processed"
+            await shared_pipeline.process_ingested_event(
+                db, org_id=probe.org_id, evidence_uid=rec.event_uid,
+                run_side_effects=True,
+                fields={
+                    "title": f"{source}: {str(event.get('provider') or event.get('event_code') or 'host event')[:120]}",
+                    "description": message[:2000],
+                    "severity": severity,
+                    "source": source,
+                    "resource": str(event.get("hostname") or probe.hostname)[:255],
+                    "raw_payload": payload,
+                },
+            )
+            if was_processed:
+                duplicates += 1
+            else:
+                accepted += 1
+        except Exception:
+            # Do not acknowledge a partially failed batch. Already committed
+            # evidence is idempotent, so retrying safely resumes processing.
+            await db.rollback()
+            logger.exception("agent event ingestion failed for probe=%s source=%s", probe.id, source)
+            raise
+    await _touch(db, probe)
+    return {"ok": True, "accepted": accepted, "duplicates": duplicates,
+            "rejected": rejected, "received": min(len(body.events), 250)}
 
 # ---------------------------------------------------------------------------
 # Probe fleet view (used by dashboard / settings page)
@@ -532,4 +619,4 @@ async def web_discovered_devices(org_id: int | None = None,
     return [{"id": d.id, "probe_id": d.probe_id, "ip": d.ip, "mac": d.mac,
              "hostname": d.hostname, "os_guess": d.os_guess, "device_type": d.device_type,
              "sys_name": d.sys_name, "snmp": bool(d.sys_desc or d.sys_name),
-             "open_ports": d.open_ports or [], "last_seen": d.last_seen} for d in rows]
+             "snmp_facts": d.snmp_facts or {}, "open_ports": d.open_ports or [], "last_seen": d.last_seen} for d in rows]
