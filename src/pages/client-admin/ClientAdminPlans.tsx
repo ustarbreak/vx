@@ -413,13 +413,12 @@ export default function ClientAdminPlans() {
             unit="Go"
             unavailable={backendMode ? measuredSiemGbMonth == null : (!siemGbDayUsed && siemEntitledGb == null && !(organization as any)?.siem_limit_gb)}
           />
-          <UsageBar
-            label="Terminaux comptabilisés ce mois vs. parc contractuel"
-            used={backendMode ? measuredEndpoints : null}
-            limit={backendMode ? ((organization as any)?.endpoint_count ?? organization?.assetCount ?? null) : null}
-            unit="terminaux"
-            unavailable={!backendMode || measuredEndpoints == null}
-          />
+          <div className="bg-[var(--ic-surface-2)] rounded-lg p-4 flex items-center justify-between">
+            <span className="text-gray-300 text-sm">Terminaux mesurés (dernier relevé du mois)</span>
+            <span className="text-[var(--ic-heading)] text-sm font-semibold">
+              {backendMode && measuredEndpoints != null ? measuredEndpoints.toLocaleString('fr-FR') : 'Données indisponibles'}
+            </span>
+          </div>
           <UsageBar
             label="Sièges techniciens utilisés vs. limite"
             used={seatsUsed}
