@@ -291,32 +291,65 @@ def _blocks_to_rows(pages: list) -> list:
 
 
 @router.get("/{report_id}/export")
-async def export(report_id: str, format: str = Query("csv"), page: int = Query(0),
-                 period: str = Query("2026-10"), demo: int = Query(0),
-                 demo_source: str = Query(""),
-                 current_user: User = Depends(get_current_user)):
+async def export(report_id: str, format: str = Query("csv", pattern="^(csv|pdf)$"),
+                 page: int = Query(0, ge=0), period: str = Query(...), demo: int = Query(0),
+                 org_id: int | None = Query(None), current_user: User = Depends(get_current_user),
+                 db: AsyncSession = Depends(get_db)):
     if report_id not in BY_KEY:
         raise HTTPException(404, "Unknown report")
     _check_period(period)
+    tenant = await _tenant_id(current_user, org_id, db)
     num, title, fam, total = BY_KEY[report_id]
-    pages = await _render_pages(report_id, current_user, period, _resolve_demo(demo, demo_source))
-    if page and 1 <= page <= total:
-        sel = [pages[page - 1]]
-        fname = f"report{num:02d}_p{page}_{period}.csv"
-    else:
-        sel = pages
-        fname = f"report{num:02d}_{period}.csv"
+    if page > total:
+        raise HTTPException(404, f"Report {num} has {total} pages")
+    use_demo = _resolve_demo(demo, "")
+    pages = await _render_pages(report_id, tenant, period, use_demo)
+    selected = [pages[page - 1]] if page else pages
+    suffix = "_p" + str(page) if page else ""
+    filename = "report" + str(num).zfill(2) + suffix + "_" + period + "." + format
     if format == "pdf":
-        # PLUG (Phase 6): headless browser print of the same page payload.
-        raise HTTPException(501, "PDF export arrives with Phase 6 (headless renderer). Use CSV now.")
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow([f"Infracentra report #{num}: {title}", f"period={period}", f"updated={dd.now_utc()}"])
-    for r in _blocks_to_rows(sel):
-        w.writerow(r)
-    data = "\ufeff" + buf.getvalue()  # BOM for Excel (brief §6)
-    return StreamingResponse(
-        io.BytesIO(data.encode("utf-8")),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+        from xml.sax.saxutils import escape
+        pdf = io.BytesIO()
+        doc = SimpleDocTemplate(pdf, pagesize=landscape(A4), rightMargin=12*mm,
+                                leftMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+        styles = getSampleStyleSheet()
+        story = [Paragraph(escape("Infracentra — " + title), styles["Title"]),
+                 Paragraph(escape("Tenant " + tenant + " · " + period + (" · DEMO" if use_demo else " · LIVE / source-qualified")), styles["Normal"]),
+                 Spacer(1, 8*mm)]
+        for index, item in enumerate(selected):
+            section, intro, blocks = item
+            story.append(Paragraph(escape(str(section)), styles["Heading2"]))
+            story.append(Paragraph(escape(str(intro)), styles["BodyText"]))
+            rows = _blocks_to_rows([(section, intro, blocks)])
+            table_data = [[Paragraph(escape(str(cell)), styles["BodyText"]) for cell in row] for row in rows]
+            if table_data:
+                table = Table(table_data, repeatRows=1, colWidths=[45*mm, 28*mm, 45*mm, 45*mm, 45*mm, 45*mm])
+                table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#dce7ef")),
+                    ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#9aa8b5")),
+                    ("VALIGN",(0,0),(-1,-1),"TOP"),("FONTSIZE",(0,0),(-1,-1),7)]))
+                story.extend([Spacer(1, 3*mm), table])
+            if index < len(selected)-1:
+                story.append(PageBreak())
+        doc.build(story)
+        payload = pdf.getvalue()
+        media_type = "application/pdf"
+    else:
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Infracentra report #" + str(num) + ": " + title, "period=" + period,
+                         "tenant=" + tenant, "updated=" + str(dd.now_utc())])
+        writer.writerows(_blocks_to_rows(selected))
+        payload = ("\\ufeff" + buf.getvalue()).encode("utf-8")
+        media_type = "text/csv; charset=utf-8"
+    if not use_demo:
+        db.add(RptExportLog(tenant_id=tenant, user_id=str(current_user.id), report_id=report_id,
+            period=period, fmt=format, sha256=hashlib.sha256(payload).hexdigest(),
+            exported_at=datetime.now(timezone.utc)))
+        await db.commit()
+    return StreamingResponse(io.BytesIO(payload), media_type=media_type,
+        headers={"Content-Disposition": 'attachment; filename="' + filename + '"'})
