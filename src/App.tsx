@@ -30,6 +30,7 @@ import PSAPage from './pages/PSAPage';
 
 // Platform admin views
 import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
+import PlatformBillingPage from './pages/platform/PlatformBillingPage';
 import PlatformTeamPage from './pages/platform/PlatformTeamPage';
 import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
@@ -192,6 +193,7 @@ function AppRoutes() {
         {/* Platform admin views */}
         <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
         <Route path="admin/team" element={<PlatformTeamPage />} />
+        <Route path="admin/billing" element={<PlatformBillingPage />} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />
