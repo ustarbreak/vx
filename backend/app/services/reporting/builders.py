@@ -717,61 +717,63 @@ async def build_cloud(tenant: str, period: str) -> list:
 # ==================================================================== 5 INFRA
 async def build_infra(tenant: str, period: str) -> list:
     async with AsyncSessionLocal() as db:
-        plats = (await db.execute(select(PlatformMetric).where(
+        metrics = (await db.execute(select(PlatformMetric).where(
             PlatformMetric.tenant_id == tenant,
             PlatformMetric.bucket.like(period + "%")).order_by(PlatformMetric.bucket)
         )).scalars().all()
         assets = (await db.execute(select(RptAsset).where(
-            RptAsset.tenant_id == tenant)).scalars().all())
-        conn_up = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.asset_type == "connector",
-            RptAsset.agent_uptime_pct >= 99))).scalar() or 0
-        conn_tot = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.asset_type == "connector"))).scalar() or 0
-        if not plats and not assets:
-            return [_empty_unavailable("Capacit\u00e9 & performance"),
+            RptAsset.tenant_id == tenant))).scalars().all()
+        if not metrics and not assets:
+            return [_empty_unavailable("Capacité & performance"),
                     _empty_unavailable("Composants"),
-                    _empty_unavailable("S\u00e9curit\u00e9 interne")]
-        last = plats[-1] if plats else None
-        p1 = ["Capacit\u00e9 & performance", "Mesures agr\u00e9g\u00e9es de la plateforme.", [
-            ["K", [["Ingestion", f"{last.ingestion_eps:,.0f} EPS" if last and last.ingestion_eps else NA,
-                    "= moyenne p\u00e9riode", "1"],
-                   ["Latence de collecte", f"{last.collect_latency_s:.1f} s" if last and last.collect_latency_s else NA,
-                    "= capteur \u2192 stockage", "o"],
-                   ["Interrogations p95", f"{last.query_p95_s:.1f} s" if last and last.query_p95_s else NA,
-                    "= exp\u00e9rience utilisateur", "2"],
-                   ["Connecteurs actifs", f"{conn_up}/{conn_tot}" if conn_tot else NA,
-                    "= collecte temps r\u00e9el", "3" if conn_tot else "w"],
-                   ["R\u00e9tention", f"{last.retention_months} mois" if last and last.retention_months else NA,
-                    "= politique contractuelle", "o"]]],
+                    _empty_unavailable("Sécurité interne")]
+        last = metrics[-1] if metrics else None
+        p1 = ["Capacité & performance", "Télémétrie réellement enregistrée pour la période.", [
+            ["K", [["Ingestion", f"{last.ingestion_eps:,.0f} EPS" if last and last.ingestion_eps is not None else NA,
+                    "= mesure enregistrée", "1"],
+                   ["Latence de collecte", f"{last.collect_latency_s:.1f} s" if last and last.collect_latency_s is not None else NA,
+                    "= mesure enregistrée", "o"],
+                   ["Interrogations p95", f"{last.query_p95_s:.1f} s" if last and last.query_p95_s is not None else NA,
+                    "= mesure enregistrée", "2"],
+                   ["Connecteurs déclarés", f"{last.connectors_up}/{last.connectors_total}"
+                    if last and last.connectors_up is not None and last.connectors_total is not None else NA,
+                    "= télémétrie de connecteurs", "3"],
+                   ["Rétention", f"{last.retention_months} mois" if last and last.retention_months is not None else NA,
+                    "= valeur de configuration mesurée", "o"]]],
             (["B", "Utilisation des ressources",
-              [["Calcul", round(last.compute_used_pct or 0), "1"],
-               ["M\u00e9moire", round(last.memory_used_pct or 0), "2"],
-               ["Stockage", round(last.storage_used_pct or 0), "3"],
-               ["R\u00e9seau", round(last.network_used_pct or 0), "o"]]] if last else
-             _note("T\u00e9l\u00e9m\u00e9trie plateforme non disponible pour la p\u00e9riode."))]]
-        avail = f"{last.availability_pct:.2f} %" if last and last.availability_pct is not None else NA
-        p2 = ["Composants", "Disponibilit\u00e9 par fonction de la plateforme.", [
-            ["T", "\u00c9tat", ["Fonction", "R\u00f4le", "Disponibilit\u00e9", "\u00c9tat"],
-             [["Collecte", "Ingestion des flux", avail,
-               "@low:OK" if last and (last.availability_pct or 0) >= 99.9 else "@med:\u00e0 surveiller"],
-              ["Normalisation", "Standardisation & enrichissement", NA, "@low:OK"],
-              ["D\u00e9tection", "Corrélation & alertes", NA, "@low:OK"],
-              ["Orchestration", "Ex\u00e9cution des playbooks", NA, "@low:OK"],
-              ["Interface", "Visualisation & exports", NA, "@low:OK"]]]]]
-        p3 = ["S\u00e9curit\u00e9 interne", "Contr\u00f4les appliqu\u00e9s \u00e0 la plateforme elle-m\u00eame.", [
-            ["T", "Contr\u00f4les", ["Contr\u00f4le", "Description", "Statut"],
-             [["Chiffrement de bout en bout", "Donn\u00e9es en transit et au repos",
-               "@low:Conforme" if last and last.encryption_ok else "@med:\u00e0 v\u00e9rifier"],
-              ["Authentification forte", "Double facteur sur tous les acc\u00e8s",
-               "@low:Conforme" if last and last.mfa_enforced else "@med:Partiel"],
-              ["Journal d'audit", "Actions administratrices trac\u00e9es",
-               "@low:Conforme" if last and last.audit_logged else "@med:Partiel"],
-              ["Moindre privil\u00e8ge", "R\u00f4les et droits revus p\u00e9riodiquement", "@low:Conforme"]]],
-            ["L", "Continuit\u00e9", [
-                "Architecture redond\u00e9e sans point de d\u00e9faillance unique.",
-                "Sauvegardes v\u00e9rifi\u00e9es par tests de restauration p\u00e9riodiques.",
-                "Objectifs de reprise (RTO/RPO) contractualis\u00e9s par niveau de service."]]]]
+              [[label, round(value), color] for label, value, color in [
+                  ("Calcul", last.compute_used_pct, "1"), ("Mémoire", last.memory_used_pct, "2"),
+                  ("Stockage", last.storage_used_pct, "3"), ("Réseau", last.network_used_pct, "o")]
+               if value is not None]] if last and any(value is not None for value in [
+                   last.compute_used_pct, last.memory_used_pct, last.storage_used_pct, last.network_used_pct])
+             else _note("Télémétrie de capacité non disponible pour la période."))
+        ]]
+        availability = f"{last.availability_pct:.2f} %" if last and last.availability_pct is not None else NA
+        p2 = ["Composants", "État des composants uniquement si une mesure existe.", [
+            ["T", "État", ["Fonction", "Rôle", "Disponibilité", "État"], [
+                ["Collecte", "Ingestion des flux", availability,
+                 "@low:Mesuré" if last and last.availability_pct is not None else "@med:Non mesuré"],
+                ["Normalisation", "Standardisation & enrichissement", NA, "@med:Non mesuré"],
+                ["Détection", "Corrélation & alertes", NA, "@med:Non mesuré"],
+                ["Orchestration", "Exécution des playbooks", NA, "@med:Non mesuré"],
+                ["Interface", "Visualisation & exports", NA, "@med:Non mesuré"]
+            ]]]
+        ]]
+        controls = []
+        if last:
+            controls = [
+                ["Chiffrement", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.encryption_ok else "non_compliant")],
+                ["MFA", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.mfa_enforced else "non_compliant")],
+                ["Journal d'audit", "État déclaré dans la télémétrie plateforme",
+                 badge("compliant" if last.audit_logged else "non_compliant")]
+            ]
+        p3 = ["Sécurité interne", "Contrôles et preuves disponibles.", [
+            (["T", "Contrôles", ["Contrôle", "Source", "Statut"], controls]
+             if controls else _note("Aucune télémétrie de contrôle de sécurité plateforme disponible.")),
+            _note("La redondance, les sauvegardes et les objectifs RTO/RPO ne sont pas déclarés conformes sans preuves de tests.")
+        ]]
         return [p1, p2, p3]
 
 
