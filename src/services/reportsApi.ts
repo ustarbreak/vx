@@ -35,7 +35,7 @@ export type Block =
 export type Page = [string, string, Block[]];
 export interface ReportBody {
   number: number; id: string; title: string; family: string;
-  period: string; pages: Page[];
+  period: string; pages: Page[]; source_status?: 'demo' | 'live' | 'partial_or_unavailable';
 }
 export interface Catalogue {
   demo: boolean; total_pages: number;
