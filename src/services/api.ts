@@ -1080,8 +1080,7 @@ export const valueApi = {
         ['AI triage rate', String(v.maturity.components.ai_triage_rate)],
         ['SLA compliance', String(v.maturity.components.sla_compliance)],
       ];
-      downloadText(filename, rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r
-'));
+      downloadText(filename, rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\\r\\n'));
     }
   },
 };
