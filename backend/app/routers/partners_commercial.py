@@ -612,9 +612,11 @@ async def billing_analytics(pid: str, user: User = Depends(get_current_user),
     tier = tier_info["tier"]
     # Retail MRR: recorded monthly_revenue when set, else computed billable.
     retail_mrr = D(0); wholesale_mrr = D(0); active = 0; churned = 0
+    billing_period = _now().strftime("%Y-%m")
     for c in kids:
         st = await _settings(db, c.id)
-        bill = D(str(_billable_for_client(c, st)["monthly_excl_vat_mad"]))
+        metered = await _metered_usage_for_month(db, c.id, billing_period)
+        bill = D(str(_billable_for_client(c, st, metered)["monthly_excl_vat_mad"]))
         rev = D(str(c.monthly_revenue)) if c.monthly_revenue else bill
         if c.status == "disabled":
             churned += 1
@@ -624,7 +626,7 @@ async def billing_analytics(pid: str, user: User = Depends(get_current_user),
         wholesale_mrr += bill
     disc = min(D(str(tier["discount"])), D(str(PRICING_CONFIG["partner"]["totalDiscountCap"])))
     margin = retail_mrr - wholesale_mrr
-    return {"partner_org_id": partner.id, "tier": tier["id"],
+    return {"partner_org_id": partner.id, "tier": tier["id"], "period": billing_period,
             "managed_units": tier_info["managed_units"],
             "active_clients": active, "churned_clients": churned,
             "retail_mrr_mad": float(retail_mrr), "wholesale_mrr_mad": float(wholesale_mrr),
