@@ -275,6 +275,50 @@ async def decide(uid: str, approval_id: int, body: ApprovalDecision,
 
 
 # ---- workload & escalations --------------------------------------------------
+
+@router.get("/ops/overview")
+async def platform_ticket_overview(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Global service-desk snapshot for the platform Owner."""
+    if current_user.role != "platform_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform administrators only")
+    rows = (await db.execute(select(Ticket).order_by(Ticket.created_at.desc()))).scalars().all()
+    orgs = (await db.execute(select(Organization))).scalars().all()
+    org_names = {o.id: o.name for o in orgs}
+    active = [t for t in rows if t.status not in ("resolved", "closed")]
+    by_status: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    by_org: dict[int, dict] = {}
+    breached = 0
+    for ticket in rows:
+        by_status[ticket.status] = by_status.get(ticket.status, 0) + 1
+        by_priority[ticket.priority] = by_priority.get(ticket.priority, 0) + 1
+        item = by_org.setdefault(ticket.org_id, {"org_id": ticket.org_id, "organization": org_names.get(ticket.org_id, f"Org #{ticket.org_id}"), "total": 0, "open": 0, "p1_p2": 0})
+        item["total"] += 1
+        if ticket.status not in ("resolved", "closed"):
+            item["open"] += 1
+        if ticket.priority in ("p1", "p2"):
+            item["p1_p2"] += 1
+        if ticket.status not in ("resolved", "closed") and tk.sla_state(ticket) == "breached":
+            breached += 1
+    workload = {}
+    for ticket in active:
+        assignee = ticket.assignee or "unassigned"
+        workload[assignee] = workload.get(assignee, 0) + 1
+    return {
+        "generated_at": tk.now_utc().isoformat(),
+        "counts": {"total": len(rows), "open": len(active), "resolved": by_status.get("resolved", 0), "closed": by_status.get("closed", 0), "p1_p2": sum(by_priority.get(p, 0) for p in ("p1", "p2")), "sla_breached": breached, "unassigned": sum(1 for t in active if not t.assignee)},
+        "by_status": by_status,
+        "by_priority": by_priority,
+        "by_organization": sorted(by_org.values(), key=lambda x: (-x["open"], x["organization"])),
+        "workload": [{"assignee": k, "open": v} for k, v in sorted(workload.items(), key=lambda x: -x[1])],
+        "recent": [_ticket_out(t) for t in rows[:12]],
+        "data_mode": "live",
+    }
+
+
 @router.get("/ops/workload")
 async def team_workload(current_user: User = Depends(get_current_user),
                         db: AsyncSession = Depends(get_db)):
