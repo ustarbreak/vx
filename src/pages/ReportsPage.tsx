@@ -239,7 +239,7 @@ export default function ReportsPage() {
   const [availableTenants, setAvailableTenants] = React.useState<BackendOrganization[]>([]);
   const [tenantLoadError, setTenantLoadError] = React.useState<string | null>(null);
   const tenant = canSwitchTenant ? (tenantOverride || (isDemoMode() ? '1' : String(user?.orgId ?? availableTenants[0]?.id ?? ''))) : String(user?.orgId ?? '');
-  const [period, setPeriod] = React.useState('2026-10');
+  const [period, setPeriod] = React.useState(new Date().toISOString().slice(0, 7));
   const [family, setFamily] = React.useState(FAMILY_ORDER[0][0]);
   const [reportId, setReportId] = React.useState(REPORT_CATALOG[0][1]);
   const [pageNo, setPageNo] = React.useState<number | null>(null); // null = all pages
@@ -247,6 +247,7 @@ export default function ReportsPage() {
   const [meta, setMeta] = React.useState<Meta | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
 
   React.useEffect(() => { if (!canSwitchTenant || isDemoMode()) return; let alive = true; organizationsApi.list().then((items) => { if (!alive) return; setAvailableTenants(items); if (!tenantOverride && items.length) setTenantOverride(String(items[0].id)); }).catch((e: any) => { if (alive) setTenantLoadError(e?.message ?? 'Unable to load live tenant directory'); }); return () => { alive = false; }; }, [canSwitchTenant]);
 
@@ -262,6 +263,21 @@ export default function ReportsPage() {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [reportId, period, tenant]);
+
+  async function refreshCurrentReport() {
+    setRefreshing(true); setError(null);
+    try {
+      await reportsApi.refresh(reportId, period);
+      const [freshBody, freshMeta] = await Promise.all([
+        reportsApi.report(reportId, tenant, period), reportsApi.meta(period, String(tenant)),
+      ]);
+      setBody(freshBody); setMeta(freshMeta);
+    } catch (e: any) {
+      setError(e?.message ?? 'Reporting refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const famReports = REPORT_CATALOG.filter((x) => x[3] === family);
   const currentPages = body?.pages ?? [];
@@ -305,6 +321,10 @@ export default function ReportsPage() {
           <input type="month" value={period} onChange={(e) => e.target.value && setPeriod(e.target.value)}
             className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded px-2 py-1 text-sm" />
           <button onClick={() => dl('all')} disabled={!tenant} className="text-xs px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 font-medium disabled:opacity-40">⬇ All ({totalPages} pages · ZIP)</button>
+          {user?.role === 'platform_admin' && <button onClick={refreshCurrentReport} disabled={refreshing || !tenant}
+            className="text-xs px-3 py-1.5 rounded border border-[var(--ic-border)] disabled:opacity-40">
+            {refreshing ? 'Refreshing…' : '↻ Refresh live data'}
+          </button>}
         </div>
       </div>
 
