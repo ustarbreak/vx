@@ -380,7 +380,7 @@ function RulesTab({ orgId }: { orgId: string }) {
   };
 
   const inputCls = 'w-full px-3 py-2 rounded-lg bg-[var(--ic-surface-2)] border border-[var(--ic-border)] text-sm text-[var(--ic-heading)]';
-  const devices = demoDevices.filter(d => d.orgId === Number(orgId));
+  const [devices, setDevices] = useState<{ id: string | number; hostname: string; isProbe: boolean }[]>([]);\n  useEffect(() => {\n    let alive = true;\n    if (isDemoMode()) {\n      setDevices(demoDevices.filter(d => d.orgId === Number(orgId)).map(d => ({ id: d.id, hostname: d.hostname, isProbe: !!d.isProbe })));\n    } else {\n      tenantManagerApi.devices(orgId).then(rows => { if (alive) setDevices(rows.map(d => ({ id: d.id, hostname: d.hostname || d.ip, isProbe: d.is_probe }))); }).catch(() => { if (alive) setDevices([]); });\n    }\n    return () => { alive = false; };\n  }, [orgId]);
 
   return (
     <div className="space-y-3">
