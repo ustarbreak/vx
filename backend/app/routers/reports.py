@@ -1,11 +1,11 @@
-"""Advanced Reporting API (Phase 1 skeleton of the integration).
+"""Advanced Reporting API — unified reporting builders, exports and tenant scope.
 
 Endpoints follow the brief §4 contract:
   GET  /api/v1/reports                                  -> catalogue (6 families)
   GET  /api/v1/reports/{id}?period=YYYY-MM              -> all pages of a report
   GET  /api/v1/reports/{id}/pages/{n}?period=YYYY-MM    -> one page
   GET  /api/v1/meta?period=YYYY-MM                      -> header meta
-  POST /api/v1/reports/{id}/refresh                     -> no-op placeholder (Phase 3)
+  POST /api/v1/reports/{id}/refresh                     -> Owner-triggered live ETL/KPI refresh
 
 Data source rules:
   * Demo Mode ON (frontend `ic_demo_mode`) or REPORTING_DEMO=1 -> deterministic
