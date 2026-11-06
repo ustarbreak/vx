@@ -128,7 +128,13 @@ async def platform_connectors(
     db: AsyncSession = Depends(get_db),
 ):
     rows = await connectors.status_all(db)
-    return {"checked": len(rows), "results": rows,
+    normalized = [{
+        **row,
+        "status": "healthy" if row.get("reachable") else "unreachable",
+        "message": ("HTTP " + str(row.get("http_status")) + " · " + str(row.get("latency_ms")) + " ms")
+            if row.get("reachable") else row.get("reason", "Connector did not respond"),
+    } for row in rows]
+    return {"checked": len(normalized), "results": normalized,
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
@@ -149,7 +155,8 @@ async def platform_health(
         try:
             rows = await connectors.status_all(db)
             connector_count = len(rows)
-            connector_state = "healthy" if all(x.get("status") in ("active", "healthy", "connected") for x in rows) else "attention"
+            connector_state = ("not_configured" if not rows else
+                "healthy" if all(x.get("reachable") for x in rows) else "attention")
         except Exception:
             connector_state = "unavailable"
     return {"generated_at": generated.isoformat(), "database": database,
