@@ -293,8 +293,13 @@ def _blocks_to_rows(pages: list) -> list:
             elif kind == "S":
                 rows.append([b[1], "sparkline", ",".join(str(v) for v in b[2]), "", "", ""])
             elif kind == "C":
-                for col, label, items, color in [(c, c[0], c[1], c[2]) for c in b[2]]:
-                    rows.append([b[1], "roadmap", label, "; ".join(items), color, ""])
+                section, columns = b[1], b[2]
+                for label, items, color in columns:
+                    rows.append([section, "roadmap", label, "; ".join(str(item) for item in items), color, ""])
+            elif kind == "H":
+                section, values = b[1], b[2]
+                for label, value in values:
+                    rows.append([section, "histogram", label, str(value), "", ""])
             elif kind == "P":
                 rows.append([b[1], "signoff", " | ".join(b[2]), "", "", ""])
     return rows
