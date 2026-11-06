@@ -165,6 +165,7 @@ export default function ClientAdminPlans() {
   const seatsUsed = backendMode ? (meteredUsage?.metrics?.seats?.used ?? null) : ((organization as any)?.seats_used ?? organization?.memberCount ?? null);
   const measuredEndpoints = meteredUsage?.metrics?.endpoints?.used ?? null;
   const measuredSiemGbMonth = meteredUsage?.metrics?.siem_gb?.used ?? null;
+  const measuredBackupGb = meteredUsage?.metrics?.backup_gb?.used ?? null;
   const daysThisMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const siemMonthlyQuota = siemEntitledGb * daysThisMonth;
   // SIEM entitlement for the current pack: min + per-unit quota over billed units.
@@ -427,11 +428,11 @@ export default function ClientAdminPlans() {
             unavailable={seatLimit == null}
           />
           <UsageBar
-            label="Sauvegarde incluse (quota contractuel)"
-            used={null}
+            label="Sauvegarde utilisée vs. quota contractuel"
+            used={backendMode ? measuredBackupGb : null}
             limit={backupEntitledGb}
             unit="Go"
-            unavailable
+            unavailable={!backendMode || measuredBackupGb == null}
           />
         </div>
         <p className="mt-3 text-[11px] text-gray-500">
