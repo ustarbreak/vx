@@ -280,12 +280,12 @@ func defaultRouteIfaces() map[string]bool {
 			for _, line := range strings.Split(string(b), "\n")[1:] {
 				f := strings.Fields(line)
 				if len(f) >= 3 && f[1] == "00000000" {
-					out[strings.ToLower(f[0])] = true
+					outMap[strings.ToLower(f[0])] = true
 				}
 			}
 		}
 	}
-	return out
+	return outMap
 }
 
 // ------------------------------------------------------------- processes ----
