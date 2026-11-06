@@ -40,6 +40,7 @@ type Config struct {
 	ScanCIDRs   []string      // local discovery CIDRs ("auto" = detect from NICs)
 	Policy      bool          // pull scan policy (sweep targets, SNMP creds) from platform
 	InsecureTLS bool          // dev only: skip cert verification
+	SyslogListen string // optional UDP/TCP syslog bind address; empty disables listener
 	Debug       bool
 }
 
@@ -57,6 +58,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	}
 	fs.BoolVar(&c.Policy, "policy", envBoolOr("GOINFRA_POLICY", true), "pull scan policy from platform")
 	fs.BoolVar(&c.InsecureTLS, "insecure", false, "skip TLS verification (dev only)")
+	fs.StringVar(&c.SyslogListen, "syslog-listen", envOr("GOINFRA_SYSLOG_LISTEN", ""), "optional syslog UDP/TCP listen address, e.g. 0.0.0.0:5514")
 	fs.BoolVar(&c.Debug, "debug", envBoolOr("GOINFRA_DEBUG", false), "verbose logging")
 }
 
