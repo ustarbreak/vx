@@ -81,6 +81,8 @@ async def service_live(
 @router.post("/sync")
 async def sync_all(db: AsyncSession = Depends(get_db),
                    current_user: User = Depends(get_current_user)):
-    """Health-check every configured connector at once (admin dashboards poll this)."""
+    """Owner-only global health-check of configured service connectors."""
+    if current_user.role != "platform_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Platform administrators only")
     results: List[dict] = await connectors.status_all(db)
     return {"checked": len(results), "results": results}
