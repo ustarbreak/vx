@@ -35,6 +35,7 @@ interface ClientMemberRow { name: string; email: string; role: string; mfa: bool
 interface ClientActivityRow { time: string; action: string; detail: string; actor: string; type: 'system' | 'alert' | 'compliance' | 'auth' | 'ticket' | 'rule' | 'license' }
 
 const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoApiKeys
@@ -43,23 +44,20 @@ const apiKeysFor = (orgId: string): ClientApiKeyRow[] => {
 };
 
 const licenseFor = (org: Organization): ClientLicenseRow | null => {
+  if (!isDemoMode()) {
+    if (!org.planTier && !org.endpointCount && !org.seatLimit) return null;
+    return { id: `PLAN-${(org as any).dbId ?? org.id}`, type: `${org.planTier ?? 'Plan non défini'} · ${org.billingCycle ?? 'cycle non défini'}`, seats: org.seatLimit ?? 0, endpoints: org.endpointCount ?? 0, expiresAt: (org as any).contractEnd ?? 'Non renseigné', status: org.status === 'active' ? 'active' : 'expired' };
+  }
   const oid = dwOrgId(org.id);
   const lic = oid != null ? demoLicenses.find(l => l.orgId === oid) : undefined;
   if (lic) {
     return { id: lic.id, type: lic.type, seats: lic.seats, endpoints: lic.endpoints, expiresAt: lic.expiresAt, status: lic.status };
   }
-  // Backend org without a demo-license record → derive from its real billing fields.
-  if (oid != null && (org.planTier || org.endpointCount)) {
-    return {
-      id: `LIC-BACKEND-${oid}`, type: `${org.planTier ?? 'STARTER'} — ${org.billingCycle === 'ANNUAL' ? 'Annuel' : 'Mensuel'}`,
-      seats: org.seatLimit ?? 0, endpoints: org.endpointCount ?? 0,
-      expiresAt: org.billingCycle === 'ANNUAL' ? '2027-06-30' : '2026-12-31', status: 'active',
-    };
-  }
   return null;
 };
 
 const devicesFor = (org: Organization): ClientDeviceRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(org.id);
   if (oid == null) return [];
   const rows = demoDevices.filter(d => d.orgId === oid).map(d => ({
@@ -79,6 +77,7 @@ const deviceCountFor = (org: Organization): number => {
 };
 
 const membersFor = (orgId: string): ClientMemberRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   if (oid == null) return [];
   return demoTechnicians
@@ -90,6 +89,7 @@ const membersFor = (orgId: string): ClientMemberRow[] => {
 };
 
 const activityFor = (orgId: string): ClientActivityRow[] => {
+  if (!isDemoMode()) return [];
   const oid = dwOrgId(orgId);
   const now = Date.now();
   const rel = (iso: string) => {
