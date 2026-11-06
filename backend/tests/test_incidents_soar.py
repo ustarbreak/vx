@@ -682,3 +682,38 @@ async def test_stale_soar_run_recovery_marks_interrupted_run_failed(session_fact
         assert recent.finished_at is None
         assert await recover_stale_runs(db, stale_after_minutes=30) == 0
 
+
+async def test_platform_shared_playbook_runs_are_not_visible_to_tenants(session_factory):
+    await _seed(session_factory)
+    async with client_for(session_factory, 3) as platform:
+        shared = await platform.post("/api/soar/playbooks", json={
+            "name": "Shared wait", "steps": [{"name": "short wait", "action": "wait", "params": {"seconds": 0}}]
+        })
+        assert shared.status_code == 201
+        run_response = await platform.post(f"/api/soar/playbooks/{shared.json()['id']}/run",
+                                           json={"mode": "execute", "idempotency_key": "same-key"})
+        assert run_response.status_code == 200
+        run_uid = run_response.json()["run"]["uid"]
+    async with client_for(session_factory, 1) as tenant:
+        history = await tenant.get("/api/soar/runs")
+        assert history.status_code == 200
+        assert all(item["uid"] != run_uid for item in history.json()["items"])
+        assert (await tenant.get(f"/api/soar/runs/{run_uid}")).status_code == 403
+        assert (await tenant.post(f"/api/soar/runs/{run_uid}/cancel")).status_code == 403
+        assert (await tenant.post(f"/api/soar/runs/{run_uid}/retry", json={})).status_code == 403
+        replay = await tenant.post(f"/api/soar/playbooks/{shared.json()['id']}/run",
+                                   json={"mode": "execute", "idempotency_key": "same-key"})
+        assert replay.status_code == 200
+        assert replay.json()["replayed"] is False
+        assert replay.json()["run"]["org_id"] == 1
+
+async def test_snapshot_action_never_reports_fake_success(session_factory):
+    await _seed(session_factory)
+    playbook = {"name": "Snapshot", "steps": [{"name": "snapshot", "action": "snapshot", "params": {"target": "host-1"}}]}
+    async with client_for(session_factory, 1) as tenant:
+        pb = await tenant.post("/api/soar/playbooks", json=playbook)
+        assert pb.status_code == 201
+        result = await tenant.post(f"/api/soar/playbooks/{pb.json()['id']}/run", json={"mode": "execute"})
+        assert result.status_code == 200
+        assert result.json()["run"]["status"] == "failed"
+        assert result.json()["run"]["failed_steps"] == 1
