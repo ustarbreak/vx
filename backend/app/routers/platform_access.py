@@ -102,7 +102,7 @@ async def list_assignments(
     return [{
         "id": row.id, "user_id": row.user_id, "permission_key": row.permission_key,
         "effect": row.effect, "scope_type": row.scope_type, "scope_id": row.scope_id,
-        "granted_by": row.granted_by, "created_at": row.created_at, "last_login": row.last_login,
+        "granted_by": row.granted_by, "created_at": row.created_at,
         "expires_at": row.expires_at, "revoked_at": row.revoked_at,
     } for row in rows]
 
@@ -232,7 +232,7 @@ async def list_platform_staff(
     return [{
         "id": row.id, "email": row.email, "name": row.name, "role": row.role,
         "status": row.status, "auth_version": row.auth_version,
-        "created_at": row.created_at,
+        "created_at": row.created_at, "last_login": row.last_login,
     } for row in rows]
 
 @router.patch("/users/{user_id}/role")
