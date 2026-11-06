@@ -37,6 +37,8 @@ export interface RunResult {
   message: string;
   output?: string;
   source: 'demo' | 'live';
+  taskUid?: string;
+  taskStatus?: string;
 }
 
 const SECURITY_ACTION_PATH = '/security-ops/actions';
@@ -109,6 +111,8 @@ export async function runSecurityAction(
       source: 'live',
       message: res?.message ?? `Dispatched "${action.label}" to the ${service} engine.`,
       output: typeof res?.output === 'string' ? res.output : JSON.stringify(res?.output ?? {}, null, 2),
+      taskUid: typeof res?.task?.uid === 'string' ? res.task.uid : undefined,
+      taskStatus: typeof res?.task?.status === 'string' ? res.task.status : undefined,
     };
   } catch (e: any) {
     // A live-mode dispatch failure is a failure. Demo simulation is available
