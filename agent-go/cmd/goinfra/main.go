@@ -201,7 +201,7 @@ func runAgent(args []string, once bool) error {
 		case <-policyTick.C:
 			a.refreshPolicy()
 		case ev, ok := <-syslogEvents:
-			if ok { a.enqueueEvent(ev) } else { syslogEvents = nil }
+			if ok { a.enqueueEvent(ev); a.flushEvents() } else { syslogEvents = nil }
 		}
 	}
 }
@@ -410,8 +410,19 @@ RestartSec=10
 DynamicUser=no
 ProtectHome=read-only
 NoNewPrivileges=false
-AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
-CapabilityBoundingSet=CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET
 
 [Install]
 WantedBy=multi-user.target
