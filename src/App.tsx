@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useParams, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import Layout from './components/Layout';
@@ -30,6 +30,7 @@ import PSAPage from './pages/PSAPage';
 
 // Platform admin views
 import PlatformDashboardPage from './pages/platform/PlatformDashboardPage';
+import PlatformTeamPage from './pages/platform/PlatformTeamPage';
 import PlatformClientsPage from './pages/platform/PlatformClientsPage';
 import PlatformAuditPage from './pages/platform/PlatformAuditPage';
 import PlatformIntegrationsPage from './pages/platform/PlatformIntegrationsPage';
@@ -132,6 +133,12 @@ function TenantDetailRedirect() {
   return <Navigate to={`/admin/tenants/${orgId ?? ''}`} replace />;
 }
 
+function PlatformOwnerRoute({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'platform_admin') return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -179,8 +186,12 @@ function AppRoutes() {
         <Route path="network" element={<NetworkPage />} />
         <Route path="psa" element={<PSAPage />} />
 
+        {/* Platform administration routes require the Owner identity in the UI;
+            every mutation/read remains independently enforced by FastAPI RBAC. */}
+        <Route element={<PlatformOwnerRoute><Outlet /></PlatformOwnerRoute>}>
         {/* Platform admin views */}
         <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
+        <Route path="admin/team" element={<PlatformTeamPage />} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />
@@ -192,6 +203,7 @@ function AppRoutes() {
         <Route path="admin/services-ops" element={<PlatformServicesOverviewPage />} />
         {/* T4.3 (additive): catalog-gated onboarding; empty state when flag off */}
         <Route path="admin/onboarding" element={<PlatformOnboardingPage />} />
+        </Route>
 
         {/* Project Manager — same page, role-scoped (platform vs client) */}
         <Route path="projects" element={<ProjectsPage />} />

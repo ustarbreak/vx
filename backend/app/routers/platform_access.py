@@ -197,11 +197,14 @@ async def create_platform_staff(
     db: AsyncSession = Depends(get_db),
     owner: User = Depends(require_role("platform_admin")),
 ):
-    existing = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(422, "A valid work email address is required")
+    existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, "Email already registered")
     staff = User(
-        email=body.email, name=body.name, hashed_password=get_password_hash(body.password),
+        email=email, name=body.name.strip(), hashed_password=get_password_hash(body.password),
         role=body.role, org_id=None, auth_version=0,
     )
     db.add(staff)
@@ -229,7 +232,7 @@ async def list_platform_staff(
     return [{
         "id": row.id, "email": row.email, "name": row.name, "role": row.role,
         "status": row.status, "auth_version": row.auth_version,
-        "created_at": row.created_at,
+        "created_at": row.created_at, "last_login": row.last_login,
     } for row in rows]
 
 @router.patch("/users/{user_id}/role")
@@ -258,3 +261,38 @@ async def update_platform_staff_role(
     await db.commit()
     await db.refresh(target)
     return {"id": target.id, "role": target.role, "auth_version": target.auth_version}
+
+
+class PlatformStaffStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(active|inactive)$")
+
+
+@router.patch("/users/{user_id}/status")
+async def update_platform_staff_status(
+    user_id: int,
+    body: PlatformStaffStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    owner: User = Depends(require_role("platform_admin")),
+):
+    """Suspend/reactivate a platform staff account and revoke existing sessions."""
+    target = await db.get(User, user_id)
+    if not target or target.role not in PLATFORM_ROLES - {"platform_admin"}:
+        raise HTTPException(404, "Platform Expert, Analyst or User account not found")
+    if target.id == owner.id:
+        raise HTTPException(403, "Owner cannot suspend or deactivate their own account")
+    if target.org_id is not None:
+        raise HTTPException(409, "Platform staff account has an invalid tenant assignment")
+    before = target.status
+    if before == body.status:
+        return {"id": target.id, "status": target.status, "auth_version": target.auth_version}
+    target.status = body.status
+    target.auth_version = int(target.auth_version or 0) + 1
+    db.add(AuditLog(
+        actor_id=owner.id, actor_name=owner.email, actor_role=owner.role,
+        org_id=None, action="platform.staff_status.updated", resource="User",
+        resource_id=str(target.id), details=f"status: {before} -> {target.status}; sessions revoked",
+        outcome="success",
+    ))
+    await db.commit()
+    await db.refresh(target)
+    return {"id": target.id, "status": target.status, "auth_version": target.auth_version}

@@ -541,3 +541,28 @@ async def test_platform_dashboard_is_live_and_permission_gated(session_factory):
     async with client_for(session_factory, 5) as tenant_admin:
         denied = await tenant_admin.get("/api/platform/dashboard/overview")
         assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_can_suspend_staff_and_revoke_existing_sessions(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.patch("/api/platform/access/users/2/status", json={"status": "inactive"})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "inactive"
+        assert response.json()["auth_version"] == 1
+        self_suspend = await owner.patch("/api/platform/access/users/1/status", json={"status": "inactive"})
+        assert self_suspend.status_code == 404 or self_suspend.status_code == 403
+
+    async with client_for(session_factory, 2, version=0) as stale_staff:
+        response = await stale_staff.get("/api/platform/access/me")
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_manage_platform_staff_status(session_factory):
+    async with client_for(session_factory, 5) as tenant:
+        denied = await tenant.patch("/api/platform/access/users/2/status", json={"status": "inactive"})
+        assert denied.status_code == 403
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.patch("/api/platform/access/users/3/status", json={"status": "inactive"})
+        assert denied.status_code == 403

@@ -1344,7 +1344,7 @@ export interface PlatformPermissionAssignmentDto {
 }
 export interface PlatformStaffDto {
   id: number; email: string; name: string; role: PlatformStaffRole;
-  status: string; auth_version: number; created_at: string | null;
+  status: string; auth_version: number; created_at: string | null; last_login?: string | null;
 }
 export const platformAccessApi = {
   me: () => api.get<{
@@ -1380,4 +1380,10 @@ export interface PlatformDashboardOverview {
 }
 export const platformDashboardApi = {
   overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
+};
+
+
+export const platformStaffApi = {
+  updateStatus: (userId: number, status: 'active' | 'inactive') =>
+    api.patch<{ id: number; status: string; auth_version: number }>(`/platform/access/users/${userId}/status`, { status }),
 };
