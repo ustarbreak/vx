@@ -12,7 +12,8 @@ from app.database import init_db, AsyncSessionLocal, engine
 from sqlalchemy import text as sql_text
 from fastapi.responses import JSONResponse
 from app.routers import auth, organizations, users, entitlements, integrations, audit
-from app.routers import platform_dashboard as platform_dashboard_router\nfrom app.routers import platform_access as platform_access_router
+from app.routers import platform_dashboard as platform_dashboard_router
+from app.routers import platform_access as platform_access_router
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
 from app.routers import security_map, org_topology
 from app.routers import incidents as incidents_router
@@ -173,7 +174,8 @@ app.include_router(usage_router.router, prefix="/api")
 app.include_router(channels_router, prefix="/api")
 app.include_router(mfa_router, prefix="/api")
 app.include_router(invitations_router, prefix="/api")
-app.include_router(platform_access_router.router, prefix="/api")\napp.include_router(platform_dashboard_router.router, prefix="/api")
+app.include_router(platform_access_router.router, prefix="/api")
+app.include_router(platform_dashboard_router.router, prefix="/api")
 # Phase 4 — Tenant Manager (/api/admin/tenants/*) + Partner admin (/api/partners/*)
 app.include_router(tenant_manager.router, prefix="/api")
 app.include_router(partners.router, prefix="/api")   # Partner Portal (Phase 1) — declared first: owns GET/PUT/POST-verify/clients CRUD
