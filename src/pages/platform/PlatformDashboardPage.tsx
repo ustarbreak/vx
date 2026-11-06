@@ -10,7 +10,7 @@ const tiles = [
   {key:'platform_staff',label:'Platform staff',icon:Shield,link:'/admin/team'},
   {key:'tickets_active',label:'Open tickets',icon:Ticket,link:'/admin/services-ops'},
   {key:'incidents_active',label:'Active incidents',icon:AlertTriangle,link:'/incidents'},
-  {key:'integrations_active',label:'Healthy integrations',icon:PlugZap,link:'/admin/integrations'},
+  {key:'integrations_active',label:'Active integration configs',icon:PlugZap,link:'/admin/integrations'},
   {key:'agents_seen_15m',label:'Agents seen · 15 min',icon:Server,link:'/admin/operations'},
   {key:'users_total',label:'Platform users',icon:Users,link:'/admin/clients'},
 ];
