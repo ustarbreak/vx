@@ -167,7 +167,7 @@ export default function ClientAdminPlans() {
   const measuredSiemGbMonth = meteredUsage?.metrics?.siem_gb?.used ?? null;
   const measuredBackupGb = meteredUsage?.metrics?.backup_gb?.used ?? null;
   const daysThisMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
-  const siemMonthlyQuota = siemEntitledGb * daysThisMonth;
+  const siemMonthlyQuota = siemEntitledGb == null ? null : siemEntitledGb * daysThisMonth;
   // SIEM entitlement for the current pack: min + per-unit quota over billed units.
   const siemEntitledGb = packDef.siemQuota.min > 0
     ? packDef.siemQuota.min + packDef.siemQuota.perUnit * Math.max(0, invoicedUnits ?? units)
