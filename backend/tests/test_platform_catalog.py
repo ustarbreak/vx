@@ -141,7 +141,7 @@ async def test_capabilities_honest(session_factory):
         assert r.status_code == 200
         services = {s["service"]: s for s in r.json()["services"]}
         assert "vuln-scanning" in services
-        assert services["vuln-scanning"]["status"] == "roadmap"  # owner decision #8
+        assert services["vuln-scanning"]["status"] == "beta"  # Wazuh CVE inventory is available; active network scans remain gated
 
 
 async def test_action_unknown_and_unsupported(session_factory):
