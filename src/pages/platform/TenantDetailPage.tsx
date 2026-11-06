@@ -315,7 +315,7 @@ function ServicesTab({ orgId, tenantTier }: { orgId: string; tenantTier: string 
       <div className="grid md:grid-cols-2 gap-3">
         {serviceCatalog.map(s => {
           const g = grants[s.id];
-          const enabled = g ? g.enabled : s.availableTiers.includes(tenantTier); // default from the selected tenant's actual plan
+          const enabled = g ? g.enabled : s.availableTiers.some(tier => String(tier) === tenantTier); // default from the selected tenant's actual plan
           return (
             <div key={s.id} className="bg-[var(--ic-surface)] border border-[var(--ic-border)] rounded-xl p-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
