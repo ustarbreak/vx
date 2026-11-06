@@ -53,10 +53,12 @@ def _month_bounds(period: str) -> tuple[datetime, datetime]:
 
 
 async def _tenants(db) -> list[str]:
-    a = (await db.execute(select(RptAlert.tenant_id).distinct())).scalars().all()
-    t = (await db.execute(select(RptTicketFact.tenant_id).distinct())).scalars().all()
-    i = (await db.execute(select(RptIncident.tenant_id).distinct())).scalars().all()
-    return sorted(set(map(str, list(a) + list(t) + list(i))))
+    sources = [RptAlert, RptTicketFact, RptIncident, RptAsset, RptVulnerability,
+               RptAuditEvent, RptPlaybookRun]
+    values = []
+    for model in sources:
+        values.extend((await db.execute(select(model.tenant_id).distinct())).scalars().all())
+    return sorted(set(map(str, values)))
 
 
 # ---------------------------------------------------------------- job H ---
