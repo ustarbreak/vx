@@ -5,7 +5,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -20,7 +20,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.core.platform_rbac import has_permission
-from app.models import Organization, User, SnmpCredential, AgentToken, AuditLog
+from app.models import Organization, User, SnmpCredential, AgentToken, AuditLog, UsageEvent
 from app.main import app
 
 @pytest_asyncio.fixture()
@@ -611,4 +611,32 @@ async def test_tenant_detail_subresources_honor_explicit_tenant_deny(session_fac
         allowed = await expert.get("/api/admin/tenants/1/members")
         denied = await expert.get("/api/admin/tenants/2/members")
         assert allowed.status_code == 200
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_billing_overview_uses_only_persisted_usage_and_is_owner_gated(session_factory):
+    async with session_factory() as db:
+        db.add(UsageEvent(
+            org_id=1, metric="siem_gb", quantity=5, unit="GB",
+            source="test-meter", idempotency_key="billing-test-event",
+            occurred_at=datetime(2026, 11, 6, tzinfo=timezone.utc),
+        ))
+        await db.commit()
+
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.get("/api/platform/billing/overview?period=2026-11")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["data_mode"] == "live"
+        assert payload["counts"]["organizations"] == 3
+        assert payload["counts"]["partners"] == 1
+        assert payload["counts"]["tenants_with_usage"] == 1
+        tenant = next(row for row in payload["tenants"] if row["id"] == 1)
+        assert tenant["usage"]["siem_gb"]["quantity"] == 5.0
+        assert tenant["usage_event_count"] == 1
+        assert "no invoice ledger" in payload["commercial_integrity"]["invoices"]
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/platform/billing/overview?period=2026-11")
         assert denied.status_code == 403

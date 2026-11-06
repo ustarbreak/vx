@@ -11,7 +11,7 @@ import {
   Shield, LayoutDashboard, AlertTriangle, Target, FileCheck, FileBarChart2,
   Activity, Settings, LogOut, ChevronLeft, ChevronRight,
   Bell, Search, Menu, Zap, Users, Building2, Network,
-  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins,
+  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins, Wallet,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
   BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
@@ -214,6 +214,7 @@ export default function Layout() {
       group: true, icon: Building2, label: 'Tenant & Customers', items: [
         { to: '/admin/clients', icon: Building2, label: 'Tenant Manager' },
         { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
+        { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
       ],
     },
     {
