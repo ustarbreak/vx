@@ -130,22 +130,33 @@ async def job_h_ingest(db, lookback_hours: int = 2) -> dict:
 
     findings = (await db.execute(select(VulnerabilityFinding).where(
         VulnerabilityFinding.last_seen_at >= since))).scalars().all()
-    for item in findings:
-        if not item.cve:
+    changed_vulns = {(row.org_id, row.cve) for row in findings if row.cve}
+    for org_id, cve in changed_vulns:
+        all_rows = (await db.execute(select(VulnerabilityFinding).where(
+            VulnerabilityFinding.org_id == org_id, VulnerabilityFinding.cve == cve))).scalars().all()
+        if not all_rows:
             continue
-        tenant, cve = str(item.org_id), item.cve
+        tenant = str(org_id)
+        asset_ids = {row.asset_id for row in all_rows if row.asset_id}
+        worst = max(all_rows, key=lambda row: float(row.cvss or 0))
+        all_resolved = all(row.status == "resolved" for row in all_rows)
         existing = (await db.execute(select(RptVulnerability).where(
             RptVulnerability.tenant_id == tenant, RptVulnerability.cve == cve))).scalars().first()
-        values = {"severity": {"critical":"crit","high":"high","medium":"med","low":"low"}.get(item.severity, "med"),
-            "cvss": item.cvss, "assets_affected": 1, "found_at": item.first_seen_at,
-            "fixed_at": item.last_seen_at if item.status == "resolved" else None,
-            "source": "vulnerability-management", "recorded_at": _utcnow()}
+        values = {
+            "severity": {"critical":"crit","high":"high","medium":"med","low":"low"}.get(worst.severity, "med"),
+            "cvss": max((float(row.cvss) for row in all_rows if row.cvss is not None), default=None),
+            "assets_affected": len(asset_ids) if asset_ids else len(all_rows),
+            "found_at": min(row.first_seen_at for row in all_rows if row.first_seen_at is not None),
+            "fixed_at": max(row.last_seen_at for row in all_rows) if all_resolved else None,
+            "source": "vulnerability-management", "recorded_at": _utcnow(),
+        }
         if existing:
             for key, value in values.items():
                 setattr(existing, key, value)
         else:
             db.add(RptVulnerability(tenant_id=tenant, cve=cve, **values))
         stats["vulnerabilities"] += 1
+
 
     probes = (await db.execute(select(AgentProbe))).scalars().all()
     for item in probes:
