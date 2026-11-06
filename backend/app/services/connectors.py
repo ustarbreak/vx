@@ -220,9 +220,13 @@ async def fetch_live_records(service_id: str, cfg: Dict[str, Any], limit: int = 
 
 async def load_connector_config(service_id: str, db: AsyncSession) -> Dict[str, Any]:
     """Resolve and decrypt the active integration credential for a service."""
+    # Vulnerability inventory is sourced from the tenant's primary Wazuh
+    # endpoint integration; do not require duplicate credentials for the same
+    # manager under a second service id.
+    integration_service_id = "endpoint-protection" if service_id == "vuln-scanning" else service_id
     res = await db.execute(
         select(Integration)
-        .where(Integration.service_id == service_id, Integration.status == "active")
+        .where(Integration.service_id == integration_service_id, Integration.status == "active")
         .order_by(Integration.id)
     )
     integ = res.scalars().first()
@@ -237,7 +241,7 @@ async def load_connector_config(service_id: str, db: AsyncSession) -> Dict[str, 
     }
     # Wazuh API credentials are stored as "username:password" in the
     # encrypted integration api_key field. Never persist the parsed values.
-    if service_id == "endpoint-protection" and secret and ":" in secret and not secret.startswith("Bearer "):
+    if integration_service_id == "endpoint-protection" and secret and ":" in secret and not secret.startswith("Bearer "):
         config["api_user"], config["api_password"] = secret.split(":", 1)
     return config
 
