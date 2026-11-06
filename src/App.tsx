@@ -191,7 +191,7 @@ function AppRoutes() {
         <Route element={<PlatformOwnerRoute><Outlet /></PlatformOwnerRoute>}>
         {/* Platform admin views */}
         <Route path="admin/dashboard" element={<PlatformDashboardPage />} />
-        <Route path="admin/team" element={<PlatformOwnerRoute><PlatformTeamPage /></PlatformOwnerRoute>} />
+        <Route path="admin/team" element={<PlatformTeamPage />} />
         <Route path="admin/clients" element={<PlatformClientsPage />} />
         <Route path="admin/audit" element={<PlatformAuditPage />} />
         <Route path="admin/partners" element={<PlatformPartnersPage />} />
