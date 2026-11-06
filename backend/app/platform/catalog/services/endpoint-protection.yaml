@@ -13,7 +13,8 @@ resources:
   disk: 20G
 dependencies:
 - requires: analytics
-  rationale: Les événements EDR/XDR remontent au pipeline SIEM pour corrélation avec les autres sources.
+  rationale: Les événements EDR/XDR remontent au pipeline SIEM pour corrélation avec
+    les autres sources.
 in_seed: true
 actions:
 - name: endpoint.list
