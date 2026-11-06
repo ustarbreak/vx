@@ -1344,7 +1344,7 @@ export interface PlatformPermissionAssignmentDto {
 }
 export interface PlatformStaffDto {
   id: number; email: string; name: string; role: PlatformStaffRole;
-  status: string; auth_version: number; created_at: string | null;
+  status: string; auth_version: number; created_at: string | null; last_login?: string | null;
 }
 export const platformAccessApi = {
   me: () => api.get<{
