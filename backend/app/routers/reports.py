@@ -119,6 +119,15 @@ def _resolve_demo(demo_param: int, demo_source: str) -> bool:
     return False
 
 
+def _source_status(pages: list, demo: bool) -> str:
+    if demo:
+        return "demo"
+    rendered = repr(pages).lower()
+    if "indisponible" in rendered or "non disponible" in rendered or "non mesuré" in rendered:
+        return "partial_or_unavailable"
+    return "live"
+
+
 async def _render_pages(report_key: str, tenant: str, period: str, demo: bool) -> list:
     if demo:
         return dd.build_demo_report(report_key, tenant, period)
@@ -196,7 +205,8 @@ async def report_pages(report_id: str, period: str = Query(...), demo: int = Que
     use_demo = _resolve_demo(demo, demo_source)
     body = await _render_pages(report_id, tenant, period, use_demo)
     return {"number": num, "id": report_id, "title": title, "family": fam,
-            "period": period, "demo": use_demo, "tenant_id": tenant, "pages": body}
+            "period": period, "demo": use_demo, "tenant_id": tenant,
+            "source_status": _source_status(body, use_demo), "pages": body}
 
 
 @router.get("/{report_id}/pages/{n}")
