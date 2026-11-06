@@ -197,11 +197,14 @@ async def create_platform_staff(
     db: AsyncSession = Depends(get_db),
     owner: User = Depends(require_role("platform_admin")),
 ):
-    existing = (await db.execute(select(User).where(User.email == body.email))).scalar_one_or_none()
+    email = body.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(422, "A valid work email address is required")
+    existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
     if existing:
         raise HTTPException(409, "Email already registered")
     staff = User(
-        email=body.email, name=body.name, hashed_password=get_password_hash(body.password),
+        email=email, name=body.name.strip(), hashed_password=get_password_hash(body.password),
         role=body.role, org_id=None, auth_version=0,
     )
     db.add(staff)
