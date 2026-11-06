@@ -26,8 +26,8 @@ separate adjustment event with a new key and a traceable source.
 
 Partner billing converts the monthly SIEM GB total to an average GB/day for the
 existing graduated SIEM rate table. Backup billing uses the highest recorded
-backup GB snapshot for the period (not the sum of snapshots). Endpoint and seat
-quantities remain additive usage facts for reporting; contractual ceilings are
+backup GB snapshot for the period (not the sum of snapshots). Endpoint and seat quantities are period snapshots (the highest reported count
+is used); SIEM volume is additive GB for the month. Contractual ceilings are
 read from the organization/plan records.
 
 ## Reading usage
