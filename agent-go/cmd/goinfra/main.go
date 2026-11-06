@@ -165,6 +165,14 @@ func runAgent(args []string, once bool) error {
 		log.Printf("hello failed: %v", err)
 	}
 
+	var syslogEvents <-chan collectors.SecurityEvent
+	if cfg.SyslogListen != "" {
+		ch, err := collectors.StartSyslogListener(cfg.SyslogListen)
+		if err != nil { return err }
+		syslogEvents = ch
+		log.Printf("syslog listener active on %s (UDP/TCP)", cfg.SyslogListen)
+	}
+
 	// Load tenant scan policy before the first collection cycle so SNMP
 	// credentials and approved CIDRs are available from the outset.
 	a.refreshPolicy()
@@ -192,6 +200,8 @@ func runAgent(args []string, once bool) error {
 			a.pushMetrics()
 		case <-policyTick.C:
 			a.refreshPolicy()
+		case ev, ok := <-syslogEvents:
+			if ok { a.enqueueEvent(ev) } else { syslogEvents = nil }
 		}
 	}
 }
@@ -330,9 +340,26 @@ func (a *agent) collectEvents() {
 	}
 	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
 		log.Printf("persist event queue failed: %v", err)
+		return
 	}
 	if err := a.st.SaveJSON("event_cursor.json", a.eventCursor); err != nil {
 		log.Printf("persist event cursor failed: %v", err)
+	}
+}
+
+// enqueueEvent adds forwarded syslog to the same durable queue as local logs.
+func (a *agent) enqueueEvent(ev collectors.SecurityEvent) {
+	if ev.EventID == "" { return }
+	for _, existing := range a.pendingEvents {
+		if existing.EventID == ev.EventID { return }
+	}
+	a.pendingEvents = append(a.pendingEvents, ev)
+	if len(a.pendingEvents) > 10000 {
+		a.pendingEvents = a.pendingEvents[len(a.pendingEvents)-10000:]
+		log.Printf("event queue reached cap; oldest pending events were dropped")
+	}
+	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
+		log.Printf("persist syslog event failed: %v", err)
 	}
 }
 
