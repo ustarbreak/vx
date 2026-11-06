@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, Check, ChevronDown, CircleAlert, KeyRound, Loader2, Plus, RefreshCw, Shield, UserCog, UserPlus, Users, X } from 'lucide-react';
+import { Activity, AlertTriangle, Check, Loader2, RefreshCw, Shield, UserCog, UserPlus, Users, X } from 'lucide-react';
 import { ApiError, platformAccessApi, platformStaffApi, type PlatformPermissionAssignmentDto, type PlatformPermissionDto, type PlatformStaffDto, type PlatformStaffRole } from '../../services/api';
 
 const roleLabel: Record<Exclude<PlatformStaffRole, 'platform_admin'>, string> = {
@@ -116,7 +116,7 @@ export default function PlatformTeamPage() {
         </div>
       </header>
 
-      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-400 flex gap-2"><CircleAlert className="w-4 h-4 shrink-0" />{error}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 text-sm text-red-400 flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0" />{error}</div>}
       {success && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm text-emerald-400 flex gap-2"><Check className="w-4 h-4 shrink-0" />{success}</div>}
 
       <section className="grid grid-cols-2 xl:grid-cols-4 gap-3">
