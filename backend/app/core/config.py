@@ -1,9 +1,11 @@
 from pydantic_settings import BaseSettings
+from pydantic import model_validator
 from typing import Optional
 
 
 class Settings(BaseSettings):
     # Application
+    APP_ENV: str = "development"  # development | test | production
     APP_NAME: str = "Infracentra API"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
@@ -73,6 +75,31 @@ class Settings(BaseSettings):
     # additive; existing /api/services/{id}/status payload is unchanged unless
     # this flag is on. OFF by default so current UIs see byte-identical JSON.
     SERVICE_LIFECYCLE_ENABLED: bool = False
+
+    @model_validator(mode="after")
+    def validate_production_configuration(self):
+        if self.APP_ENV.strip().lower() != "production":
+            return self
+
+        problems = []
+        weak_secrets = {
+            "your-super-secret-key-change-in-production-min-32-chars",
+            "change-this-to-a-secure-random-string-min-32-chars",
+            "secret", "changeme", "password",
+        }
+        if len(self.SECRET_KEY) < 32 or self.SECRET_KEY.strip().lower() in weak_secrets:
+            problems.append("SECRET_KEY must be a unique secret of at least 32 characters")
+        if self.DEBUG:
+            problems.append("DEBUG must be false")
+        if not self.DATABASE_URL or "localhost" in self.DATABASE_URL or "127.0.0.1" in self.DATABASE_URL:
+            problems.append("DATABASE_URL must point to the production database service")
+        if not self.CORS_ORIGINS or "*" in self.CORS_ORIGINS:
+            problems.append("CORS_ORIGINS must explicitly list trusted application origins")
+        if not self.CONNECTOR_TLS_VERIFY:
+            problems.append("CONNECTOR_TLS_VERIFY must be true")
+        if problems:
+            raise ValueError("Invalid production configuration: " + "; ".join(problems))
+        return self
 
     class Config:
         env_file = ".env"

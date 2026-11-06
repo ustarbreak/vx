@@ -71,3 +71,44 @@ async def test_production_bootstrap_uses_operator_supplied_credentials(monkeypat
     assert isinstance(admin, User)
     assert admin.email == "owner@example.com"
     assert admin.hashed_password != "a-unique-long-secret-2026!"
+
+
+def test_production_settings_reject_known_default_secret():
+    from pydantic import ValidationError
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError, match="SECRET_KEY"):
+        Settings(
+            APP_ENV="production",
+            SECRET_KEY="your-super-secret-key-change-in-production-min-32-chars",
+            DATABASE_URL="postgresql+asyncpg://user:password@db:5432/app",
+            CORS_ORIGINS=["https://app.example.com"],
+            CONNECTOR_TLS_VERIFY=True,
+        )
+
+
+def test_production_settings_reject_insecure_transport_and_wildcard_cors():
+    from pydantic import ValidationError
+    from app.core.config import Settings
+
+    with pytest.raises(ValidationError, match="CONNECTOR_TLS_VERIFY"):
+        Settings(
+            APP_ENV="production",
+            SECRET_KEY="a-unique-production-secret-value-0123456789",
+            DATABASE_URL="postgresql+asyncpg://user:password@db:5432/app",
+            CORS_ORIGINS=["*"],
+            CONNECTOR_TLS_VERIFY=False,
+        )
+
+
+def test_production_settings_accept_explicit_secure_configuration():
+    from app.core.config import Settings
+
+    settings = Settings(
+        APP_ENV="production",
+        SECRET_KEY="a-unique-production-secret-value-0123456789",
+        DATABASE_URL="postgresql+asyncpg://user:password@db:5432/app",
+        CORS_ORIGINS=["https://app.example.com"],
+        CONNECTOR_TLS_VERIFY=True,
+    )
+    assert settings.APP_ENV == "production"
