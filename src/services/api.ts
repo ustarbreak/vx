@@ -1367,3 +1367,17 @@ export const platformAccessApi = {
   updateRole: (userId: number, role: Exclude<PlatformStaffRole, 'platform_admin'>) =>
     api.patch<{ id: number; role: PlatformStaffRole; auth_version: number }>(`/platform/access/users/${userId}/role`, { role }),
 };
+
+
+// Live global Platform Super Admin dashboard. No demo fixture fallback in live mode.
+export interface PlatformDashboardOverview {
+  generated_at: string;
+  data_mode: 'live';
+  scope: 'global_platform';
+  counts: Record<string, number>;
+  distributions: Record<string, Record<string, number>>;
+  limitations: Record<string, string>;
+}
+export const platformDashboardApi = {
+  overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
+};

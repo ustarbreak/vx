@@ -524,3 +524,20 @@ async def test_entitlement_graph_and_chain_honor_tenant_scoped_billing_read(sess
         assert chain.status_code == 200, chain.text
         assert cross_graph.status_code == 403
         assert cross_chain.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_dashboard_is_live_and_permission_gated(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.get("/api/platform/dashboard/overview")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["data_mode"] == "live"
+        assert payload["scope"] == "global_platform"
+        assert payload["counts"]["organizations"] == 3
+        assert payload["counts"]["partners"] == 1
+        assert payload["counts"]["platform_staff"] == 4
+        assert "revenue" in payload["limitations"]
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/platform/dashboard/overview")
+        assert denied.status_code == 403
