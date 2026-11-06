@@ -135,7 +135,7 @@ func readTemperatures() []TempSen {
 			Crit: round2(float64(crit) / 1000.0),
 		})
 	}
-	return outMap
+	return out
 }
 
 // --------------------------------------------------------------- memory ----
