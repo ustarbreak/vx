@@ -156,14 +156,14 @@ async def usage_summary(period: str = Query(..., description="YYYY-MM"),
     if organization is None:
         raise HTTPException(404, "Organization not found")
     rows = (await db.execute(
-        select(UsageEvent.metric, func.sum(UsageEvent.quantity), func.max(UsageEvent.occurred_at))
+        select(UsageEvent.metric, func.sum(UsageEvent.quantity), func.max(UsageEvent.occurred_at), func.max(UsageEvent.quantity))
         .where(UsageEvent.org_id == org, UsageEvent.occurred_at >= start,
                UsageEvent.occurred_at < end)
         .group_by(UsageEvent.metric)
     )).all()
-    totals = {metric: {"quantity": float(quantity or 0), "unit": METRICS.get(metric, ""),
+    totals = {metric: {"quantity": float((peak if metric == "backup_gb" else quantity) or 0), "unit": METRICS.get(metric, ""),
                        "last_recorded_at": last.isoformat() if last else None}
-              for metric, quantity, last in rows}
+              for metric, quantity, last, peak in rows}
     # Contractual ceilings are read from the existing organization/plan model;
     # missing usage events are reported as unavailable, never fabricated as zero.
     quotas = {
