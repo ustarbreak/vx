@@ -229,7 +229,7 @@ export const reportsApi = {
   async catalogue(tenant: string, period: string): Promise<Catalogue> {
     // Demo Mode OFF => no demo param at all: server answers from REAL data
     // (or "Donnee indisponible"), never env-driven demo content.
-    if (!isDemoMode()) return api.get<Catalogue>(`/v1/reports?period=${period}`);
+    if (!isDemoMode()) return api.get<Catalogue>(`/v1/reports?period=${period}&org_id=${encodeURIComponent(tenant)}`);
     const families = FAMILIES.map(([fid, fname]) => ({
       id: fid, name: fname,
       reports: REPORTS.filter((x) => x[3] === fid).map(([n, key, title, , p]) => ({ number: n, id: key, title, pages: p })),
@@ -240,12 +240,12 @@ export const reportsApi = {
   },
 
   async report(id: string, tenant: string, period: string): Promise<ReportBody> {
-    if (!isDemoMode()) return api.get<ReportBody>(`/v1/reports/${id}?period=${period}`);
+    if (!isDemoMode()) return api.get<ReportBody>(`/v1/reports/${id}?period=${period}&org_id=${encodeURIComponent(tenant)}`);
     return localReport(id, tenant, period);
   },
 
   async meta(period: string, tenant = '1'): Promise<Meta> {
-    if (!isDemoMode()) return api.get<Meta>(`/v1/meta?period=${period}`);
+    if (!isDemoMode()) return api.get<Meta>(`/v1/meta?period=${period}&org_id=${encodeURIComponent(tenant)}`);
     return {
       client: demoTenantName(tenant), period, version: '2026.10-p1',
       classification: 'CONFIDENTIAL — Infracentra client report',
@@ -253,11 +253,43 @@ export const reportsApi = {
     };
   },
 
+  async downloadBundle(scope: 'all' | 'family', family: string | undefined, tenant: string, period: string): Promise<void> {
+    if (isDemoMode()) {
+      const ids = REPORTS.filter((item) => scope === 'all' || item[3] === family);
+      for (const [, id] of ids) await this.downloadCsv(id, tenant, period);
+      return;
+    }
+    const token = getToken();
+    const params = new URLSearchParams({ scope, period, org_id: tenant });
+    if (family) params.set('family', family);
+    const res = await fetch('/api/v1/reports/bundle?' + params.toString(), {
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? 'Bundle export failed');
+    saveBlob(await res.blob(), 'infracentra_' + scope + '_' + (family ?? 'all') + '_' + period + '.zip');
+  },
+
+  async downloadPdf(id: string, tenant: string, period: string, pageNo?: number): Promise<void> {
+    if (isDemoMode()) throw new Error('PDF export is available in Live Mode only.');
+    const token = getToken();
+    const params = new URLSearchParams({ format: 'pdf', period, org_id: tenant });
+    if (pageNo) params.set('page', String(pageNo));
+    const res = await fetch('/api/v1/reports/' + id + '/export?' + params.toString(), {
+      headers: token ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? 'PDF export failed');
+    saveBlob(await res.blob(), filenameFor(id, period, pageNo).replace(/\\.csv$/, '.pdf'));
+  },
+
+  async refresh(id: string, period: string): Promise<void> {
+    await api.post('/v1/reports/' + id + '/refresh?period=' + encodeURIComponent(period), {});
+  },
+
   // Server-side CSV download (real mode). Demo mode: build the same rows locally.
   async downloadCsv(id: string, tenant: string, period: string, pageNo?: number): Promise<void> {
     if (!isDemoMode()) {
       const token = getToken();
-      const res = await fetch(`/api/v1/reports/${id}/export?format=csv&period=${period}${pageNo ? `&page=${pageNo}` : ''}`, {
+      const res = await fetch(`/api/v1/reports/${id}/export?format=csv&period=${period}&org_id=${encodeURIComponent(tenant)}${pageNo ? `&page=${pageNo}` : ''}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? 'Export failed');
