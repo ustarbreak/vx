@@ -217,6 +217,7 @@ export default function Layout() {
         { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
         { to: '/admin/ticketing', icon: Ticket, label: 'Global Ticket Operations' },
         { to: '/admin/integration-ops', icon: PlugZap, label: 'Integration Operations' },
+        { to: '/admin/service-health', icon: Activity, label: 'Platform Service Health' },
       ],
     },
     {
