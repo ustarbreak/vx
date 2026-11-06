@@ -1343,3 +1343,17 @@ class PlatformSetting(Base):
     value_json = Column(JSON, nullable=False, default=dict)
     updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PlatformStaffInvitation(Base):
+    """Single-use, hashed-token invitation for internal platform staff."""
+    __tablename__ = "platform_staff_invitations"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(254), nullable=False, index=True)
+    name = Column(String(160), nullable=False)
+    role = Column(String(32), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    invited_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
