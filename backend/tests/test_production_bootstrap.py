@@ -13,22 +13,29 @@ from app.services.seed import ensure_platform_admin
 
 
 class _Scalars:
+    def __init__(self, row=None):
+        self.row = row
+
     def first(self):
-        return None
+        return self.row
 
 
 class _Result:
+    def __init__(self, row=None):
+        self.row = row
+
     def scalars(self):
-        return _Scalars()
+        return _Scalars(self.row)
 
 
 class _Session:
-    def __init__(self):
+    def __init__(self, existing=None):
+        self.existing = existing
         self.added = []
         self.committed = False
 
     async def execute(self, _statement):
-        return _Result()
+        return _Result(self.existing)
 
     def add(self, row):
         self.added.append(row)
