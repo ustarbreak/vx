@@ -324,6 +324,7 @@ func (a *agent) collectEvents() {
 		log.Printf("system event collection failed: %v", err)
 		return
 	}
+	nextCursor := a.eventCursor
 	seen := make(map[string]bool, len(a.pendingEvents)+len(events))
 	for _, e := range a.pendingEvents {
 		seen[e.EventID] = true
@@ -334,14 +335,15 @@ func (a *agent) collectEvents() {
 		}
 		seen[e.EventID] = true
 		a.pendingEvents = append(a.pendingEvents, e)
-		if e.Timestamp.After(a.eventCursor) {
-			a.eventCursor = e.Timestamp
+		if e.Timestamp.After(nextCursor) {
+			nextCursor = e.Timestamp
 		}
 	}
 	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
 		log.Printf("persist event queue failed: %v", err)
 		return
 	}
+	a.eventCursor = nextCursor
 	if err := a.st.SaveJSON("event_cursor.json", a.eventCursor); err != nil {
 		log.Printf("persist event cursor failed: %v", err)
 	}
@@ -354,9 +356,10 @@ func (a *agent) enqueueEvent(ev collectors.SecurityEvent) {
 		if existing.EventID == ev.EventID { return }
 	}
 	a.pendingEvents = append(a.pendingEvents, ev)
-	if len(a.pendingEvents) > 10000 {
-		a.pendingEvents = a.pendingEvents[len(a.pendingEvents)-10000:]
-		log.Printf("event queue reached cap; oldest pending events were dropped")
+	if len(a.pendingEvents) > 100000 {
+		a.pendingEvents = a.pendingEvents[:100000]
+		log.Printf("event queue reached 100000-event safety cap; new syslog event was dropped")
+		return
 	}
 	if err := a.st.SaveJSON("pending_events.json", a.pendingEvents); err != nil {
 		log.Printf("persist syslog event failed: %v", err)
