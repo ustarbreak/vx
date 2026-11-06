@@ -1105,49 +1105,57 @@ async def build_roi(tenant: str, period: str) -> list:
 
 # ===================================================================== 19 VALUE
 async def build_value(tenant: str, period: str) -> list:
+    """Client value summary; every outcome is backed by a reporting fact."""
     async with AsyncSessionLocal() as db:
         start, end = _month_range(period)
         cur = await _kpi(db, tenant, period)
         runs = (await db.execute(select(RptPlaybookRun).where(
             RptPlaybookRun.tenant_id == tenant,
             RptPlaybookRun.ran_at >= start, RptPlaybookRun.ran_at < end))).scalars().all()
-        inc = (await db.execute(select(RptIncident).where(
+        incidents = (await db.execute(select(RptIncident).where(
             RptIncident.tenant_id == tenant,
             RptIncident.detected_at >= start, RptIncident.detected_at < end))).scalars().all()
-        vuln_fixed = (await db.execute(select(safunc.count()).select_from(RptVulnerability).where(
-            RptVulnerability.tenant_id == tenant,
-            RptVulnerability.fixed_at >= start, RptVulnerability.fixed_at < end))).scalar() or 0
-        assets = (await db.execute(select(safunc.count()).select_from(RptAsset).where(
-            RptAsset.tenant_id == tenant, RptAsset.monitored.is_(True)))).scalar() or 0
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs]) or 0.0
+        vuln_rows = (await db.execute(select(RptVulnerability).where(
+            RptVulnerability.tenant_id == tenant))).scalars().all()
+        assets = (await db.execute(select(RptAsset).where(
+            RptAsset.tenant_id == tenant, RptAsset.monitored.is_(True)))).scalars().all()
+        fixed = [v for v in vuln_rows if v.fixed_at and start <= v.fixed_at < end]
+        measured_runs = [r for r in runs if r.success and r.manual_minutes_saved is not None]
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
         mttd, mttr = cur.get("mttd_min"), cur.get("mttr_min")
-        p1 = ["Valeur livr\u00e9e", "Ce que les services ont concr\u00e8tement apport\u00e9 sur la p\u00e9riode.", [
-            ["K", [["Actifs sous surveillance", str(assets) if assets else NA, "= p\u00e9rim\u00e8tre couvert", "1"],
-                   ["Heures \u00e9conomis\u00e9es", f"{hours:.0f} h" if hours else NA,
-                    "= automatisations utiles", "2"],
-                   ["Vuln\u00e9rabilit\u00e9s corrig\u00e9es", str(vuln_fixed), "= preuves horodat\u00e9es", "3"],
-                   ["Incidents trait\u00e9s", str(len(inc)) if inc else NA,
-                    f"= {sum(1 for i in inc if i.auto_closed)} automatis\u00e9s", "o"]]],
-            ["B", "R\u00e9partition des heures \u00e9conomis\u00e9es",
-             [[r.playbook[:30], round(100 * (r.manual_minutes_saved or 0) / max(hours * 60, 1)), c]
-              for r, c in zip(sorted(runs, key=lambda x: -(x.manual_minutes_saved or 0))[:6],
-                              ["1", "2", "3", "o", "w", "b"])]]
-            if runs else _note("Aucune automatisation mesur\u00e9e sur la p\u00e9riode.")]]
-        deliv = [["Supervision continue", f"{assets} actifs surveill\u00e9s", badge("active")],
-                 ["R\u00e9ponse \u00e0 incident", f"MTTD {K.fmt_min(mttd)} / MTTR {K.fmt_min(mttr)}",
-                  badge("active")],
-                 ["Gestion des vuln\u00e9rabilit\u00e9s", f"{vuln_fixed} corrections d\u00e9montr\u00e9es", badge("active")],
-                 ["Automatisation", f"{len(runs)} executions, {hours:.0f} h \u00e9vit\u00e9es", badge("active")]]
-        p2 = ["Services rendus", "Par produit contractualis\u00e9.", [
-            ["T", "Produits", ["Service", "Livrable p\u00e9riode", "\u00c9tat"], deliv]]]
-        p3 = ["Trajectoire", "Am\u00e9lioration continue mesur\u00e9e.", [
-            ["S", "Heures \u00e9conomis\u00e9es (cumul hebdo)", [max(1, round(hours / 4 + i)) for i in range(8)]],
-            ["L", "Engagements maintenus", [
-                "Aucun incident critique non notifié dans les d\u00e9lais contractuels." if not [
-                    i for i in inc if i.severity == "crit" and not i.contained_at] else
-                "Un incident critique reste \u00e0 confiner : action prioritaire en cours.",
-                "Rapports mensuels disponibles avant le 5 de chaque mois.",
-                "R\u00e9vision annuelle des seuils de corrélation r\u00e9alis\u00e9e."]]]]
+        p1 = ["Valeur livrée", "Résultats observés et mesurés sur la période.", [
+            ["K", [["Actifs sous surveillance", str(len(assets)) if assets else NA,
+                   "= agents enregistrés et synchronisés", "1"],
+                  ["Heures économisées", f"{hours:.1f} h" if hours is not None else NA,
+                   "= runs avec temps manuel évité documenté", "2"],
+                  ["Vulnérabilités corrigées", str(len(fixed)) if vuln_rows else NA,
+                   "= findings avec statut résolu et date", "3"],
+                  ["Incidents traités", str(len(incidents)) if incidents else NA,
+                   "= incidents enregistrés dans la période", "o"]]],
+            ["T", "Automatisations avec preuve de gain", ["Playbook", "Exécutions", "Minutes évitées", "Résultat"],
+             [[r.playbook, "1", f"{r.manual_minutes_saved:.1f}", "Réussi"]
+              for r in measured_runs[:12]]] if measured_runs else
+            _note("Aucune économie automatisée quantifiable : les exécutions sans temps manuel de référence ne sont pas converties en gains.")
+        ]]
+        services = [
+            ["Supervision continue", str(len(assets)) if assets else NA, "Mesuré" if assets else "Non mesuré"],
+            ["Réponse à incident", "MTTD " + K.fmt_min(mttd) + " / MTTR " + K.fmt_min(mttr),
+             "Mesuré" if incidents else "Non mesuré"],
+            ["Gestion des vulnérabilités", str(len(fixed)) if vuln_rows else NA,
+             "Mesuré" if vuln_rows else "Non mesuré"],
+            ["Automatisation", str(len(runs)) + " exécutions" if runs else NA,
+             "Mesuré" if measured_runs else "Non mesuré"],
+        ]
+        p2 = ["Services rendus", "Livrables visibles uniquement lorsqu'une source les mesure.", [
+            ["T", "Produits", ["Service", "Livrable période", "État"], services]]]
+        p3 = ["Trajectoire", "Aucune courbe historique n'est interpolée ou inventée.", [
+            _note("La tendance apparaîtra lorsque les agrégats historiques quotidiens seront disponibles."),
+            ["L", "Indicateurs à suivre", [
+                "Maintenir la couverture des agents enregistrés.",
+                "Documenter le temps manuel de référence avant de valoriser les automatisations.",
+                "Conserver les dates de résolution des vulnérabilités et incidents pour mesurer les progrès."
+            ]]
+        ]]
         return [p1, p2, p3]
 
 
