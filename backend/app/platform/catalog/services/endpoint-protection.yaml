@@ -1,7 +1,7 @@
 id: endpoint-protection
 name: Endpoint Protection
 status: ga
-provider: native
+provider: hybrid
 engine: Wazuh agents + ClamAV
 docs_url: https://documentation.wazuh.com/current/user-manual/registering/index.html
 endpoints:
@@ -13,10 +13,21 @@ resources:
   disk: 20G
 dependencies:
 - requires: analytics
-  rationale: Les événements EDR/XDR remontent au pipeline SIEM pour corrélation avec
-    les autres sources.
+  rationale: Les événements EDR/XDR remontent au pipeline SIEM pour corrélation avec les autres sources.
 in_seed: true
-actions: []
+actions:
+- name: endpoint.list
+  method: GET
+  dangerous: false
+  status: ga
+- name: detection.fetch
+  method: GET
+  dangerous: false
+  status: ga
+- name: endpoint.isolate
+  method: POST
+  dangerous: true
+  status: beta
 _generated_from:
 - app/services/connectors.py:SERVICE_CONNECTORS
 - app/services/seed.py:ALL_SERVICES
