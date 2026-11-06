@@ -216,6 +216,7 @@ export default function Layout() {
         { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
         { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
         { to: '/admin/ticketing', icon: Ticket, label: 'Global Ticket Operations' },
+        { to: '/admin/integration-ops', icon: PlugZap, label: 'Integration Operations' },
       ],
     },
     {
