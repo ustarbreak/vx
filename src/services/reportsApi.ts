@@ -1,10 +1,10 @@
-// Advanced Reporting portal — client API layer (Phase 1 skeleton).
+// Advanced Reporting portal — unified 20-report / 62-page API client.
 // Block contract types follow brief §5; data comes from /api/v1/reports/*.
 // Demo Mode ON  -> local deterministic generator (no network, works on Kali &
 //                  Windows without backend — same seed rule as the server:
 //                  sha256(tenant|period|salt)).
-// Demo Mode OFF -> real backend endpoints (adapters arrive Phase 2/3; until
-//                  then the server honestly returns "Donnée indisponible").
+// Demo Mode OFF -> tenant-scoped reporting builders; missing source telemetry is
+//                  explicitly labelled unavailable (never substituted with demo facts).
 import { isDemoMode } from './demoMode';
 import { api, getToken } from './api';
 import { PROTO_CHAPTERS, PROTO_OVERVIEW, ProtoGroup } from '../data/reportPrototype';
@@ -247,7 +247,7 @@ export const reportsApi = {
   async meta(period: string, tenant = '1'): Promise<Meta> {
     if (!isDemoMode()) return api.get<Meta>(`/v1/meta?period=${period}&org_id=${encodeURIComponent(tenant)}`);
     return {
-      client: demoTenantName(tenant), period, version: '2026.10-p1',
+      client: demoTenantName(tenant), period, version: '2026.11-p5',
       classification: 'CONFIDENTIAL — Infracentra client report',
       author: 'Infracentra Reporting Engine', last_updated: ts(), demo: true,
     };
