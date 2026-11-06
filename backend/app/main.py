@@ -188,6 +188,8 @@ app.include_router(agent_router.router, prefix="/api")
 app.include_router(agent_router.tok_router, prefix="/api")
 app.include_router(agent_router.web_router, prefix="/api")
 # Security Services & Protection consoles: operator action dispatch + history
+from app.routers import vulnerabilities as vulnerabilities_router  # noqa: E402
+app.include_router(vulnerabilities_router.router, prefix="/api")
 from app.routers import security_ops  # noqa: E402
 app.include_router(security_ops.router, prefix="/api")
 
