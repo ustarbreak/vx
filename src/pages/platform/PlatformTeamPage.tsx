@@ -151,7 +151,7 @@ export default function PlatformTeamPage() {
               <td className="p-3"><p className="font-medium text-[var(--ic-heading)]">{user.name}</p><p className="text-xs text-[var(--ic-muted)]">{user.email}</p></td>
               <td className="p-3"><select value={user.role} disabled={busy} onChange={e => void changeRole(user, e.target.value as Exclude<PlatformStaffRole, 'platform_admin'>)} className={`rounded-lg border px-2 py-1 text-xs ${roleTone[user.role] ?? ''}`}><option value="platform_expert">Leader / Expert</option><option value="platform_analyst">Analyst</option><option value="platform_user">User</option></select></td>
               <td className="p-3"><span className={`rounded-full border px-2 py-1 text-xs ${user.status === 'active' ? 'text-emerald-400 border-emerald-500/30' : 'text-amber-400 border-amber-500/30'}`}>{user.status}</span></td>
-              <td className="p-3 text-xs text-[var(--ic-muted)]">—</td>
+              <td className="p-3 text-xs text-[var(--ic-muted)]">{user.last_login ? new Date(user.last_login).toLocaleString() : 'Never'}</td>
               <td className="p-3 text-right whitespace-nowrap"><button disabled={busy} onClick={() => setSelected(user.id)} className="rounded-lg border border-[var(--ic-border)] px-2 py-1 text-xs mr-2">Permissions</button><button disabled={busy} onClick={() => void changeStatus(user)} className="rounded-lg border border-[var(--ic-border)] px-2 py-1 text-xs">{user.status === 'active' ? 'Suspend' : 'Reactivate'}</button></td>
             </tr>)}
             {!staff.length && <tr><td colSpan={5} className="p-8 text-center text-sm text-[var(--ic-muted)]">No platform staff accounts found.</td></tr>}
