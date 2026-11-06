@@ -75,11 +75,11 @@ func parseSyslog(line, remote string) (SecurityEvent, bool) {
 	}
 	facility := priority / 8
 	severity := severityFromSyslogPriority(priority % 8)
-	host, provider, body := "", "syslog", message
+	host, provider, body, eventCode := "", "syslog", message, ""
 	// RFC5424: VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA MSG
 	if fields := strings.Fields(message); len(fields) >= 6 && fields[0] == "1" {
-		host, provider = fields[2], fields[3]
-		body = strings.Join(fields[6:], " ")
+		host, provider, eventCode = fields[2], fields[3], fields[5]
+		if len(fields) > 7 { body = strings.Join(fields[7:], " ") } else { body = "" }
 	} else if fields := strings.Fields(message); len(fields) >= 4 {
 		// Best-effort RFC3164 header parsing. Keep unparsed body intact.
 		if strings.Contains(fields[0], ":") {
@@ -102,7 +102,7 @@ func parseSyslog(line, remote string) (SecurityEvent, bool) {
 	return SecurityEvent{
 		EventID: stableEventID("syslog", identity), Timestamp: now,
 		Source: "syslog", Channel: "network-syslog", Provider: provider,
-		Severity: severity, Hostname: host, Message: truncate(body, 8192),
+		Severity: severity, EventCode: eventCode, Hostname: host, Message: truncate(body, 8192),
 		Raw: map[string]interface{}{"remote_addr": remote, "facility": facility, "priority": priority},
 	}, true
 }
