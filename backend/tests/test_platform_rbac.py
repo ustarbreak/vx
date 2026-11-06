@@ -5,7 +5,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -20,7 +20,7 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
 from app.core.platform_rbac import has_permission
-from app.models import Organization, User, SnmpCredential
+from app.models import Organization, User, SnmpCredential, AgentToken, AuditLog, UsageEvent
 from app.main import app
 
 @pytest_asyncio.fixture()
@@ -540,4 +540,126 @@ async def test_platform_dashboard_is_live_and_permission_gated(session_factory):
         assert "revenue" in payload["limitations"]
     async with client_for(session_factory, 5) as tenant_admin:
         denied = await tenant_admin.get("/api/platform/dashboard/overview")
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_owner_can_suspend_staff_and_revoke_existing_sessions(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.patch("/api/platform/access/users/2/status", json={"status": "inactive"})
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "inactive"
+        assert response.json()["auth_version"] == 1
+        self_suspend = await owner.patch("/api/platform/access/users/1/status", json={"status": "inactive"})
+        assert self_suspend.status_code == 404 or self_suspend.status_code == 403
+
+    async with client_for(session_factory, 2, version=0) as stale_staff:
+        response = await stale_staff.get("/api/platform/access/me")
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_non_owner_cannot_manage_platform_staff_status(session_factory):
+    async with client_for(session_factory, 5) as tenant:
+        denied = await tenant.patch("/api/platform/access/users/2/status", json={"status": "inactive"})
+        assert denied.status_code == 403
+    async with client_for(session_factory, 2) as expert:
+        denied = await expert.patch("/api/platform/access/users/3/status", json={"status": "inactive"})
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_detail_subresources_return_persisted_scoped_data_only(session_factory):
+    async with session_factory() as db:
+        db.add(AgentToken(
+            org_id=1, name="Tenant collector", token_hash="a" * 64,
+            prefix="icag_safe", created_by="owner@example.com",
+        ))
+        db.add(AuditLog(
+            actor_id=1, actor_name="Owner", actor_role="platform_admin", org_id=1,
+            action="tenant.test_event", resource="Tenant", resource_id="1",
+            details="Persisted test audit event", outcome="success",
+        ))
+        await db.commit()
+
+    async with client_for(session_factory, 1) as owner:
+        members = await owner.get("/api/admin/tenants/1/members")
+        devices = await owner.get("/api/admin/tenants/1/devices")
+        keys = await owner.get("/api/admin/tenants/1/api-keys")
+        activity = await owner.get("/api/admin/tenants/1/activity")
+        assert members.status_code == devices.status_code == keys.status_code == activity.status_code == 200
+        assert any(row["email"] == "tenant@example.com" for row in members.json())
+        assert devices.json() == []
+        assert keys.json()[0]["prefix"] == "icag_safe"
+        assert "token_hash" not in keys.json()[0] and "token" not in keys.json()[0]
+        assert activity.json()[0]["details"] == "Persisted test audit event"
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/admin/tenants/2/members")
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_detail_subresources_honor_explicit_tenant_deny(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        deny = await owner.post("/api/platform/access/assignments", json={
+            "user_id": 2, "permission_key": "platform.tenants.read",
+            "effect": "deny", "scope_type": "tenant", "scope_id": 2,
+        })
+        assert deny.status_code == 201, deny.text
+    async with client_for(session_factory, 2, version=1) as expert:
+        allowed = await expert.get("/api/admin/tenants/1/members")
+        denied = await expert.get("/api/admin/tenants/2/members")
+        assert allowed.status_code == 200
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_billing_overview_uses_only_persisted_usage_and_is_owner_gated(session_factory):
+    async with session_factory() as db:
+        db.add(UsageEvent(
+            org_id=1, metric="siem_gb", quantity=5, unit="GB",
+            source="test-meter", idempotency_key="billing-test-event",
+            occurred_at=datetime(2026, 11, 6, tzinfo=timezone.utc),
+        ))
+        await db.commit()
+
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.get("/api/platform/billing/overview?period=2026-11")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["data_mode"] == "live"
+        assert payload["counts"]["organizations"] == 3
+        assert payload["counts"]["partners"] == 1
+        assert payload["counts"]["tenants_with_usage"] == 1
+        tenant = next(row for row in payload["tenants"] if row["id"] == 1)
+        assert tenant["usage"]["siem_gb"]["quantity"] == 5.0
+        assert tenant["usage_event_count"] == 1
+        assert "no invoice ledger" in payload["commercial_integrity"]["invoices"]
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/platform/billing/overview?period=2026-11")
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_platform_ticket_overview_is_global_owner_only(session_factory):
+    async with client_for(session_factory, 1) as owner:
+        response = await owner.get("/api/tickets/ops/overview")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["data_mode"] == "live"
+        assert set(payload["counts"]) >= {"total", "open", "p1_p2", "sla_breached", "unassigned"}
+        assert isinstance(payload["by_organization"], list)
+        assert isinstance(payload["workload"], list)
+
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.get("/api/tickets/ops/overview")
+        assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_global_service_health_sync_is_owner_only(session_factory):
+    async with client_for(session_factory, 5) as tenant_admin:
+        denied = await tenant_admin.post("/api/services/sync")
         assert denied.status_code == 403
