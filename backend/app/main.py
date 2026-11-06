@@ -168,6 +168,8 @@ app.include_router(reports_router.meta_router, prefix="/api")
 # Pricing v2 — public config/leads/health-checks + sales calculator + partner + upsell
 app.include_router(pricing_v2.v1_router, prefix="/api")
 app.include_router(pricing_v2.router, prefix="/api")
+from app.routers import usage as usage_router  # noqa: E402
+app.include_router(usage_router.router, prefix="/api")
 app.include_router(channels_router, prefix="/api")
 app.include_router(mfa_router, prefix="/api")
 app.include_router(invitations_router, prefix="/api")

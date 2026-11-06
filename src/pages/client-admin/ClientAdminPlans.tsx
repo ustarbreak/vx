@@ -87,6 +87,7 @@ export default function ClientAdminPlans() {
   const { user, organization, backendMode } = useAuth();
   const [chatOpen, setChatOpen] = useState(false);
   const [serverInvoice, setServerInvoice] = useState<QuoteResult | null>(null);
+  const [meteredUsage, setMeteredUsage] = useState<any>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1', role: 'bot',
@@ -136,6 +137,21 @@ export default function ClientAdminPlans() {
 
   const invoice = serverInvoice ?? localInvoice;
 
+  // Append-only metering API; unavailable metrics remain visibly unavailable.
+  useEffect(() => {
+    let alive = true;
+    if (backendMode) {
+      const now = new Date();
+      const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      api.get<any>(`/usage/summary?period=${period}`)
+        .then((result) => { if (alive) setMeteredUsage(result); })
+        .catch(() => { if (alive) setMeteredUsage(null); });
+    } else setMeteredUsage(null);
+    return () => { alive = false; };
+  }, [backendMode, organization?.id]);
+
+
+
   // ---- usage vs. entitlement ------------------------------------------------
   // Every number below is derived from an authoritative source: the live
   // invoice (GET /pricing/invoice, recomputed server-side by pricing_engine),
@@ -146,11 +162,16 @@ export default function ClientAdminPlans() {
   // pack's unit-range entitlement (maxUnits === null → no upper bound).
   const invoicedUnits = serverInvoice?.totals.units ?? (serverInvoice ? null : invoice.totals.units);
   const seatLimit = (organization as any)?.seat_limit ?? null;
-  const seatsUsed = (organization as any)?.seats_used ?? organization?.memberCount ?? null;
+  const seatsUsed = backendMode ? (meteredUsage?.metrics?.seats?.used ?? null) : ((organization as any)?.seats_used ?? organization?.memberCount ?? null);
+  const measuredEndpoints = meteredUsage?.metrics?.endpoints?.used ?? null;
+  const measuredSiemGbMonth = meteredUsage?.metrics?.siem_gb?.used ?? null;
+  const measuredBackupGb = meteredUsage?.metrics?.backup_gb?.used ?? null;
+  const daysThisMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   // SIEM entitlement for the current pack: min + per-unit quota over billed units.
   const siemEntitledGb = packDef.siemQuota.min > 0
     ? packDef.siemQuota.min + packDef.siemQuota.perUnit * Math.max(0, invoicedUnits ?? units)
     : null;
+  const siemMonthlyQuota = siemEntitledGb == null ? null : siemEntitledGb * daysThisMonth;
   const backupEntitledGb = packDef.backupQuotaGbPerUnit * Math.max(0, invoicedUnits ?? units);
 
   // Preview what switching pack / contract length would cost (same engine).
@@ -386,12 +407,18 @@ export default function ClientAdminPlans() {
             unavailable={invoicedUnits == null}
           />
           <UsageBar
-            label="SIEM Go/jour consommés vs. quota inclus"
-            used={siemGbDayUsed || null}
-            limit={siemEntitledGb ?? ((organization as any)?.siem_limit_gb ?? null)}
-            unit="Go/jour"
-            unavailable={!siemGbDayUsed && siemEntitledGb == null && !(organization as any)?.siem_limit_gb}
+            label="SIEM consommé ce mois vs. quota inclus"
+            used={backendMode ? measuredSiemGbMonth : (siemGbDayUsed || null)}
+            limit={backendMode ? siemMonthlyQuota : (siemEntitledGb ?? ((organization as any)?.siem_limit_gb ?? null))}
+            unit="Go"
+            unavailable={backendMode ? measuredSiemGbMonth == null : (!siemGbDayUsed && siemEntitledGb == null && !(organization as any)?.siem_limit_gb)}
           />
+          <div className="bg-[var(--ic-surface-2)] rounded-lg p-4 flex items-center justify-between">
+            <span className="text-gray-300 text-sm">Terminaux mesurés (dernier relevé du mois)</span>
+            <span className="text-[var(--ic-heading)] text-sm font-semibold">
+              {backendMode && measuredEndpoints != null ? measuredEndpoints.toLocaleString('fr-FR') : 'Données indisponibles'}
+            </span>
+          </div>
           <UsageBar
             label="Sièges techniciens utilisés vs. limite"
             used={seatsUsed}
@@ -400,11 +427,11 @@ export default function ClientAdminPlans() {
             unavailable={seatLimit == null}
           />
           <UsageBar
-            label="Sauvegarde incluse (quota contractuel)"
-            used={null}
+            label="Sauvegarde utilisée vs. quota contractuel"
+            used={backendMode ? measuredBackupGb : null}
             limit={backupEntitledGb}
             unit="Go"
-            unavailable
+            unavailable={!backendMode || measuredBackupGb == null}
           />
         </div>
         <p className="mt-3 text-[11px] text-gray-500">
