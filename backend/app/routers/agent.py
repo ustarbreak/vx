@@ -306,6 +306,7 @@ class AgentDevice(BaseModel):
     open_ports: list[int] = []
     sys_name: str | None = None
     sys_descr: str | None = None
+    snmp_facts: dict | None = None
     via_agent: int = 0
 
 
@@ -387,6 +388,7 @@ async def report_discovery(agent_id: int, body: DiscoveryBody,
         ad.mac, ad.hostname, ad.os_guess, ad.device_type = d.mac, d.hostname, os_guess, dtype
         ad.open_ports = d.open_ports or []
         ad.sys_name, ad.sys_desc = d.sys_name, d.sys_descr
+        ad.snmp_facts = d.snmp_facts or {}
         ad.last_seen = now_utc()
 
         # SNMP-managed device found -> SAME shared processing pipeline as the
