@@ -1054,70 +1054,52 @@ async def build_audit(tenant: str, period: str) -> list:
 
 # ======================================================================== 9 ROI
 async def build_roi(tenant: str, period: str) -> list:
+    """ROI uses only measured execution savings and configured commercial inputs."""
     async with AsyncSessionLocal() as db:
         params = (await db.execute(select(RptROIParameter).where(
             RptROIParameter.tenant_id == tenant))).scalars().first()
-        cur = await _kpi(db, tenant, period)
         start, end = _month_range(period)
         runs = (await db.execute(select(RptPlaybookRun).where(
             RptPlaybookRun.tenant_id == tenant,
             RptPlaybookRun.ran_at >= start, RptPlaybookRun.ran_at < end))).scalars().all()
-        inc = (await db.execute(select(RptIncident).where(
-            RptIncident.tenant_id == tenant,
-            RptIncident.detected_at >= start, RptIncident.detected_at < end))).scalars().all()
+        measured_runs = [r for r in runs if r.success and r.manual_minutes_saved is not None]
         if params is None:
-            return [_empty_unavailable("Gains \u00e9conomiques"),
-                    _empty_unavailable("D\u00e9tails des gains"),
-                    _empty_unavailable("Hypoth\u00e8ses financi\u00e8res")]
-        hourly = params.hourly_cost or 65.0
-        hours = K.hours_saved([(r.manual_minutes_saved or 0, r.success) for r in runs]) or 0.0
-        labor_saved = hours * hourly
-        avoided = sum(1 for i in inc if i.auto_closed) * (params.incident_avg_cost or 0) / 12.0
-        downtime_avoided = 0.0  # requires asset inventory mapping (Phase 3 job M)
-        insurance = (params.insurance_discount_pct or 0) * 120.0  # monthly premium delta proxy
-        total_gain = labor_saved + avoided + insurance
-        cost = (params.platform_cost_month or 0)
-        roi_pct = round(100 * (total_gain - cost) / max(cost, 1)) if cost else None
-        payback_m = round(cost / max(total_gain / 12.0, 0.01), 1) if total_gain else None
-        p1 = ["Gains \u00e9conomiques", f"P\u00e9riode {period} \u2014 param\u00e8tres financiers valid\u00e9s par administration (jamais saisis par le client).", [
-            ["K", [["Temps analyste \u00e9vit\u00e9", f"{hours:.0f} h", f"= {labor_saved:,.0f} \u20ac", "1"],
-                   ["Incidents \u00e9vit\u00e9s", str(sum(1 for i in inc if i.auto_closed)),
-                    f"= {avoided:,.0f} \u20ac/mois amortis", "2"],
-                   ["Gain assurance", f"{insurance:,.0f} \u20ac", "= remise prime annualis\u00e9e", "3"],
-                   ["Coût plateforme", f"{cost:,.0f} \u20ac/mois", "= abonnement", "w"],
-                   ["ROI p\u00e9riode", f"{roi_pct:+.0f} %" if roi_pct is not None else NA,
-                    "= (gains-co\u00fbts)/co\u00fbts", "o" if (roi_pct or 0) > 0 else "b"],
-                   ["Retour \u00e0 l'\u00e9quilibre", f"{payback_m} mois" if payback_m is not None else NA,
-                    "= co\u00fbt / gain mensuel", "o"]]],
-            ["B", "Composition du gain (\u20ac/mois)",
-             [["Temps \u00e9vit\u00e9", round(labor_saved / 12), "1"],
-              ["Incidents \u00e9vit\u00e9s", round(avoided), "2"],
-              ["Assurance", round(insurance / 12), "3"],
-              ["Co\u00fbt plateforme", -round(cost), "b"]]]]]
-        p2 = ["D\u00e9tails des gains", "Ventilation par source mesurable.", [
-            ["T", "Source de valeur", ["Origine", "Volume", "Gain mensuel", "Hypoth\u00e8se"],
-             [["Automatisation des t\u00e2ches", f"{len(runs)} executions", f"{labor_saved/12:,.0f} \u20ac",
-               f"taux horaire {hourly:.0f} \u20ac"],
-              ["Incidents clos sans action humaine",
-               f"{sum(1 for i in inc if i.auto_closed)}/mois", f"{avoided:,.0f} \u20ac",
-               f"co\u00fbt moyen \u00e9vit\u00e9 {params.incident_avg_cost:,.0f} \u20ac amorti"],
-              ["Prime d'assurance", "=/remise accord\u00e9e", f"{insurance/12:,.0f} \u20ac",
-               f"remise {params.insurance_discount_pct:.0f}% sur prime de r\u00e9f\u00e9rence"]]],
-            ["M", "Pr\u00e9cision", [[
-                "Les gains reposent sur des hypoth\u00e8ses financi\u00e8res param\u00e9tr\u00e9es c\u00f4t\u00e9 plateforme ; ils ne constituent pas un engagement contractuel.", "w"]]]]]
-        p3 = ["Hypoth\u00e8ses financi\u00e8res", "Transparence compl\u00e8te du calcul.", [
-            ["T", "Param\u00e8tres", ["Param\u00e8tre", "Valeur", "Mis \u00e0 jour"],
-             [["Taux horaire analyste", f"{hourly:.0f} \u20ac/h",
-               params.updated_at.strftime("%d/%m/%Y") if params.updated_at else NA],
-              ["Co\u00fbt moyen d'un incident", f"{params.incident_avg_cost:,.0f} \u20ac", ""],
-              ["Co\u00fbt heure d'indisponibilit\u00e9", f"{params.downtime_cost_hr:,.0f} \u20ac", ""],
-              ["Prime de base", f"{params.insurance_base_pct:.0f} %", ""],
-              ["Remise li\u00e9e aux services", f"{params.insurance_discount_pct:.0f} %", ""],
-              ["Abonnement mensuel", f"{cost:,.0f} \u20ac", ""]]],
-            ["L", "Gouvernance", [
-                "Ces valeurs sont modifiables uniquement par l'administration Infracentra.",
-                "Chaque recalcul est horodat\u00e9 et auditable.",
-                "Le client peut demander une revue des hypoth\u00e8ses \u00e0 chaque \u00e9ch\u00e9ance."]]]]
+            return [_empty_unavailable("Gains économiques"),
+                    _empty_unavailable("Détails des gains"),
+                    _empty_unavailable("Hypothèses financières")]
+        hourly = params.hourly_cost
+        hours = K.hours_saved([(r.manual_minutes_saved, r.success) for r in measured_runs])
+        labor_saved = hours * hourly if hours is not None and hourly is not None else None
+        cost = params.platform_cost_month
+        roi_pct = round(100 * (labor_saved - cost) / cost) if labor_saved is not None and cost and cost > 0 else None
+        payback_m = round(cost / labor_saved, 1) if labor_saved and cost and labor_saved > 0 else None
+        p1 = ["Gains économiques", f"Période {period} — calcul limité aux économies directement mesurées.", [
+            ["K", [["Temps analyste économisé", f"{hours:.1f} h" if hours is not None else NA,
+                   "= uniquement runs avec temps manuel documenté", "1"],
+                  ["Valeur du temps mesuré", f"{labor_saved:,.0f} €" if labor_saved is not None else NA,
+                   "= heures mesurées × taux configuré", "2"],
+                  ["Coût plateforme", f"{cost:,.0f} €/mois" if cost is not None and cost > 0 else NA,
+                   "= valeur commerciale configurée", "w"],
+                  ["ROI mesuré", f"{roi_pct:+.0f} %" if roi_pct is not None else NA,
+                   "= gains de temps mesurés uniquement", "o" if (roi_pct or 0) > 0 else "b"],
+                  ["Retour à l'équilibre", f"{payback_m} mois" if payback_m is not None else NA,
+                   "= coût / économie mensuelle mesurée", "o"]]],
+            _note("Les coûts d'incident évités et remises d'assurance sont exclus tant qu'ils ne sont pas appuyés par des données vérifiables.")
+        ]]
+        p2 = ["Détails des gains", "Ventilation des économies réellement mesurées.", [
+            ["T", "Automatisations mesurées", ["Playbook", "Volume", "Temps manuel évité", "Taux horaire"],
+             [[r.playbook, "1 exécution", f"{r.manual_minutes_saved:.1f} min",
+               f"{hourly:.2f} €/h" if hourly is not None else NA] for r in measured_runs[:20]]]
+             if measured_runs else _note("Aucune exécution ne contient de temps manuel évité validé.")]]
+        p3 = ["Hypothèses financières", "Paramètres contrôlés par l'administration Infracentra.", [
+            ["T", "Paramètres", ["Paramètre", "Valeur", "Mis à jour"], [
+                ["Taux horaire analyste", f"{hourly:.2f} €/h" if hourly is not None else NA,
+                 params.updated_at.strftime("%d/%m/%Y") if params.updated_at else NA],
+                ["Coût moyen incident", f"{params.incident_avg_cost:,.0f} €" if params.incident_avg_cost is not None else NA, ""],
+                ["Coût heure indisponibilité", f"{params.downtime_cost_hr:,.0f} €" if params.downtime_cost_hr is not None else NA, ""],
+                ["Coût mensuel plateforme", f"{cost:,.0f} €" if cost is not None else NA, ""]]],
+            _note("Les hypothèses financières ne sont pas assimilées à des économies réalisées.")
+        ]]
         return [p1, p2, p3]
 
 
