@@ -161,7 +161,7 @@ async def usage_summary(period: str = Query(..., description="YYYY-MM"),
                UsageEvent.occurred_at < end)
         .group_by(UsageEvent.metric)
     )).all()
-    totals = {metric: {"quantity": float((peak if metric == "backup_gb" else quantity) or 0), "unit": METRICS.get(metric, ""),
+    totals = {metric: {"quantity": float((quantity if metric == "siem_gb" else peak) or 0), "unit": METRICS.get(metric, ""),
                        "last_recorded_at": last.isoformat() if last else None}
               for metric, quantity, last, peak in rows}
     # Contractual ceilings are read from the existing organization/plan model;
