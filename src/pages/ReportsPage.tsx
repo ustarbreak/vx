@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { isDemoMode } from '../services/demoMode';
 import { demoTenants } from '../data/demoWorld';
+import { organizationsApi, BackendOrganization } from '../services/api';
 import {
   reportsApi, Block, Page, ReportBody, Meta, FAMILY_ORDER, REPORT_CATALOG,
 } from '../services/reportsApi';
@@ -233,9 +234,11 @@ export default function ReportsPage() {
   const nav = useNavigate();
   // Access model: client admin sees only its own tenant (orgId locked);
   // platform_admin & partner_admin may switch tenants via the filter below.
-  const canSwitchTenant = user?.role === 'platform_admin' || user?.role === 'partner_admin';
+  const canSwitchTenant = user?.role === 'platform_admin';
   const [tenantOverride, setTenantOverride] = React.useState<string>('');
-  const tenant = canSwitchTenant ? (tenantOverride || String(user?.orgId ?? '1')) : (user?.orgId ?? 'unknown');
+  const [availableTenants, setAvailableTenants] = React.useState<BackendOrganization[]>([]);
+  const [tenantLoadError, setTenantLoadError] = React.useState<string | null>(null);
+  const tenant = canSwitchTenant ? (tenantOverride || (isDemoMode() ? '1' : String(user?.orgId ?? availableTenants[0]?.id ?? ''))) : String(user?.orgId ?? '');
   const [period, setPeriod] = React.useState('2026-10');
   const [family, setFamily] = React.useState(FAMILY_ORDER[0][0]);
   const [reportId, setReportId] = React.useState(REPORT_CATALOG[0][1]);
@@ -244,6 +247,8 @@ export default function ReportsPage() {
   const [meta, setMeta] = React.useState<Meta | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => { if (!canSwitchTenant || isDemoMode()) return; let alive = true; organizationsApi.list().then((items) => { if (!alive) return; setAvailableTenants(items); if (!tenantOverride && items.length) setTenantOverride(String(items[0].id)); }).catch((e: any) => { if (alive) setTenantLoadError(e?.message ?? 'Unable to load live tenant directory'); }); return () => { alive = false; }; }, [canSwitchTenant]);
 
   // deep link: #/{reportId}/{pageNo} handled through hash already owned by router;
   // keep simple internal state instead (route registered at /reports).
