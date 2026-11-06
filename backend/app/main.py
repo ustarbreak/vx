@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from app.core.config import settings
-from app.database import init_db, AsyncSessionLocal
+from app.database import init_db, AsyncSessionLocal, engine
+from sqlalchemy import text as sql_text
+from fastapi.responses import JSONResponse
 from app.routers import auth, organizations, users, entitlements, integrations, audit
 from app.routers import platform_access as platform_access_router
 from app.routers import tickets, notifications, discovery, threat_intel, services, projects
@@ -229,4 +231,31 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Liveness probe: process is serving requests; no dependency claims."""
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    """Readiness probe: verify PostgreSQL and Redis before receiving traffic."""
+    checks = {"database": "ok", "redis": "ok"}
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(sql_text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 - never expose dependency details
+        logger.warning("readiness database check failed: %s", type(exc).__name__)
+        checks["database"] = "unavailable"
+    redis_client = None
+    try:
+        import redis.asyncio as aioredis
+        redis_client = aioredis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        await redis_client.ping()
+    except Exception as exc:  # noqa: BLE001 - never expose dependency details
+        logger.warning("readiness redis check failed: %s", type(exc).__name__)
+        checks["redis"] = "unavailable"
+    finally:
+        if redis_client is not None:
+            await redis_client.aclose()
+    ready = all(value == "ok" for value in checks.values())
+    payload = {"status": "ready" if ready else "not_ready", "checks": checks}
+    return payload if ready else JSONResponse(status_code=503, content=payload)

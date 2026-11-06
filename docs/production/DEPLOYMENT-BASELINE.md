@@ -29,7 +29,7 @@ headers at the proxy.
 
 ## Known limitations — not a production certification
 
-- /health currently confirms process liveness, not full database/Redis readiness.
+- `/health` is a liveness probe; Docker uses `/health/ready`, which checks PostgreSQL and Redis and returns HTTP 503 if either dependency is unavailable.
 - Startup currently calls init_db(); verify the Alembic migration path and
   backup/restore procedure against staging before a production rollout.
 - DEMO_SEED_ENABLED=false is set, but every seeding path must be audited before
