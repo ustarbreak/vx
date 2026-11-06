@@ -1,6 +1,6 @@
-// Advanced Reporting portal page (Phase 1 skeleton of the 20-report system).
+// Advanced Reporting portal — 20 reports, 62 pages, six report families.
 // Navigation: 3 levels — family bar -> report tabs -> numbered page pills.
-// Downloads: page / report / family-as-report-list / all (CSV now, PDF Phase 6).
+// Downloads: page / report / family ZIP / full catalogue ZIP / PDF.
 // Data: reportsApi — demo generator when Demo Mode ON, real API when OFF.
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -233,7 +233,7 @@ export default function ReportsPage() {
   const { user } = useAuth();
   const nav = useNavigate();
   // Access model: client admin sees only its own tenant (orgId locked);
-  // platform_admin & partner_admin may switch tenants via the filter below.
+  // Only platform Owner can switch tenants; partner/client users remain scoped.
   const canSwitchTenant = user?.role === 'platform_admin';
   const [tenantOverride, setTenantOverride] = React.useState<string>('');
   const [availableTenants, setAvailableTenants] = React.useState<BackendOrganization[]>([]);
