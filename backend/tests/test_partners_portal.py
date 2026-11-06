@@ -857,13 +857,14 @@ async def test_runbook_crud(session_factory):
 
 async def test_partner_statement_prefers_recorded_usage_events(session_factory):
     from decimal import Decimal
+    import calendar
     from app.models import UsageEvent
 
     await _seed(session_factory)
     month = f"{NOW.year}-{NOW.month:02d}"
     async with session_factory() as s:
         s.add_all([
-            UsageEvent(org_id=12, metric="siem_gb", quantity=Decimal("4650"), unit="GB",
+            UsageEvent(org_id=12, metric="siem_gb", quantity=Decimal(str(150 * calendar.monthrange(NOW.year, NOW.month)[1])), unit="GB",
                        source="opensearch-meter", idempotency_key="partner-siem-month"),
             UsageEvent(org_id=12, metric="backup_gb", quantity=Decimal("6100"), unit="GB",
                        source="backup-meter", idempotency_key="partner-backup-month"),
@@ -874,6 +875,6 @@ async def test_partner_statement_prefers_recorded_usage_events(session_factory):
         assert response.status_code == 200
         statement = response.json()["statement"]
         assert statement["metering"]["source"] == "usage_events"
-        assert statement["metering"]["siem_gb_month"] == 4650.0
+        assert statement["metering"]["siem_gb_month"] == float(150 * calendar.monthrange(NOW.year, NOW.month)[1])
         assert statement["metering"]["siem_gb_day"] == 150.0
         assert statement["metering"]["backup_gb"] == 6100.0
