@@ -511,7 +511,9 @@ async def cancel_run(run_uid: str, current_user: User = Depends(get_current_user
     r = (await db.execute(select(PlaybookRun).where(PlaybookRun.uid == run_uid))).scalars().first()
     if not r:
         raise HTTPException(404, "Run not found")
-    if current_user.role != "platform_admin" and r.org_id not in (None, current_user.org_id):
+    # Platform-global runs (org_id=None) are not tenant-owned and must
+    # never be exposed to tenant users, including mutation endpoints.
+    if current_user.role != "platform_admin" and r.org_id != current_user.org_id:
         raise HTTPException(403, "Cross-tenant access denied")
     if r.status in ("completed", "failed", "partial", "cancelled"):
         raise HTTPException(409, f"Run already finished ({r.status})")
@@ -533,7 +535,9 @@ async def retry_run(run_uid: str, body: RunRequest,
     r = (await db.execute(select(PlaybookRun).where(PlaybookRun.uid == run_uid))).scalars().first()
     if not r:
         raise HTTPException(404, "Run not found")
-    if current_user.role != "platform_admin" and r.org_id not in (None, current_user.org_id):
+    # Match the exact tenant boundary before checking run state; a tenant
+    # must not learn or mutate the state of a platform-global run.
+    if current_user.role != "platform_admin" and r.org_id != current_user.org_id:
         raise HTTPException(403, "Cross-tenant access denied")
     if r.status not in ("failed", "partial", "cancelled"):
         raise HTTPException(409, "Only failed/partial/cancelled runs can be retried")
