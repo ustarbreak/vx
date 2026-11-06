@@ -178,10 +178,10 @@ export interface OrganizationCreatePayload {
 // Demo Mode: answered by demoMode.ts stores seeded from demoRulesSeed.
 // ---------------------------------------------------------------------------
 export interface TenantSummary {
-  id: number; name: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
+  id: number; name: string; tier: string; org_type: 'HQ' | 'SUBSIDIARY' | 'AGENCY'; location: string;
   plan_tier: 'STARTER' | 'PRO' | 'SOUVERAIN'; billing_cycle: 'MONTHLY' | 'ANNUAL';
   endpoints: number; members: number; services_active: number; open_incidents: number;
-  probes: { id: string; hostname: string; ip: string; status: string }[];
+  probes: { id: number; hostname: string; ip: string; status: string }[];
   children: { id: number; name: string; org_type: string }[];
 }
 export interface MonitoringRuleOut {
@@ -190,6 +190,25 @@ export interface MonitoringRuleOut {
   action: 'create_ticket' | 'notify' | 'suppress_alert' | 'none'; ticket_priority: string;
   notify_channels: string[]; enabled: boolean; created_by: string; created_at: string;
 }
+export interface TenantDeviceRow {
+  id: number; hostname: string | null; ip: string; mac: string | null; os: string | null;
+  device_type: string | null; is_probe: boolean; imported: boolean;
+  monitoring_status: string; last_seen: string | null; probe_id: number | null;
+}
+export interface TenantMemberRow {
+  id: number; name: string; email: string; role: string; status: string;
+  mfa_enabled: boolean; last_login: string | null; created_at: string | null;
+}
+export interface TenantApiKeyRow {
+  id: number; name: string; prefix: string; created_by: string | null;
+  created_at: string | null; last_used_at: string | null; revoked_at: string | null;
+  status: 'active' | 'revoked';
+}
+export interface TenantActivityRow {
+  id: number; actor: string; actor_role: string; action: string; resource: string;
+  resource_id: string; details: string | null; outcome: string; timestamp: string | null;
+}
+
 export interface ServiceGrantOut { enabled: boolean; override_plan: boolean; granted_by: string; updated_at: string }
 
 export const tenantManagerApi = {
@@ -205,6 +224,10 @@ export const tenantManagerApi = {
   setGrant: (orgId: number | string, data: { service_id: string; enabled: boolean; override_plan?: boolean }) =>
     api.post<ServiceGrantOut>(`/admin/tenants/${orgId}/grants`, data),
   grants: (orgId: number | string) => api.get<Record<string, ServiceGrantOut>>(`/admin/tenants/${orgId}/grants`),
+  devices: (orgId: number | string) => api.get<TenantDeviceRow[]>(`/admin/tenants/${orgId}/devices`),
+  members: (orgId: number | string) => api.get<TenantMemberRow[]>(`/admin/tenants/${orgId}/members`),
+  apiKeys: (orgId: number | string) => api.get<TenantApiKeyRow[]>(`/admin/tenants/${orgId}/api-keys`),
+  activity: (orgId: number | string) => api.get<TenantActivityRow[]>(`/admin/tenants/${orgId}/activity`),
   platformAudit: () => api.get<{ id: number; action: string; detail: string; actor: string; created_at: string }[]>('/admin/audit-platform'),
 };
 
@@ -1344,7 +1367,7 @@ export interface PlatformPermissionAssignmentDto {
 }
 export interface PlatformStaffDto {
   id: number; email: string; name: string; role: PlatformStaffRole;
-  status: string; auth_version: number; created_at: string | null;
+  status: string; auth_version: number; created_at: string | null; last_login?: string | null;
 }
 export const platformAccessApi = {
   me: () => api.get<{
@@ -1380,4 +1403,65 @@ export interface PlatformDashboardOverview {
 }
 export const platformDashboardApi = {
   overview: () => api.get<PlatformDashboardOverview>('/platform/dashboard/overview'),
+};
+
+
+export const platformStaffApi = {
+  updateStatus: (userId: number, status: 'active' | 'inactive') =>
+    api.patch<{ id: number; status: string; auth_version: number }>(`/platform/access/users/${userId}/status`, { status }),
+};
+
+export interface PlatformBillingTenant {
+  id: number; name: string; status: string; is_partner: boolean; tier: string;
+  plan_tier: string; billing_cycle: string; monthly_revenue_recorded: number;
+  currency: string; contract_start: string | null; contract_end: string | null;
+  trial: boolean; trial_expires_at: string | null; seat_limit: number | null;
+  endpoint_limit: number | null; siem_limit_gb_day: number | null;
+  usage: Record<string, { quantity: number; event_count: number; last_recorded_at: string | null }>;
+  usage_event_count: number;
+}
+export interface PlatformBillingOverview {
+  generated_at: string; period: string; currency: string; data_mode: 'live';
+  scope: 'global_platform'; counts: Record<string, number>;
+  commercial_integrity: Record<string, string>; tenants: PlatformBillingTenant[];
+}
+export const platformBillingApi = {
+  overview: (period: string) => api.get<PlatformBillingOverview>(`/platform/billing/overview?period=${encodeURIComponent(period)}`),
+};
+
+export interface PlatformTicketOverview {
+  generated_at: string;
+  data_mode: 'live';
+  counts: { total: number; open: number; resolved: number; closed: number; p1_p2: number; sla_breached: number; unassigned: number };
+  by_status: Record<string, number>;
+  by_priority: Record<string, number>;
+  by_organization: { org_id: number; organization: string; total: number; open: number; p1_p2: number }[];
+  workload: { assignee: string; open: number }[];
+  recent: AdvTicket[];
+}
+export const platformTicketOpsApi = {
+  overview: () => api.get<PlatformTicketOverview>('/tickets/ops/overview'),
+  runEscalations: () => api.post<{ escalated: number }>('/tickets/ops/run-escalations'),
+};
+
+export interface PlatformIntegration {
+  id: number; name: string; service_id: string; integration_type: string;
+  license_type: string; pricing: string; status: string; api_endpoint?: string | null;
+  documentation_url?: string | null; last_sync?: string | null; notes?: string | null;
+  created_at: string; updated_at?: string | null;
+}
+export const platformIntegrationOpsApi = {
+  list: () => api.get<PlatformIntegration[]>('/integrations/'),
+  update: (id: number, data: { status?: string; api_endpoint?: string; documentation_url?: string; notes?: string }) =>
+    api.patch<PlatformIntegration>(`/integrations/${id}`, data),
+  test: (id: number) => api.post<{ success: boolean; message: string; details?: Record<string, unknown> }>(`/integrations/${id}/test`, {}),
+};
+
+export interface PlatformServiceHealth {
+  service_id: string; engine: string; configured?: boolean; reachable?: boolean;
+  reason?: string; status?: string; latency_ms?: number; lifecycle?: Record<string, unknown>;
+}
+export const platformServiceHealthApi = {
+  catalog: () => api.get<{service_id:string;engine:string;docs:string;endpoints:string[]}[]>('/services/catalog'),
+  sync: () => api.post<{checked:number;results:PlatformServiceHealth[]}>('/services/sync', {}),
 };

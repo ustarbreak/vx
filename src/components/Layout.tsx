@@ -11,10 +11,10 @@ import {
   Shield, LayoutDashboard, AlertTriangle, Target, FileCheck, FileBarChart2,
   Activity, Settings, LogOut, ChevronLeft, ChevronRight,
   Bell, Search, Menu, Zap, Users, Building2, Network,
-  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins,
+  HardDrive, UserCog, BarChart3, ClipboardList, ShieldCheck, Coins, Wallet,
   Sun, Moon, Key, Ticket, Mail, Cloud, Wifi, Lock, Globe,
   Scan, Wrench, Database, Monitor, TrendingUp, Package,
-  BellRing, Radio, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
+  BellRing, Radio, PlugZap, Inbox, CheckCircle2, FolderKanban, Users2, Radar, Server, FileText, Palette,
   MonitorSmartphone
 } from 'lucide-react';
 import { partnerById } from '../data/partnerWorld';
@@ -207,12 +207,17 @@ export default function Layout() {
     {
       group: true, icon: LayoutDashboard, label: 'Overview', items: [
         { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+        { to: '/admin/team', icon: UserCog, label: 'Platform Team & Access' },
       ],
     },
     {
       group: true, icon: Building2, label: 'Tenant & Customers', items: [
         { to: '/admin/clients', icon: Building2, label: 'Tenant Manager' },
         { to: '/admin/partners', icon: Users2, label: 'Partner Program (MSP)' },
+        { to: '/admin/billing', icon: Wallet, label: 'Billing & Subscriptions' },
+        { to: '/admin/ticketing', icon: Ticket, label: 'Global Ticket Operations' },
+        { to: '/admin/integration-ops', icon: PlugZap, label: 'Integration Operations' },
+        { to: '/admin/service-health', icon: Activity, label: 'Platform Service Health' },
       ],
     },
     {
