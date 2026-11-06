@@ -256,7 +256,7 @@ export const reportsApi = {
   async downloadBundle(scope: 'all' | 'family', family: string | undefined, tenant: string, period: string): Promise<void> {
     if (isDemoMode()) {
       const ids = REPORTS.filter((item) => scope === 'all' || item[3] === family);
-      for (const [, id] of ids) await this.downloadCsv(id, tenant, period);
+      for (const [, id] of ids) await reportsApi.downloadCsv(id, tenant, period);
       return;
     }
     const token = getToken();
@@ -278,7 +278,7 @@ export const reportsApi = {
       headers: token ? { Authorization: 'Bearer ' + token } : {},
     });
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? 'PDF export failed');
-    saveBlob(await res.blob(), filenameFor(id, period, pageNo).replace(/\\.csv$/, '.pdf'));
+    saveBlob(await res.blob(), filenameFor(id, period, pageNo).replace(/\.csv$/, '.pdf'));
   },
 
   async refresh(id: string, period: string): Promise<void> {
