@@ -1,9 +1,11 @@
 """Wazuh provider (T2.3): thin wrapper over app/services/wazuh.py WazuhService.
 
-No behavior changes to the underlying service. Note: WazuhService.isolate_agent
-currently sends an agent *restart* with an isolate flag — real host isolation
-needs Wazuh Active Response enabled on the manager, so until that is verified
-the action reports honest partial semantics in its message (ALIGNMENT §E).
+Host isolation is deliberately fail-closed. The legacy WazuhService.isolate_agent
+calls the agent restart endpoint with an "isolate" JSON flag; that is not a
+documented or verified network-isolation operation. A real isolation workflow
+requires a configured and verified Wazuh Active Response command on the
+manager and agents. Until that command is integrated, endpoint.isolate must
+never report success or send an agent restart.
 """
 from __future__ import annotations
 
@@ -24,8 +26,7 @@ class WazuhProvider(ConnectorProvider):
             {"name": "endpoint.list", "dangerous": False},
             {"name": "detection.fetch", "dangerous": False},
             {"name": "endpoint.isolate", "dangerous": True,
-             "description": "Requires Wazuh Active Response on the manager; "
-                            "current impl restarts agent with isolate flag (partial)."},
+             "description": "Fail-closed until a verified Wazuh Active Response isolation command is configured."},
             {"name": "vulnerability.fetch", "dangerous": False},
         ],
     )
@@ -74,18 +75,19 @@ class WazuhProvider(ConnectorProvider):
                       dry_run: bool = False) -> ActionResult:
         if action == "endpoint.isolate":
             if dry_run:
-                return ActionResult(JobState.succeeded, message="dry-run: would restart+flag isolate", data={})
-            agent_id = params.get("agent_id")
-            if not agent_id:
-                return ActionResult(JobState.failed, message="agent_id required")
-            svc = self._svc()
-            try:
-                res = await svc.isolate_agent(str(agent_id))
-                return ActionResult(JobState.succeeded,
-                                    message="isolate requested via agent restart (Active Response not verified - TODO_VERIFY)",
-                                    data=res)
-            except Exception as e:
-                return ActionResult(JobState.failed, message=f"{type(e).__name__}: {e}")
-            finally:
-                await svc.close()
+                return ActionResult(
+                    JobState.succeeded,
+                    message=("dry-run: would request host isolation through a verified Wazuh Active Response command; no request was sent"),
+                    data={"dry_run": True, "provider": "wazuh"},
+                )
+            # Do not call WazuhService.isolate_agent: it invokes the agent
+            # restart endpoint, which is not equivalent to network isolation.
+            # Until a manager-side Active Response command is configured and
+            # verified, fail honestly rather than claim containment.
+            return ActionResult(
+                JobState.unsupported,
+                message=("Wazuh host isolation is not enabled: no verified custom Active Response isolation command is configured. Agent restart is not host isolation; no device action was sent."),
+                data={"provider": "wazuh", "executed": False,
+                      "requires": "verified_wazuh_active_response"},
+            )
         return ActionResult(JobState.unsupported, message=f"wazuh: '{action}' not implemented")
