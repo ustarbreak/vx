@@ -13,9 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_current_user
+from app.core.security import get_agent_token, get_current_user
 from app.database import get_db
-from app.models import AuditLog, Organization, UsageEvent, User
+from app.models import AgentToken, AuditLog, Organization, UsageEvent, User
 from app.services.pricing_engine import PRICING_CONFIG
 
 router = APIRouter(prefix="/usage", tags=["Usage Metering"])
@@ -96,6 +96,54 @@ async def ingest_usage_event(body: UsageEventIn, user: User = Depends(get_curren
         raise
     await db.refresh(event)
     return {"created": True, "duplicate": False, "event_id": event.id}
+
+
+class AgentUsageEventIn(BaseModel):
+    metric: str
+    quantity: Decimal = Field(gt=0, le=Decimal("1000000000"))
+    unit: str | None = None
+    source: str = Field(min_length=2, max_length=60)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    occurred_at: datetime | None = None
+
+
+@router.post("/agent-events", status_code=201)
+async def ingest_agent_usage_event(body: AgentUsageEventIn,
+                                   token: AgentToken = Depends(get_agent_token),
+                                   db: AsyncSession = Depends(get_db)):
+    """Agent-token ingestion: org scope is taken exclusively from the token."""
+    if body.metric not in METRICS:
+        raise HTTPException(422, f"Unsupported usage metric; allowed: {', '.join(METRICS)}")
+    expected_unit = METRICS[body.metric]
+    if body.unit is not None and body.unit != expected_unit:
+        raise HTTPException(422, f"{body.metric} must use unit {expected_unit!r}")
+    existing = (await db.execute(select(UsageEvent).where(
+        UsageEvent.org_id == token.org_id,
+        UsageEvent.idempotency_key == body.idempotency_key))).scalars().first()
+    if existing:
+        return {"created": False, "duplicate": True, "event_id": existing.id}
+    event = UsageEvent(org_id=token.org_id, metric=body.metric, quantity=body.quantity,
+        unit=expected_unit, source=f"agent:{body.source}",
+        idempotency_key=body.idempotency_key,
+        occurred_at=body.occurred_at or datetime.now(timezone.utc))
+    db.add(event)
+    db.add(AuditLog(actor_id=None, actor_name=f"agent-token:{token.id}",
+        actor_role="agent", org_id=token.org_id, action="usage.agent_event.recorded",
+        resource="usage_event", resource_id=body.idempotency_key,
+        details=f"{body.metric}={body.quantity} {expected_unit} source={body.source}",
+        outcome="success"))
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = (await db.execute(select(UsageEvent).where(
+            UsageEvent.org_id == token.org_id,
+            UsageEvent.idempotency_key == body.idempotency_key))).scalars().first()
+        if existing:
+            return {"created": False, "duplicate": True, "event_id": existing.id}
+        raise
+    await db.refresh(event)
+    return {"created": True, "duplicate": False, "event_id": event.id, "org_id": token.org_id}
 
 
 @router.get("/summary")
