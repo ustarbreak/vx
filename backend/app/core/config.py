@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # Certificate verification is secure by default. Disable only for a trusted
     # lab using self-signed certificates; never disable it in public production.
     CONNECTOR_TLS_VERIFY: bool = True
-    # Fernet key dedicated to encrypting integration credentials at rest.
+    # Dedicated Fernet key for integration credentials stored in the database.
     INTEGRATION_ENCRYPTION_KEY: str = ""
     VELOCIRAPTOR_URL: str = ""
     VELOCIRAPTOR_TOKEN: str = ""

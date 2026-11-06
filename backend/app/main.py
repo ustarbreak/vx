@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as db:
         await ensure_platform_admin(db)
-        # One-time idempotent conversion of existing plaintext integration keys.
+        # Idempotently convert legacy plaintext integration credentials.
         await encrypt_legacy_integration_secrets(db)
         # STAGE 3: grouping policy v1 row + atomic UID counter bootstrap.
         # Must run before any ingestion so correlate() reads the documented
