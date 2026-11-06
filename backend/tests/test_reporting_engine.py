@@ -23,7 +23,8 @@ def _compile_jsonb_sqlite(element, compiler, **kw):
 
 from app.database import Base, get_db
 from app.core.security import create_access_token, get_password_hash
-from app.models import Organization, User, RptExportLog
+from app.models import Organization, User
+from app.models_reporting import RptExportLog
 from app.main import app
 from app.routers import reports
 
