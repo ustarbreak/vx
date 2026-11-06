@@ -206,7 +206,8 @@ export default function Layout() {
   const PLATFORM_ADMIN_GROUPS: NavGroup[] = [
     {
       group: true, icon: LayoutDashboard, label: 'Overview', items: [
-        { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+        { to: '/admin/dashboard', icon: LayoutDashboard, label: 'Command Center' },
+        { to: '/admin/operations', icon: Activity, label: 'Platform Health & Connectors' },
       ],
     },
     {
@@ -240,6 +241,8 @@ export default function Layout() {
       group: true, icon: UserCog, label: 'Management', items: [
         { to: '/projects', icon: FolderKanban, label: 'Project Manager' },
         { to: '/reports', icon: FileBarChart2, label: 'Reports' },
+        { to: '/admin/team', icon: UserCog, label: 'Platform Team & Access' },
+        { to: '/admin/billing', icon: Coins, label: 'Global Billing & Metering' },
         { to: '/admin/audit', icon: ClipboardList, label: 'Audit Log' },
       ],
     },
@@ -247,6 +250,8 @@ export default function Layout() {
       group: true, icon: Server, label: 'Platform', items: [
         { to: '/admin/themes', icon: Palette, label: 'Infracentra Themes' },
         { to: '/admin/packs', icon: Package, label: 'Pack Customizer' },
+        { to: '/admin/integrations', icon: Network, label: 'Integration Registry' },
+        { to: '/admin/onboarding', icon: Wrench, label: 'Service Catalog & Onboarding' },
         { to: '/admin/settings', icon: Settings, label: 'Platform Settings' },
       ],
     },
