@@ -6,6 +6,7 @@ package snmpx
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -104,9 +105,13 @@ func buildClient(target string, cred Credential, timeout time.Duration) (*gosnmp
 	case "v3":
 		g.Version = gosnmp.Version3
 		g.SecurityModel = gosnmp.UserSecurityModel
-		g.MsgFlags = gosnmp.AuthPriv
-		if cred.PrivPassphrase == "" {
+		if cred.Username == "" { return nil, fmt.Errorf("SNMPv3 username is required") }
+		if cred.AuthPassphrase == "" {
+			g.MsgFlags = gosnmp.NoAuthNoPriv
+		} else if cred.PrivPassphrase == "" {
 			g.MsgFlags = gosnmp.AuthNoPriv
+		} else {
+			g.MsgFlags = gosnmp.AuthPriv
 		}
 		g.SecurityParameters = &gosnmp.UsmSecurityParameters{
 			UserName:                 cred.Username,
@@ -115,8 +120,11 @@ func buildClient(target string, cred Credential, timeout time.Duration) (*gosnmp
 			PrivacyProtocol:          privProto(cred.PrivProtocol),
 			PrivacyPassphrase:        cred.PrivPassphrase,
 		}
-	default: // v2c
+	case "", "v2c", "2c":
+		if cred.Community == "" { return nil, fmt.Errorf("SNMPv2c community is required") }
 		g.Version = gosnmp.Version2c
+	default:
+		return nil, fmt.Errorf("unsupported SNMP version %q", cred.Version)
 	}
 	if err := g.Connect(); err != nil {
 		return nil, err
@@ -189,7 +197,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	}
 	f := &DeviceFacts{IP: target, MatchedCred: cred.Name}
 	for _, pdu := range res.Variables {
-		v := fmt.Sprint(gosnmp.ToBigInt(pdu.Value))
+		v := toString(pdu)
 		switch pdu.Name {
 		case "." + oids["sysDescr"]:
 			f.SysDescr = toString(pdu)
@@ -213,7 +221,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	idxs := map[string]int{}
 	if ifres, err := g.WalkAll(oids["ifDescr"]); err == nil {
 		for _, p := range ifres {
-			key := strings.TrimPrefix(p.Name, oids["ifDescr"]+".")
+			key := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), oids["ifDescr"]+".")
 				idx, _ := strconv.Atoi(key)
 			idxs[key] = len(f.Interfaces)
 			f.Interfaces = append(f.Interfaces, SNMPInterface{Index: idx, Descr: toString(p)})
@@ -238,7 +246,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	}
 	if ipres, err := g.WalkAll(oids["ipAdEntAddr"]); err == nil {
 		for _, p := range ipres {
-			suffix := strings.TrimPrefix(p.Name, oids["ipAdEntAddr"]+".")
+			suffix := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), oids["ipAdEntAddr"]+".")
 			if pos, ok := idxs[ipToIndex[suffix]]; ok && f.Interfaces[pos].IP == "" {
 				f.Interfaces[pos].IP = toString(p)
 			}
@@ -257,7 +265,7 @@ func probeWith(target string, cred Credential, timeout time.Duration) (*DeviceFa
 	}
 	seenARP := map[string]bool{}
 	for _, p := range arpIPs {
-		suffix := strings.TrimPrefix(p.Name, oids["arpIp"]+".")
+		suffix := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), oids["arpIp"]+".")
 		ip := toString(p)
 		if ip != "" && !seenARP[suffix] {
 			seenARP[suffix] = true
@@ -281,7 +289,7 @@ func fillCol(g *gosnmp.GoSNMP, base string, idxs map[string]int, f *DeviceFacts,
 		return
 	}
 	for _, p := range res {
-		key := strings.TrimPrefix(p.Name, base+".")
+		key := strings.TrimPrefix(strings.TrimPrefix(p.Name, "."), base+".")
 		if pos, ok := idxs[key]; ok && pos < len(f.Interfaces) {
 			set(&f.Interfaces[pos], colValue(p))
 		}
@@ -304,6 +312,9 @@ func colValue(p gosnmp.SnmpPDU) string {
 }
 
 func toString(p gosnmp.SnmpPDU) string {
+	if ip, ok := p.Value.([]byte); ok && (len(ip) == net.IPv4len || len(ip) == net.IPv6len) && strings.HasPrefix(p.Name, "."+oids["ipAdEntAddr"]) || strings.Contains(p.Name, oids["arpIp"]) {
+		return net.IP(ip).String()
+	}
 	if s, ok := p.Value.(string); ok {
 		return s
 	}
