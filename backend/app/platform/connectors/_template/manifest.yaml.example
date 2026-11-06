@@ -1,0 +1,9 @@
+id: example-connector
+engine: Example Engine
+service_id: example-service
+module: providers.example_connector
+version_pin: TODO_VERIFY
+capabilities:
+  - name: example.read
+    dangerous: false
+    description: Read-only example capability.

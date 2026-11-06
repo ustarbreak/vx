@@ -1,0 +1,9 @@
+id: mock
+engine: Infracentra SDK Mock
+service_id: mock
+module: providers.mock
+version_pin: in-tree
+capabilities:
+  - name: mock.echo
+    dangerous: false
+    description: Returns supplied payload; test-only.
