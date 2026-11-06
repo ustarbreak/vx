@@ -3,6 +3,7 @@ package collectors
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 )
 
@@ -60,4 +61,10 @@ func severityFromSyslogPriority(priority int) string {
 	default:
 		return "info"
 	}
+}
+
+func truncate(s string, max int) string {
+	if max <= 0 { return "" }
+	if len(s) <= max { return s }
+	return s[:max]
 }
