@@ -216,7 +216,7 @@ async def build_threatintel(tenant: str, period: str) -> list:
         if alerts:
             mx = alerts[0][1] or 1
             for tid, n in alerts:
-                heat.append([TACT.get(tid, tid), max(1, round(100 * n / mx))])
+                heat.append([TACT.get(tid, tid), round(100 * n / mx) if mx else 0])
         p2blocks = [["H", "Tactiques observ\u00e9es", heat]] if heat else \
             [_note("Aucune alerte cartographi\u00e9e sur la p\u00e9riode.")]
         if alerts:
@@ -623,7 +623,7 @@ async def build_vuln(tenant: str, period: str) -> list:
              [[k, v, c] for (k, v), c in zip(sorted(per.items(), key=lambda x: -x[1]),
                                              ["b", "h", "w", "1", "2", "3"])]],
             ["T", "Top critiques ouvertes", ["CVE", "CVSS", "Actifs", "D\u00e9couverte", "\u00c9ch\u00e9ance SLA"],
-             [[v.cve, f"{v.cvss:.1f}" if v.cvss else NA, str(v.assets_affected or 1),
+             [[v.cve, f"{v.cvss:.1f}" if v.cvss else NA, str(v.assets_affected) if v.assets_affected is not None else NA,
                v.found_at.strftime("%d/%m") if v.found_at else NA,
                v.sla_due_at.strftime("%d/%m") if v.sla_due_at else NA] for v in crit_open[:10]]]
             if crit_open else _note("Aucune vuln\u00e9rabilit\u00e9 critique ouverte.", "o")]]
@@ -905,7 +905,7 @@ async def build_endpoint(tenant: str, period: str) -> list:
                    ["Agents obsol\u00e8tes", str(last.outdated_agent or 0), "= mise \u00e0 jour requise",
                     "w" if (last.outdated_agent or 0) else "o"],
                    ["Chiffrement disque", f"{last.disk_encrypted_pct:.0f} %" if last.disk_encrypted_pct is not None else NA,
-                    "= objectif 100 %", "o" if (last.disk_encrypted_pct or 0) >= 95 else "w"]]],
+                    "= objectif 100 %", "o" if last.disk_encrypted_pct is not None and last.disk_encrypted_pct >= 95 else "w"]]],
             ["G", "Couverture de protection", prot_pct]]]
         trend = [round(100 * (x.protected or 0) / x.total_endpoints) for x in eh if x.total_endpoints and x.total_endpoints > 0]
         p2 = ["Sant\u00e9 des agents", "\u00c9volution de la couverture.", [
@@ -915,7 +915,7 @@ async def build_endpoint(tenant: str, period: str) -> list:
               ["Non protégés / état non vérifié", max(0, 100 - prot_pct - out_pct), "b"]]]]]
         p3 = ["D\u00e9tections & quarantaine", "Menaces neutralis\u00e9es sur les postes.", [
             ["K", [["D\u00e9tections p\u00e9riode", str(sum(x.detections or 0 for x in eh)), "= malware/pua", "h"],
-                   ["Items en quarantaine", str(last.quarantined_items or 0), "= en attente d'analyse",
+                   ["Items en quarantaine", str(last.quarantined_items) if last.quarantined_items is not None else NA, "= en attente d'analyse",
                     "w" if (last.quarantined_items or 0) > 20 else "o"]]],
             ["L", "Bons r\u00e9flexes", [
                 "Purger les quarantaines apr\u00e8s analyse, jamais en aveugle.",
@@ -984,7 +984,7 @@ async def build_regulatory(tenant: str, period: str) -> list:
         for f in sorted(by_fw):
             sc = K.compliance_score([c.status for c in by_fw[f]])
             kpis.append([f, f"{round(sc)} %" if sc is not None else NA,
-                         f"= {len(by_fw[f])} exigences", "o" if (sc or 0) >= 80 else "w"])
+                         f"= {len(by_fw[f])} exigences", "o" if sc is not None and sc >= 80 else "w"])
         p1 = ["Obligations r\u00e9glementaires", "Exigences suivies par cadre l\u00e9gal ou sectoriel.", [
             ["T", "Cartographie", ["Cadre", "Exigence suivie", "R\u00e9f.", "Contr\u00f4le Infracentra", "Statut"],
              [[f, c.requirement[:60], c.ref, c.control_name or NA, badge(c.status)]
@@ -1089,7 +1089,7 @@ async def build_roi(tenant: str, period: str) -> list:
                   ["Coût plateforme", f"{cost:,.0f} €/mois" if cost is not None and cost > 0 else NA,
                    "= valeur commerciale configurée", "w"],
                   ["ROI mesuré", f"{roi_pct:+.0f} %" if roi_pct is not None else NA,
-                   "= gains de temps mesurés uniquement", "o" if (roi_pct or 0) > 0 else "b"],
+                   "= gains de temps mesurés uniquement", "o" if roi_pct is not None and roi_pct > 0 else "b"],
                   ["Retour à l'équilibre", f"{payback_m} mois" if payback_m is not None else NA,
                    "= coût / économie mensuelle mesurée", "o"]]],
             _note("Les coûts d'incident évités et remises d'assurance sont exclus tant qu'ils ne sont pas appuyés par des données vérifiables.")
