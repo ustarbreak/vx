@@ -1410,3 +1410,21 @@ export const platformStaffApi = {
   updateStatus: (userId: number, status: 'active' | 'inactive') =>
     api.patch<{ id: number; status: string; auth_version: number }>(`/platform/access/users/${userId}/status`, { status }),
 };
+
+export interface PlatformBillingTenant {
+  id: number; name: string; status: string; is_partner: boolean; tier: string;
+  plan_tier: string; billing_cycle: string; monthly_revenue_recorded: number;
+  currency: string; contract_start: string | null; contract_end: string | null;
+  trial: boolean; trial_expires_at: string | null; seat_limit: number | null;
+  endpoint_limit: number | null; siem_limit_gb_day: number | null;
+  usage: Record<string, { quantity: number; event_count: number; last_recorded_at: string | null }>;
+  usage_event_count: number;
+}
+export interface PlatformBillingOverview {
+  generated_at: string; period: string; currency: string; data_mode: 'live';
+  scope: 'global_platform'; counts: Record<string, number>;
+  commercial_integrity: Record<string, string>; tenants: PlatformBillingTenant[];
+}
+export const platformBillingApi = {
+  overview: (period: string) => api.get<PlatformBillingOverview>(`/platform/billing/overview?period=${encodeURIComponent(period)}`),
+};
