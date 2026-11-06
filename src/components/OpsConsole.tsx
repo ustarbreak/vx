@@ -68,7 +68,7 @@ export default function OpsConsole({ service, title, groups, contextParams, logH
       await refreshTaskHistory();
     } catch (error) {
       setHistoryState('unavailable');
-      setResults((prev) => [{ ok: false, actionId: task.action_id, source: 'live',
+      setResults((prev) => [{ ok: false, actionId: task.action_id, source: 'live' as const,
         message: 'Could not update task ' + task.uid + ': ' + (error instanceof Error ? error.message : 'Backend error')
       }, ...prev].slice(0, 12));
     }
