@@ -304,7 +304,7 @@ export default function ReportsPage() {
           <h1 className="text-2xl font-bold">Advanced Reporting</h1>
           <p className="text-xs text-[var(--ic-muted)] mt-1">
             {meta ? `${meta.client} · ${meta.classification} · v${meta.version} · updated ${meta.last_updated}` : 'Loading meta…'}
-            {!isDemoMode() && body?.pages?.length > 0 && <span className="ml-2 text-[10px] text-cyan-400">LIVE REPORT DATA / unavailable sources explicitly labelled</span>}
+            {!isDemoMode() && body?.source_status && <span className={`ml-2 text-[10px] ${body.source_status === 'live' ? 'text-emerald-400' : 'text-amber-400'}`}>{body.source_status === 'live' ? 'LIVE DATA' : 'PARTIAL / SOURCE UNAVAILABLE'}</span>}
             {isDemoMode() && <span className="ml-2 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold">DEMO DATA</span>}
           </p>
         </div>
