@@ -106,9 +106,18 @@ def load_manifests(providers_pkg: str = "app.platform.connectors.providers") -> 
 
 
 def get_provider(connector_id: str, config: Dict[str, Any]) -> Optional[ConnectorProvider]:
-    """Instantiate a registered provider by connector id (module.class lookup)."""
+    """Resolve a provider by connector id or unambiguous canonical service id."""
+    candidates = []
     for cls in _REGISTRY.values():
-        m = getattr(cls, "manifest", None)
-        if m and m.id == connector_id:
+        manifest = getattr(cls, "manifest", None)
+        if not manifest:
+            continue
+        if manifest.id == connector_id:
             return cls(config)
+        if manifest.service_id == connector_id:
+            candidates.append(cls)
+    if len(candidates) == 1:
+        return candidates[0](config)
+    if len(candidates) > 1:
+        logger.error("ambiguous providers for service %s", connector_id)
     return None
