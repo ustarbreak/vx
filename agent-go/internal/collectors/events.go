@@ -3,7 +3,6 @@ package collectors
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"time"
 )
 
