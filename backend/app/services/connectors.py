@@ -219,11 +219,7 @@ async def fetch_live_records(service_id: str, cfg: Dict[str, Any], limit: int = 
 
 
 async def load_connector_config(service_id: str, db: AsyncSession) -> Dict[str, Any]:
-    """Resolve credentials for a service from the integrations table.
-
-    The first ACTIVE integration whose service_id matches wins; its
-    api_endpoint/api_key become the connector config.
-    """
+    """Resolve and decrypt the active integration credential for a service."""
     res = await db.execute(
         select(Integration)
         .where(Integration.service_id == service_id, Integration.status == "active")
@@ -232,7 +228,18 @@ async def load_connector_config(service_id: str, db: AsyncSession) -> Dict[str, 
     integ = res.scalars().first()
     if not integ:
         return {}
-    return {"api_endpoint": integ.api_endpoint, "api_key": integ.api_key, "name": integ.name}
+    from app.services.integration_secrets import decrypt_secret
+    secret = decrypt_secret(integ.api_key)
+    config: Dict[str, Any] = {
+        "api_endpoint": integ.api_endpoint,
+        "api_key": secret or "",
+        "name": integ.name,
+    }
+    # Wazuh API credentials are stored as "username:password" in the
+    # encrypted integration api_key field. Never persist the parsed values.
+    if service_id == "endpoint-protection" and secret and ":" in secret and not secret.startswith("Bearer "):
+        config["api_user"], config["api_password"] = secret.split(":", 1)
+    return config
 
 
 async def status_all(db: AsyncSession) -> List[Dict[str, Any]]:
