@@ -58,3 +58,41 @@ async def test_wazuh_detections_are_filtered_to_the_tenant_agent_group(monkeypat
 
     assert [d.id for d in detections] == ["alert-1"]
     assert detections[0].org_id == 1
+
+
+@pytest.mark.asyncio
+async def test_soar_host_isolation_delegates_to_wazuh_provider(monkeypatch):
+    from types import SimpleNamespace
+    from app.platform.connectors.models import ActionResult
+    from app.routers import soar
+
+    calls = {}
+
+    async def fake_config(service_id, db):
+        calls["service_id"] = service_id
+        return {"api_endpoint": "https://wazuh.invalid", "org_id": 9}
+
+    class FakeProvider:
+        async def execute(self, action, params, dry_run=False):
+            calls["action"] = action
+            calls["params"] = params
+            calls["dry_run"] = dry_run
+            return ActionResult(JobState.unsupported, message="Wazuh Active Response is not configured")
+
+    monkeypatch.setattr("app.services.connectors.load_connector_config", fake_config)
+    monkeypatch.setattr("app.platform.connectors.base.get_provider", lambda connector, config: FakeProvider())
+
+    status, detail = await soar._run_step(
+        db=object(),
+        run=SimpleNamespace(org_id=9),
+        step={"action": "isolate_host", "params": {"agent_id": "007"}},
+        user=SimpleNamespace(org_id=9, email="analyst@example.test"),
+        executing=True,
+    )
+
+    assert status == "failed"
+    assert "Active Response is not configured" in detail
+    assert calls["service_id"] == "endpoint-protection"
+    assert calls["action"] == "endpoint.isolate"
+    assert calls["params"]["agent_id"] == "007"
+    assert calls["dry_run"] is False
