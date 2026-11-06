@@ -24,7 +24,6 @@ func StartSyslogListener(addr string) (<-chan SecurityEvent, error) {
 	}
 	out := make(chan SecurityEvent, 1024)
 	go func() {
-		defer close(out)
 		buf := make([]byte, 65535)
 		for {
 			n, peer, err := udp.ReadFrom(buf)
