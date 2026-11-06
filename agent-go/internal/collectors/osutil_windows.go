@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"os/user"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,7 +24,16 @@ func runPowerShell(script string, out interface{}) error {
 		"-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script).Output()
 	if err != nil { return err }
 	if out == nil || len(strings.TrimSpace(string(data))) == 0 { return nil }
-	return json.Unmarshal(data, out)
+	if err := json.Unmarshal(data, out); err != nil {
+		v := reflect.ValueOf(out)
+		if v.Kind() == reflect.Ptr && v.Elem().Kind() == reflect.Slice && strings.HasPrefix(strings.TrimSpace(string(data)), "{") {
+			wrapped := append([]byte("["), data...)
+			wrapped = append(wrapped, ']')
+			return json.Unmarshal(wrapped, out)
+		}
+		return err
+	}
+	return nil
 }
 
 func readDMI(s *SystemInfo) {
