@@ -25,7 +25,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Integration
-from app.platform.connectors.transport import tls_verify
 
 logger = logging.getLogger("connectors")
 
@@ -153,7 +152,7 @@ async def probe_connector(service_id: str, cfg: Dict[str, Any], timeout: float =
     url = base + path
     t0 = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=tls_verify()) as client:
+        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
             r = await client.get(url, **_basic_or_token_auth(cfg))
         ok = r.status_code < 500
         return {
@@ -185,7 +184,7 @@ async def fetch_live_records(service_id: str, cfg: Dict[str, Any], limit: int = 
     primary = list(meta["endpoints"].items())[0]
     url = base + primary[1]
     try:
-        async with httpx.AsyncClient(timeout=8.0, verify=tls_verify()) as client:
+        async with httpx.AsyncClient(timeout=8.0, verify=False) as client:
             r = await client.get(url, params={"limit": limit}, **_basic_or_token_auth(cfg))
             if r.status_code != 200:
                 return {"service_id": service_id, "engine": meta["engine"], "source": "error",

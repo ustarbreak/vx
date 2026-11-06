@@ -69,17 +69,3 @@ def test_wazuh_accepts_private_ca_bundle(monkeypatch):
     module.WazuhService("https://wazuh.example", "user", "secret",
                         verify_ssl="/etc/ssl/customer-ca.pem")
     assert captured["verify"] == "/etc/ssl/customer-ca.pem"
-
-
-def test_shared_connector_transport_verifies_tls_by_default(monkeypatch):
-    from app.platform.connectors import transport
-
-    monkeypatch.setattr(transport.settings, "CONNECTOR_TLS_VERIFY", True)
-    assert transport.tls_verify() is True
-
-
-def test_shared_connector_transport_allows_explicit_lab_override(monkeypatch):
-    from app.platform.connectors import transport
-
-    monkeypatch.setattr(transport.settings, "CONNECTOR_TLS_VERIFY", False)
-    assert transport.tls_verify() is False

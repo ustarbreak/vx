@@ -41,6 +41,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:?Set a unique random SECRET_KEY of at least 32 characters}
+      INTEGRATION_ENCRYPTION_KEY: ${INTEGRATION_ENCRYPTION_KEY:?Set a unique Fernet key for integration credentials}
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       APP_ENV: production

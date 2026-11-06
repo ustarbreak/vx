@@ -11,6 +11,7 @@ from app.core.platform_rbac import require_permission
 from app.services.wazuh import WazuhService
 from app.services.misp import MISPService
 from app.services.elastic import ElasticService
+from app.services.integration_secrets import decrypt_secret, encrypt_secret
 
 router = APIRouter(prefix="/integrations", tags=["Integrations"])
 
@@ -56,7 +57,10 @@ async def create_integration(
     current_user: User = Depends(require_permission("platform.integrations.configure"))
 ):
     """Create a new integration (platform admin only)"""
-    new_integration = Integration(**integration_data.model_dump())
+    payload = integration_data.model_dump()
+    if payload.get("api_key"):
+        payload["api_key"] = encrypt_secret(payload["api_key"])
+    new_integration = Integration(**payload)
     db.add(new_integration)
     await db.commit()
     await db.refresh(new_integration)
@@ -99,6 +103,8 @@ async def update_integration(
     
     # Update fields
     update_data = integration_data.model_dump(exclude_unset=True)
+    if "api_key" in update_data and update_data["api_key"] is not None:
+        update_data["api_key"] = encrypt_secret(update_data["api_key"]) if update_data["api_key"] else None
     for field, value in update_data.items():
         setattr(integration, field, value)
     
@@ -146,7 +152,7 @@ async def test_integration(
             service = WazuhService(
                 base_url=integration.api_endpoint,
                 api_user="admin",  # Should be stored in DB
-                api_password=integration.api_key
+                api_password=decrypt_secret(integration.api_key)
             )
             agents = await service.get_agents()
             await service.close()
@@ -156,7 +162,7 @@ async def test_integration(
         elif integration.name == "MISP":
             service = MISPService(
                 url=integration.api_endpoint,
-                api_key=integration.api_key
+                api_key=decrypt_secret(integration.api_key)
             )
             events = await service.get_recent_events()
             await service.close()

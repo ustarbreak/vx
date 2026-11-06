@@ -31,6 +31,7 @@ from app.services.seed import ensure_platform_admin, ensure_demo_accounts
 from app.services.ticketing import run_escalations
 from app.services.evidence import run_retention_expiry
 from app.services.soar import recover_stale_runs
+from app.services.integration_secrets import encrypt_legacy_integration_secrets
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("infracentra")
@@ -87,6 +88,8 @@ async def lifespan(app: FastAPI):
     await init_db()
     async with AsyncSessionLocal() as db:
         await ensure_platform_admin(db)
+        # One-time idempotent conversion of existing plaintext integration keys.
+        await encrypt_legacy_integration_secrets(db)
         # STAGE 3: grouping policy v1 row + atomic UID counter bootstrap.
         # Must run before any ingestion so correlate() reads the documented
         # policy and allocate_uid() never collides with legacy COUNT+1 uids.
