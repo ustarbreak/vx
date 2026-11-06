@@ -42,7 +42,7 @@ async def platform_dashboard_overview(
     """Global operational inventory and workload counts, with explicit limits."""
     generated_at = datetime.now(timezone.utc).isoformat()
     organizations = await _count(db, Organization)
-    active_tenants = await _count(db, Organization, Organization.status == "active")
+    active_tenants = await _count(db, Organization, Organization.status == "active")\n    partners = await _count(db, Organization, Organization.is_partner.is_(True))\n    platform_staff = await _count(db, User, User.role.in_(("platform_admin", "platform_expert", "platform_analyst", "platform_user")))
     suspended_tenants = await _count(db, Organization, Organization.status == "suspended")
     users = await _count(db, User)
     integrations = await _count(db, Integration)
@@ -64,7 +64,7 @@ async def platform_dashboard_overview(
         "scope": "global_platform",
         "counts": {
             "organizations": organizations,
-            "active_tenants": active_tenants,
+            "active_tenants": active_tenants,\n            "partners": partners,\n            "platform_staff": platform_staff,
             "suspended_tenants": suspended_tenants,
             "users": users,
             "integrations": integrations,
@@ -79,7 +79,7 @@ async def platform_dashboard_overview(
             "audit_events": audit_events,
         },
         "distributions": {
-            "tenant_status": await _group_counts(db, Organization.status),
+            "tenant_status": await _group_counts(db, Organization.status),\n            "tenant_country": await _group_counts(db, Organization.country),
             "integration_status": integration_status,
             "agent_status": probe_status,
             "ticket_status": await _group_counts(db, Ticket.status),
