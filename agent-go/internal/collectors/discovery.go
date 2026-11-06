@@ -31,66 +31,85 @@ func RunDiscovery(cidrs []string, creds []snmpx.Credential, debug bool) *Discove
 	}
 	res := &DiscoveryResult{RanAt: time.Now().UTC(), CIDRs: resolved}
 
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 64) // 64 hosts in flight
+	// Fixed-size workers avoid creating tens of thousands of goroutines for a
+	// customer /16. Each worker performs a bounded TCP sweep for one host.
+	hostJobs := make(chan string, 128)
+	var hostWG sync.WaitGroup
+	var resultMu sync.Mutex
+	for worker := 0; worker < 48; worker++ {
+		hostWG.Add(1)
+		go func() {
+			defer hostWG.Done()
+			for ip := range hostJobs {
+				h := SweepHost(ip, CommonServicePorts, 800*time.Millisecond)
+				if h == nil { continue }
+				if sn, osv, ok := SMBHostInfo(ip); ok {
+					if h.Hostname == "" { h.Hostname = sn }
+					if h.OSGuess == "" { h.OSGuess = osv }
+				}
+				resultMu.Lock()
+				res.Devices = append(res.Devices, *h)
+				resultMu.Unlock()
+			}
+		}()
+	}
 
+	allIPs := make([]string, 0)
 	for _, cidr := range resolved {
 		hosts, err := CIDRHosts(cidr)
 		if err != nil {
 			log.Printf("[discovery] skip %s: %v", cidr, err)
 			continue
 		}
-		for _, ip := range hosts {
-			wg.Add(1)
-			go func(ip string) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				h := SweepHost(ip, CommonServicePorts, 800*time.Millisecond)
-				if h == nil {
-					return
-				}
-				// enrich Windows/SMB hosts with announced server name
-				if sn, osv, ok := SMBHostInfo(ip); ok {
-					if h.Hostname == "" {
-						h.Hostname = sn
-					}
-					if h.OSGuess == "" {
-						h.OSGuess = osv
-					}
-				}
-				mu.Lock()
-				res.Devices = append(res.Devices, *h)
-				mu.Unlock()
-			}(ip)
-		}
+		allIPs = append(allIPs, hosts...)
+		for _, ip := range hosts { hostJobs <- ip }
 	}
-	wg.Wait()
+	close(hostJobs)
+	hostWG.Wait()
 
-	// SNMP uses UDP/161, not TCP/161. Probe each live host independently
-	// of the TCP port sweep; otherwise normal SNMP-only network equipment is
-	// silently missed because TCP/161 is usually closed.
+	// SNMP is UDP/161. It must be probed independently of TCP discovery,
+	// otherwise SNMP-only switches/printers are invisible. Bounded workers
+	// keep broad approved subnets from exhausting the agent or client network.
 	if len(creds) > 0 {
-		for i := range res.Devices {
-			d := &res.Devices[i]
-			f, err := snmpx.Probe(d.IP, creds, 1200*time.Millisecond)
-			if err != nil {
-				if debug {
-					log.Printf("[discovery] snmp %s: %v", d.IP, err)
+		snmpJobs := make(chan string, 128)
+		var snmpWG sync.WaitGroup
+		for worker := 0; worker < 32; worker++ {
+			snmpWG.Add(1)
+			go func() {
+				defer snmpWG.Done()
+				for ip := range snmpJobs {
+					f, err := snmpx.Probe(ip, creds, 700*time.Millisecond)
+					if err != nil {
+						if debug { log.Printf("[discovery] snmp %s: %v", ip, err) }
+						continue
+					}
+					resultMu.Lock()
+					res.SNMPFacts = append(res.SNMPFacts, f)
+					found := false
+					for i := range res.Devices {
+						if res.Devices[i].IP == ip {
+							found = true
+							if f.SysName != "" { res.Devices[i].Hostname = f.SysName }
+							if res.Devices[i].DeviceType == "" || res.Devices[i].DeviceType == "unknown" {
+								res.Devices[i].DeviceType = deviceTypeFromOID(f.SysObjectID, f.SysDescr)
+							}
+							break
+						}
+					}
+					if !found {
+						res.Devices = append(res.Devices, HostResult{
+							IP: ip, Hostname: f.SysName,
+							OSGuess: "network/embedded",
+							DeviceType: deviceTypeFromOID(f.SysObjectID, f.SysDescr),
+						})
+					}
+					resultMu.Unlock()
 				}
-				continue
-			}
-			mu.Lock()
-			res.SNMPFacts = append(res.SNMPFacts, f)
-			mu.Unlock()
-			if f.SysName != "" {
-				d.Hostname = f.SysName
-			}
-			if d.DeviceType == "" || d.DeviceType == "unknown" {
-				d.DeviceType = deviceTypeFromOID(f.SysObjectID, f.SysDescr)
-			}
+			}()
 		}
+		for _, ip := range allIPs { snmpJobs <- ip }
+		close(snmpJobs)
+		snmpWG.Wait()
 	}
 	return res
 }
